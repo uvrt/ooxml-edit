@@ -226,6 +226,36 @@ class OpcPackage:
         self.add_part(rels_path_for(new), serialize(copied), self.content_type(rels))
         return new
 
+    # -- packages inside packages ----------------------------------------------------------
+
+    def open_embedded(self, path: str) -> "OpcPackage":
+        """A part that is itself an OPC package (an embedded workbook, say), opened for editing.
+
+        The nested package is an ordinary :class:`OpcPackage` read from the part's current
+        bytes, with the same losslessness: whatever is not edited inside it is written back
+        as the bytes that were read.  Changes reach this package only through
+        :meth:`replace_embedded`.
+        """
+        data = self.read(path)
+        if data is None:
+            raise KeyError(f"no part {normalize_part_path(path)!r}")
+        return OpcPackage.open(data)
+
+    def replace_embedded(self, path: str, package: "OpcPackage") -> bool:
+        """Store an edited nested package back into its part; returns whether anything changed.
+
+        A nested package with no edits is left alone -- not even rewritten -- so the part
+        stays byte-identical.  The write is a raw part replacement, so it is part of the undo
+        snapshot like any other: undoing it puts the original bytes back.
+        """
+        if not package.dirty_parts and not package._raw_changes:
+            return False
+        data = package.to_bytes()
+        if data == self.read(path):
+            return False
+        self.replace_part(path, data)
+        return True
+
     def unused_part_name(self, template: str) -> str:
         """``template`` with ``{n}`` replaced by the lowest number not already a part."""
         index = 1
