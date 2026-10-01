@@ -26,7 +26,7 @@ import os
 import posixpath
 import zipfile
 from dataclasses import dataclass
-from typing import BinaryIO
+from typing import BinaryIO, Callable, Iterable
 
 from lxml import etree
 
@@ -66,8 +66,10 @@ class OpcPackage:
         #: What was read, so undo can put back a part that was replaced or remove one that was
         #: added.  Shares the bytes objects with ``_parts``; nothing is copied.
         self._original: dict[str, bytes] = dict(parts)
-        #: Parts written as raw bytes since opening (added or replaced), not as trees.
-        self._raw_changes: set[str] = set()
+        #: Parts written as raw bytes since opening (added, replaced or removed), not as
+        #: trees -- in the order they were first changed, which is the order new zip entries
+        #: were appended in, so redo can append them in that order again.
+        self._raw_changes: dict[str, None] = {}
 
     # -- loading ---------------------------------------------------------------------------
 
@@ -141,24 +143,88 @@ class OpcPackage:
         self._trees.pop(path, None)
         self._dirty.discard(path)
         self._rels_cache.pop(_part_for_rels(path), None)
-        self._raw_changes.add(path)
+        self._raw_changes[path] = None
         if new:
-            self._entries.append(_new_entry(path))
+            self._ensure_entry(path)
 
-    def add_part(self, path: str, data: bytes, content_type: str | None = None) -> str:
+    def add_part(self, path: str, data: bytes, content_type: str | None = None, *,
+                 override: bool = False) -> str:
         """Add a new part, declaring its content type when one is given.
 
         ``content_type`` is registered as a ``Default`` for the part's extension when the
         extension has none yet -- the convention for media -- and as an ``Override`` for the
-        part name otherwise.
+        part name otherwise, or always with ``override=True``.
         """
         path = normalize_part_path(path)
         if path in self._parts:
             raise ValueError(f"part {path!r} already exists")
         self.replace_part(path, data)
         if content_type is not None:
-            self.declare_content_type(path, content_type)
+            self.declare_content_type(path, content_type, override=override)
         return path
+
+    def remove_part(self, path: str) -> None:
+        """Remove a part, its relationships part and its content-type ``Override``.
+
+        Nothing checks that the part is unreferenced -- that is :meth:`reap`'s job, and the
+        safe way in.  Removal is part of the undo snapshot like any raw write: the zip entry
+        keeps its place, so undoing puts the part back exactly where it was.
+        """
+        path = normalize_part_path(path)
+        if path not in self._parts:
+            raise KeyError(f"no part {path!r}")
+        rels = rels_path_for(path)
+        if rels != path and rels in self._parts:
+            self.remove_part(rels)
+        del self._parts[path]
+        self._trees.pop(path, None)
+        self._dirty.discard(path)
+        self._rels_cache.pop(_part_for_rels(path), None)
+        self._rels_cache.pop(path, None)
+        self._raw_changes[path] = None
+        self._remove_override(path)
+
+    def copy_part(self, source: str, share: Callable[[Relationship], bool],
+                  mapping: dict[str, str] | None = None) -> str:
+        """Copy ``source`` to a new part beside it, with its relationships; returns the copy.
+
+        Each internal relationship of the original is followed: to a part already in
+        ``mapping`` (old name -> new name, filled in as parts are copied, and seedable by the
+        caller) it is re-pointed at the copy; where ``share(relationship)`` says the target may
+        be shared, the copy relates to the same part; anything else is copied in turn, the same
+        way.  Relationship ids are kept, so the copied XML needs no rewriting.  The copy is
+        named like the original with the lowest free number (``chart3.xml`` -> ``chart7.xml``)
+        and gets the original's content type.
+        """
+        source = normalize_part_path(source)
+        mapping = {} if mapping is None else mapping
+        data = self.read(source)
+        if data is None:
+            raise KeyError(f"no part {source!r}")
+        new = self.unused_part_name(numbered_template(source))
+        mapping[source] = new
+        content_type = self.content_type(source)
+        self.add_part(new, data, content_type, override=self._has_override(source))
+
+        rels = rels_path_for(source)
+        root = self.tree(rels)
+        if root is None:
+            return new
+        copied = parse_xml(serialize(root))
+        base = posixpath.dirname(new)
+        for node, relationship in zip(_relationship_nodes(copied), self._relationship_list(source)):
+            if relationship is None or relationship.is_external or relationship.target_part is None:
+                continue
+            target = relationship.target_part
+            if target in mapping:
+                new_target = mapping[target]
+            elif share(relationship) or not self.has_part(target):
+                continue  # same part, and the same (relative or absolute) Target still reaches it
+            else:
+                new_target = self.copy_part(target, share, mapping)
+            node.set("Target", posixpath.relpath(new_target, base or "."))
+        self.add_part(rels_path_for(new), serialize(copied), self.content_type(rels))
+        return new
 
     def unused_part_name(self, template: str) -> str:
         """``template`` with ``{n}`` replaced by the lowest number not already a part."""
@@ -194,10 +260,11 @@ class OpcPackage:
                     default = node.get("ContentType")
         return default
 
-    def declare_content_type(self, path: str, content_type: str) -> None:
+    def declare_content_type(self, path: str, content_type: str, *, override: bool = False) -> None:
         """Make ``path`` resolve to ``content_type``, touching ``[Content_Types].xml`` only if
-        it does not already."""
-        if self.content_type(path) == content_type:
+        it does not already.  ``override`` forces a per-part ``Override`` even when the
+        extension's ``Default`` already says the same thing."""
+        if self.content_type(path) == content_type and not (override and not self._has_override(path)):
             return
         root = self.tree(CONTENT_TYPES_PART)
         if root is None:
@@ -209,7 +276,7 @@ class OpcPackage:
             and (node.get("Extension") or "").lower() == extension
             for node in root
         )
-        if extension and not has_default:
+        if extension and not has_default and not override:
             node = etree.Element("{%s}Default" % CONTENT_TYPES_NS)
             node.set("Extension", extension)
             node.set("ContentType", content_type)
@@ -224,6 +291,24 @@ class OpcPackage:
             node.set("ContentType", content_type)
         _match_tail(node)
         self.mark_dirty(CONTENT_TYPES_PART)
+
+    def _overrides(self, path: str) -> list[Element]:
+        root = self.tree(CONTENT_TYPES_PART)
+        if root is None:
+            return []
+        return [node for node in root
+                if node.tag == "{%s}Override" % CONTENT_TYPES_NS
+                and normalize_part_path(node.get("PartName") or "") == path]
+
+    def _has_override(self, path: str) -> bool:
+        return bool(self._overrides(normalize_part_path(path)))
+
+    def _remove_override(self, path: str) -> None:
+        nodes = self._overrides(path)
+        for node in nodes:
+            _remove_keeping_layout(node)
+        if nodes:
+            self.mark_dirty(CONTENT_TYPES_PART)
 
     # -- relationships ---------------------------------------------------------------------
 
@@ -281,6 +366,173 @@ class OpcPackage:
         for rel in self.relationships(part_path).values():
             if rel.type == rel_type and rel.target_part == target_part and not rel.is_external:
                 return rel.id
+        root = self._rels_root(part_path)
+        rel_id = self.next_rel_id(part_path)
+        base = posixpath.dirname(part_path)
+        node = etree.SubElement(root, "{%s}Relationship" % RELS_NS)
+        node.set("Id", rel_id)
+        node.set("Type", rel_type)
+        node.set("Target", posixpath.relpath(target_part, base or "."))
+        _match_tail(node)
+        self.mark_dirty(rels_path_for(part_path))
+        return rel_id
+
+    def add_external_relationship(self, part_path: str, rel_type: str, target: str) -> str:
+        """Relate ``part_path`` to an address outside the package (a hyperlink, say).
+
+        An existing external relationship of the same type and address is reused.
+        """
+        part_path = normalize_part_path(part_path)
+        for rel in self.relationships(part_path).values():
+            if rel.type == rel_type and rel.is_external and rel.target == target:
+                return rel.id
+        root = self._rels_root(part_path)
+        rel_id = self.next_rel_id(part_path)
+        node = etree.SubElement(root, "{%s}Relationship" % RELS_NS)
+        node.set("Id", rel_id)
+        node.set("Type", rel_type)
+        node.set("Target", target)
+        node.set("TargetMode", "External")
+        _match_tail(node)
+        self.mark_dirty(rels_path_for(part_path))
+        return rel_id
+
+    def remove_relationship(self, part_path: str, rel_id: str) -> None:
+        """Delete one relationship.  The target part is left alone; see :meth:`release`."""
+        part_path = normalize_part_path(part_path)
+        root = self.tree(rels_path_for(part_path))
+        if root is None:
+            raise KeyError(f"{part_path!r} has no relationships")
+        for node in _relationship_nodes(root):
+            if node.get("Id") == rel_id:
+                _remove_keeping_layout(node)
+                self.mark_dirty(rels_path_for(part_path))
+                return
+        raise KeyError(f"{part_path!r} has no relationship {rel_id!r}")
+
+    def referenced_values(self, part_path: str) -> set[str]:
+        """Every attribute value in a part's XML -- what a relationship id is proved unused
+        against.
+
+        Deliberately blunt.  Relationship ids are spelled in many attributes (``r:id``,
+        ``r:embed``, ``r:link``, ``r:pict``, a legacy ``o:relid``...), and an id that merely
+        *might* be referenced must be kept, so any attribute holding the id's exact text
+        counts.  Over-counting costs at most an unreaped relationship; under-counting costs
+        a repair prompt.
+        """
+        root = self.tree(part_path)
+        if root is None:
+            return set()
+        return set(root.xpath("//@*"))
+
+    def relationship_sources(self, target_part: str) -> list[tuple[str, Relationship]]:
+        """``(source part, relationship)`` for every relationship in the package that targets
+        ``target_part`` -- including ones declared by parts nothing else reaches."""
+        target_part = normalize_part_path(target_part)
+        found = []
+        for owner in self._relationship_owners():
+            for rel in self.relationships(owner).values():
+                if rel.target_part == target_part:
+                    found.append((owner, rel))
+        return found
+
+    def release(self, part_path: str, rel_ids: Iterable[str]) -> list[str]:
+        """Drop relationships ``part_path`` no longer references, then :meth:`reap` their targets.
+
+        Call it after an edit removed references -- a deleted picture, a replaced image fill.
+        A relationship is removed only if its id no longer appears anywhere in the part (see
+        :meth:`referenced_values`), so it is safe to pass ids that are still in use.  Returns
+        the parts removed.
+        """
+        part_path = normalize_part_path(part_path)
+        relationships = self.relationships(part_path)
+        wanted = [rel_id for rel_id in dict.fromkeys(rel_ids) if rel_id in relationships]
+        if not wanted:
+            return []
+        still_used = self.referenced_values(part_path)
+        targets = []
+        for rel_id in wanted:
+            if rel_id in still_used:
+                continue
+            rel = relationships[rel_id]
+            self.remove_relationship(part_path, rel_id)
+            if rel.target_part is not None:
+                targets.append(rel.target_part)
+        return self.reap(targets)
+
+    def reap(self, candidates: Iterable[str]) -> list[str]:
+        """Remove the candidate parts -- and what only they lead to -- that nothing else uses.
+
+        The proof is package-wide.  Starting from the candidates, everything they relate to is
+        gathered; then any part still targeted by a relationship from *outside* that set --
+        from any part in the package, the package root included, reachable or not -- is
+        dropped from it, repeatedly, until it is stable.  What remains is referenced only from
+        within itself (a page and its notes, which point at each other), and is removed with
+        its relationships parts and content-type overrides.  Returns the removed parts.
+        """
+        doomed: set[str] = set()
+        pending = [normalize_part_path(path) for path in candidates]
+        while pending:
+            path = pending.pop()
+            if path in doomed or path not in self._parts or path == CONTENT_TYPES_PART:
+                continue
+            doomed.add(path)
+            for rel in self.relationships(path).values():
+                if rel.target_part is not None:
+                    pending.append(rel.target_part)
+        if not doomed:
+            return []
+
+        incoming: dict[str, set[str]] = {path: set() for path in doomed}
+        for owner in self._relationship_owners():
+            for rel in self.relationships(owner).values():
+                if rel.target_part in incoming:
+                    incoming[rel.target_part].add(owner)
+        changed = True
+        while changed:
+            changed = False
+            for path in list(doomed):
+                if any(source not in doomed for source in incoming[path]):
+                    doomed.discard(path)
+                    changed = True
+
+        removed = sorted(doomed)
+        for path in removed:
+            if path in self._parts:
+                self.remove_part(path)
+        return removed
+
+    def unreachable_parts(self) -> set[str]:
+        """Parts no chain of relationships from the package root reaches (diagnostics, tests).
+
+        Relationships parts count as reached when their owner is, and the content-types part
+        always is.
+        """
+        reached = {""}
+        pending = [""]
+        while pending:
+            for rel in self.relationships(pending.pop()).values():
+                target = rel.target_part
+                if target is not None and target not in reached and target in self._parts:
+                    reached.add(target)
+                    pending.append(target)
+        return {
+            path for path in self._parts
+            if path != CONTENT_TYPES_PART and path not in reached
+            and not (_part_for_rels(path) != path and _part_for_rels(path) in reached)
+        }
+
+    def _relationship_owners(self) -> list[str]:
+        return [_part_for_rels(path) for path in self._parts
+                if _part_for_rels(path) != path or path == "_rels/.rels"]
+
+    def _relationship_list(self, part_path: str) -> list[Relationship | None]:
+        """The part's relationships in document order, ``None`` for a malformed node."""
+        root = self.tree(rels_path_for(part_path))
+        relationships = self.relationships(part_path)
+        return [relationships.get(node.get("Id") or "") for node in _relationship_nodes(root)]
+
+    def _rels_root(self, part_path: str) -> Element:
         rels_path = rels_path_for(part_path)
         if not self.has_part(rels_path):
             self.add_part(
@@ -291,15 +543,7 @@ class OpcPackage:
             )
         root = self.tree(rels_path)
         assert root is not None
-        rel_id = self.next_rel_id(part_path)
-        base = posixpath.dirname(part_path)
-        node = etree.SubElement(root, "{%s}Relationship" % RELS_NS)
-        node.set("Id", rel_id)
-        node.set("Type", rel_type)
-        node.set("Target", posixpath.relpath(target_part, base or "."))
-        _match_tail(node)
-        self.mark_dirty(rels_path)
-        return rel_id
+        return root
 
     def next_rel_id(self, part_path: str) -> str:
         """An ``rIdN`` not already used by ``part_path``."""
@@ -337,7 +581,7 @@ class OpcPackage:
         dropped back to their original bytes, and parts added since are removed.
         """
         # Raw parts first: a tree restored below may belong to a part that was re-added.
-        for path in self._raw_changes | set(snapshot.raw):
+        for path in list(snapshot.raw) + [p for p in self._raw_changes if p not in snapshot.raw]:
             if path in snapshot.raw:
                 data = snapshot.raw[path]  # None: the part did not exist then
             else:
@@ -346,11 +590,14 @@ class OpcPackage:
                 self._set_raw(path, data)
             else:
                 self._parts.pop(path, None)
-                self._entries = [e for e in self._entries
-                                 if normalize_part_path(e.filename) != path]
+                if path not in self._original:
+                    # An added part leaves no trace; a removed original keeps its entry, so
+                    # putting it back restores the archive's order too.
+                    self._entries = [e for e in self._entries
+                                     if normalize_part_path(e.filename) != path]
             self._trees.pop(path, None)
             self._rels_cache.pop(_part_for_rels(path), None)
-        self._raw_changes = set(snapshot.raw)
+        self._raw_changes = dict.fromkeys(snapshot.raw)
 
         for path in self._dirty - set(snapshot.trees):
             self._trees.pop(path, None)
@@ -362,9 +609,13 @@ class OpcPackage:
             self._rels_cache.pop(_part_for_rels(path), None)
 
     def _set_raw(self, path: str, data: bytes) -> None:
-        if path not in self._parts:
-            self._entries.append(_new_entry(path))
+        self._ensure_entry(path)
         self._parts[path] = data
+
+    def _ensure_entry(self, path: str) -> None:
+        """A zip entry for ``path``: the one it was read with, or a new one at the end."""
+        if not any(normalize_part_path(entry.filename) == path for entry in self._entries):
+            self._entries.append(_new_entry(path))
 
     # -- saving ----------------------------------------------------------------------------
 
@@ -408,6 +659,24 @@ def _new_entry(path: str) -> zipfile.ZipInfo:
     return entry
 
 
+def _relationship_nodes(root: Element | None) -> list[Element]:
+    return [] if root is None else root.findall("{%s}Relationship" % RELS_NS)
+
+
+def _remove_keeping_layout(node: Element) -> None:
+    """Remove a child of a pretty-printed list without leaving its indentation behind."""
+    parent = node.getparent()
+    if parent is None:
+        return
+    previous = node.getprevious()
+    if node.getnext() is None and previous is not None:
+        # The last child's tail is the parent's closing indentation: hand it on.
+        previous.tail = node.tail
+    elif previous is None and node.getnext() is not None:
+        pass  # parent.text already indents the next child
+    parent.remove(node)
+
+
 def _match_tail(node: Element) -> None:
     """Indent a new child like its siblings, for parts written pretty-printed."""
     previous = node.getprevious()
@@ -446,6 +715,19 @@ def _part_for_rels(rels_path: str) -> str:
     owner_dir = directory[: -len("_rels")].rstrip("/")
     owner = name[: -len(".rels")]
     return f"{owner_dir}/{owner}" if owner_dir else owner
+
+
+def numbered_template(path: str) -> str:
+    """``dir/chart3.xml`` -> ``dir/chart{n}.xml``: the naming pattern for a sibling copy."""
+    import re
+
+    directory, _, name = normalize_part_path(path).rpartition("/")
+    stem, dot, extension = name.rpartition(".")
+    if not dot:
+        stem, extension = name, ""
+    stem = re.sub(r"\d+$", "", stem).replace("{", "{{").replace("}", "}}")
+    named = f"{stem}{{n}}" + (f".{extension}" if dot else "")
+    return f"{directory}/{named}" if directory else named
 
 
 def resolve_target(base: str, target: str) -> str:
