@@ -28,9 +28,12 @@ import zipfile
 from dataclasses import dataclass
 from typing import BinaryIO
 
+from lxml import etree
+
 from .xml import Element, parse_xml, serialize
 
 CONTENT_TYPES_PART = "[Content_Types].xml"
+CONTENT_TYPES_NS = "http://schemas.openxmlformats.org/package/2006/content-types"
 
 RELS_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
 REL_OFFICE_DOCUMENT = (
@@ -60,6 +63,11 @@ class OpcPackage:
         self._trees: dict[str, Element] = {}
         self._dirty: set[str] = set()
         self._rels_cache: dict[str, dict[str, Relationship]] = {}
+        #: What was read, so undo can put back a part that was replaced or remove one that was
+        #: added.  Shares the bytes objects with ``_parts``; nothing is copied.
+        self._original: dict[str, bytes] = dict(parts)
+        #: Parts written as raw bytes since opening (added or replaced), not as trees.
+        self._raw_changes: set[str] = set()
 
     # -- loading ---------------------------------------------------------------------------
 
@@ -122,15 +130,100 @@ class OpcPackage:
         return frozenset(self._dirty)
 
     def replace_part(self, path: str, data: bytes) -> None:
-        """Overwrite a part with raw bytes, dropping any parsed tree for it."""
+        """Overwrite (or add) a part with raw bytes, dropping any parsed tree for it.
+
+        Raw writes are part of the undo snapshot, so undoing an edit that added a part removes
+        it again and the package saves byte-identical to before.
+        """
         path = normalize_part_path(path)
         new = path not in self._parts
         self._parts[path] = data
         self._trees.pop(path, None)
         self._dirty.discard(path)
         self._rels_cache.pop(_part_for_rels(path), None)
+        self._raw_changes.add(path)
         if new:
-            self._entries.append(zipfile.ZipInfo(path))
+            self._entries.append(_new_entry(path))
+
+    def add_part(self, path: str, data: bytes, content_type: str | None = None) -> str:
+        """Add a new part, declaring its content type when one is given.
+
+        ``content_type`` is registered as a ``Default`` for the part's extension when the
+        extension has none yet -- the convention for media -- and as an ``Override`` for the
+        part name otherwise.
+        """
+        path = normalize_part_path(path)
+        if path in self._parts:
+            raise ValueError(f"part {path!r} already exists")
+        self.replace_part(path, data)
+        if content_type is not None:
+            self.declare_content_type(path, content_type)
+        return path
+
+    def unused_part_name(self, template: str) -> str:
+        """``template`` with ``{n}`` replaced by the lowest number not already a part."""
+        index = 1
+        while normalize_part_path(template.format(n=index)) in self._parts:
+            index += 1
+        return normalize_part_path(template.format(n=index))
+
+    def find_part_with_bytes(self, data: bytes, directory: str) -> str | None:
+        """An existing part under ``directory`` holding exactly ``data`` -- for de-duplication."""
+        prefix = normalize_part_path(directory).rstrip("/") + "/"
+        for path, existing in self._parts.items():
+            if path.startswith(prefix) and path not in self._dirty and existing == data:
+                return path
+        return None
+
+    # -- content types ---------------------------------------------------------------------
+
+    def content_type(self, path: str) -> str | None:
+        """The declared content type of a part: its Override, else its extension's Default."""
+        path = normalize_part_path(path)
+        root = self.tree(CONTENT_TYPES_PART)
+        if root is None:
+            return None
+        extension = path.rsplit(".", 1)[-1].lower() if "." in path else ""
+        default = None
+        for node in root:
+            if node.tag == "{%s}Override" % CONTENT_TYPES_NS:
+                if normalize_part_path(node.get("PartName") or "") == path:
+                    return node.get("ContentType")
+            elif node.tag == "{%s}Default" % CONTENT_TYPES_NS:
+                if (node.get("Extension") or "").lower() == extension:
+                    default = node.get("ContentType")
+        return default
+
+    def declare_content_type(self, path: str, content_type: str) -> None:
+        """Make ``path`` resolve to ``content_type``, touching ``[Content_Types].xml`` only if
+        it does not already."""
+        if self.content_type(path) == content_type:
+            return
+        root = self.tree(CONTENT_TYPES_PART)
+        if root is None:
+            raise ValueError("the package has no [Content_Types].xml")
+        path = normalize_part_path(path)
+        extension = path.rsplit(".", 1)[-1].lower() if "." in path else ""
+        has_default = any(
+            node.tag == "{%s}Default" % CONTENT_TYPES_NS
+            and (node.get("Extension") or "").lower() == extension
+            for node in root
+        )
+        if extension and not has_default:
+            node = etree.Element("{%s}Default" % CONTENT_TYPES_NS)
+            node.set("Extension", extension)
+            node.set("ContentType", content_type)
+            defaults = [n for n in root if n.tag == "{%s}Default" % CONTENT_TYPES_NS]
+            if defaults:
+                defaults[-1].addnext(node)
+            else:
+                root.insert(0, node)
+        else:
+            node = etree.SubElement(root, "{%s}Override" % CONTENT_TYPES_NS)
+            node.set("PartName", "/" + path)
+            node.set("ContentType", content_type)
+        _match_tail(node)
+        self.mark_dirty(CONTENT_TYPES_PART)
 
     # -- relationships ---------------------------------------------------------------------
 
@@ -177,6 +270,37 @@ class OpcPackage:
             if rel.type == rel_type and rel.target_part is not None
         ]
 
+    def add_relationship(self, part_path: str, rel_type: str, target_part: str) -> str:
+        """Relate ``part_path`` to ``target_part``; returns the relationship id.
+
+        An existing relationship of the same type to the same target is reused, as Office
+        does, rather than duplicated.
+        """
+        part_path = normalize_part_path(part_path)
+        target_part = normalize_part_path(target_part)
+        for rel in self.relationships(part_path).values():
+            if rel.type == rel_type and rel.target_part == target_part and not rel.is_external:
+                return rel.id
+        rels_path = rels_path_for(part_path)
+        if not self.has_part(rels_path):
+            self.add_part(
+                rels_path,
+                b'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+                b'<Relationships xmlns="%s"/>' % RELS_NS.encode(),
+                "application/vnd.openxmlformats-package.relationships+xml",
+            )
+        root = self.tree(rels_path)
+        assert root is not None
+        rel_id = self.next_rel_id(part_path)
+        base = posixpath.dirname(part_path)
+        node = etree.SubElement(root, "{%s}Relationship" % RELS_NS)
+        node.set("Id", rel_id)
+        node.set("Type", rel_type)
+        node.set("Target", posixpath.relpath(target_part, base or "."))
+        _match_tail(node)
+        self.mark_dirty(rels_path)
+        return rel_id
+
     def next_rel_id(self, part_path: str) -> str:
         """An ``rIdN`` not already used by ``part_path``."""
         used = self.relationships(part_path)
@@ -194,28 +318,53 @@ class OpcPackage:
 
     # -- snapshots (undo) ------------------------------------------------------------------
 
-    def snapshot(self) -> dict[str, bytes]:
+    def snapshot(self) -> "PackageSnapshot":
         """Current bytes of every edited part.
 
-        Only dirty parts are captured: everything else is still the original bytes and cannot
+        Only edited parts are captured: everything else is still the original bytes and cannot
         have changed, so a snapshot costs one serialization per edited part -- tens of KB.
+        Parts written raw (added media, say) are captured by reference, not copied.
         """
-        return {path: serialize(self._trees[path]) for path in self._dirty}
+        return PackageSnapshot(
+            trees={path: serialize(self._trees[path]) for path in self._dirty},
+            raw={path: self._parts.get(path) for path in self._raw_changes},
+        )
 
-    def restore(self, snapshot: dict[str, bytes]) -> None:
+    def restore(self, snapshot: "PackageSnapshot") -> None:
         """Reset every edited part to a previous snapshot.
 
-        Parts that were dirty then *and* now are reparsed from the snapshot; parts dirtied
-        since are dropped back to their original bytes.
+        Parts that were edited then *and* now are reset to the snapshot; parts edited since are
+        dropped back to their original bytes, and parts added since are removed.
         """
-        for path in self._dirty - set(snapshot):
+        # Raw parts first: a tree restored below may belong to a part that was re-added.
+        for path in self._raw_changes | set(snapshot.raw):
+            if path in snapshot.raw:
+                data = snapshot.raw[path]  # None: the part did not exist then
+            else:
+                data = self._original.get(path)  # changed since: back to what was read
+            if data is not None:
+                self._set_raw(path, data)
+            else:
+                self._parts.pop(path, None)
+                self._entries = [e for e in self._entries
+                                 if normalize_part_path(e.filename) != path]
+            self._trees.pop(path, None)
+            self._rels_cache.pop(_part_for_rels(path), None)
+        self._raw_changes = set(snapshot.raw)
+
+        for path in self._dirty - set(snapshot.trees):
             self._trees.pop(path, None)
             self._rels_cache.pop(_part_for_rels(path), None)
         self._dirty = set()
-        for path, data in snapshot.items():
+        for path, data in snapshot.trees.items():
             self._trees[path] = parse_xml(data)
             self._dirty.add(path)
             self._rels_cache.pop(_part_for_rels(path), None)
+
+    def _set_raw(self, path: str, data: bytes) -> None:
+        if path not in self._parts:
+            self._entries.append(_new_entry(path))
+        self._parts[path] = data
 
     # -- saving ----------------------------------------------------------------------------
 
@@ -241,6 +390,38 @@ class OpcPackage:
                 entry.external_attr = info.external_attr
                 entry.create_system = info.create_system
                 archive.writestr(entry, data)
+
+
+@dataclass(frozen=True)
+class PackageSnapshot:
+    """What :meth:`OpcPackage.snapshot` captures: edited trees as bytes, raw parts by value."""
+
+    trees: dict[str, bytes]
+    raw: dict[str, bytes | None]
+
+
+def _new_entry(path: str) -> zipfile.ZipInfo:
+    entry = zipfile.ZipInfo(path, date_time=(1980, 1, 1, 0, 0, 0))
+    # XML compresses well; media is usually compressed already.
+    if path.endswith((".xml", ".rels")):
+        entry.compress_type = zipfile.ZIP_DEFLATED
+    return entry
+
+
+def _match_tail(node: Element) -> None:
+    """Indent a new child like its siblings, for parts written pretty-printed."""
+    previous = node.getprevious()
+    if previous is None or not previous.tail or previous.tail.strip():
+        return
+    if node.getnext() is None:
+        # The old last child's tail was the parent's closing indentation: it moves to the new
+        # last child, and the old one takes the between-siblings indentation.
+        node.tail = previous.tail
+        before = previous.getprevious()
+        if before is not None and before.tail and not before.tail.strip():
+            previous.tail = before.tail
+    else:
+        node.tail = previous.tail
 
 
 # -- path helpers ------------------------------------------------------------------------
