@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Tooling
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+
+# Environments
+.venv/
+venv/
+
+# macOS
+.DS_Store
+.claude/
+
+# Office documents.  The tests build the packages they need; no real document, and no
+# document whose licence is unclear, enters this repository.
+*.pptx
+*.potx
+*.docx
+*.dotx
+*.xlsx
+*.xltx
+~$*
+
+# Local scratch.
+/scratch/

@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ooxml-edit"
+version = "0.1.0"
+description = "Lossless, undoable editing of OOXML packages (docx, pptx, xlsx) over lxml"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Evert Koks" }]
+keywords = ["ooxml", "opc", "lxml", "editing", "undo", "pptx", "docx", "xlsx"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Office/Business :: Office Suites",
+  "Topic :: Text Processing :: Markup :: XML",
+]
+# lxml, and only lxml.  The standard library's xml.etree renames namespace prefixes and
+# drops declarations it thinks unused, which breaks mc:Ignorable; an editor that must write
+# back what it read cannot use it.  See README, "Why lxml".
+dependencies = ["lxml>=4.9"]
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[project.urls]
+Repository = "https://github.com/uvrt/ooxml-edit"
+Issues = "https://github.com/uvrt/ooxml-edit/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

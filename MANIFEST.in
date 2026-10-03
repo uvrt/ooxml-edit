@@ -1,0 +1,4 @@
+# The sdist carries the tests so a packager can run them; they build their own packages.
+include LICENSE README.md
+recursive-include tests *.py
+global-exclude __pycache__ *.py[cod] .DS_Store
