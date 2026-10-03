@@ -7,7 +7,7 @@ PowerPoint shows -- and then writes back -- the old numbers.  So every chart edi
 :mod:`.chart` comes here as well.
 
 The workbook is a package inside the package.  It is opened with the format-neutral core
-(:meth:`~pptx_agent.core.opc.OpcPackage.open_embedded`), so the same losslessness holds one
+(:meth:`~ooxml_edit.opc.OpcPackage.open_embedded`), so the same losslessness holds one
 level down: sheets, styles, themes and anything else nobody touched are written back as the
 bytes that were read.  What is SpreadsheetML -- cell references, shared strings, tables -- is
 here, outside the core.
@@ -33,9 +33,8 @@ from dataclasses import dataclass, replace
 from typing import Iterator
 
 from lxml import etree
-
-from ..core.opc import OpcPackage, normalize_part_path
-from ..core.xml import Element, qn, register_namespaces, remove
+from ooxml_edit.opc import OpcPackage, normalize_part_path
+from ooxml_edit.xml import Element, qn, register_namespaces, remove
 
 SML_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 register_namespaces({"x": SML_NS})
