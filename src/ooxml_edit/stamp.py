@@ -21,9 +21,9 @@ from .xml import Element, qn, subelement
 class ExtensionStamp:
     """Where a stamp lives: ``<ext_list><ext uri=URI><value val="..."/></ext></ext_list>``."""
 
-    #: Prefixed tag of the extension list, e.g. ``"x:extLst"``.
+    #: Prefixed tag of the extension list, e.g. ``"my:extLst"``.
     ext_list: str
-    #: Prefixed tag of one extension, e.g. ``"x:ext"``.
+    #: Prefixed tag of one extension, e.g. ``"my:ext"``.
     ext: str
     #: The URI that identifies this stamp among the extensions.
     uri: str

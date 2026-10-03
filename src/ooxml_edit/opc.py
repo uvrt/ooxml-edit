@@ -13,10 +13,10 @@ The losslessness rule lives here and is worth stating plainly:
     A part that was never parsed is written back as the exact bytes that were read.
 
 Only parts whose tree was actually touched get re-serialized.  Everything else -- media,
-embedded workbooks, thumbnails, parts for features this library has never heard of -- passes
+embedded packages, thumbnails, parts for features this library has never heard of -- passes
 through untouched, so an open/save round trip with no edits is byte-identical.  That is
-checked by ``tests/test_roundtrip.py`` across the whole fixture corpus, and it is the property
-the entire editing layer rests on.
+checked by ``tests/test_opc.py``, and by every format layer across its own corpus, and it is
+the property the entire editing layer rests on.
 """
 
 from __future__ import annotations
@@ -57,7 +57,7 @@ class OpcPackage:
 
     def __init__(self, entries: list[zipfile.ZipInfo], parts: dict[str, bytes]) -> None:
         #: Preserved so ``save`` reproduces the original entry order and compression.  Writing
-        #: parts in a different order is legal but makes every diff of a saved deck useless.
+        #: parts in a different order is legal but makes every diff of a saved file useless.
         self._entries = entries
         self._parts = parts
         self._trees: dict[str, Element] = {}
@@ -202,7 +202,7 @@ class OpcPackage:
         caller) it is re-pointed at the copy; where ``share(relationship)`` says the target may
         be shared, the copy relates to the same part; anything else is copied in turn, the same
         way.  Relationship ids are kept, so the copied XML needs no rewriting.  The copy is
-        named like the original with the lowest free number (``chart3.xml`` -> ``chart7.xml``)
+        named like the original with the lowest free number (``item3.xml`` -> ``item7.xml``)
         and gets the original's content type.
         """
         source = normalize_part_path(source)
@@ -238,7 +238,7 @@ class OpcPackage:
     # -- packages inside packages ----------------------------------------------------------
 
     def open_embedded(self, path: str) -> "OpcPackage":
-        """A part that is itself an OPC package (an embedded workbook, say), opened for editing.
+        """A part that is itself an OPC package (an embedded object, say), opened for editing.
 
         The nested package is an ordinary :class:`OpcPackage` read from the part's current
         bytes, with the same losslessness: whatever is not edited inside it is written back
@@ -766,7 +766,7 @@ def _part_for_rels(rels_path: str) -> str:
 
 
 def numbered_template(path: str) -> str:
-    """``dir/chart3.xml`` -> ``dir/chart{n}.xml``: the naming pattern for a sibling copy."""
+    """``dir/item3.xml`` -> ``dir/item{n}.xml``: the naming pattern for a sibling copy."""
     import re
 
     directory, _, name = normalize_part_path(path).rpartition("/")

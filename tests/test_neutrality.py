@@ -1,8 +1,9 @@
-"""The format-neutral core stays format-neutral.
+"""ooxml-edit stays format-neutral and self-contained.
 
-``pptx_agent.core`` -- the OPC package, the XML helpers and ordered insertion, undo history and
-id stamping -- is meant to be lifted out and shared with a future docx editor.  That only works
-if nothing PowerPoint-specific creeps in, so this checks it mechanically rather than by review.
+The package is shared by editors of different formats, and that only works if no one
+format's knowledge creeps in.  This checks it mechanically rather than by review: no format
+vocabulary in the source, no imports beyond the standard library, lxml and the package
+itself, and nothing registered on import beyond the packaging namespaces every format shares.
 """
 
 from __future__ import annotations
@@ -14,68 +15,86 @@ from pathlib import Path
 
 import pytest
 
-CORE = Path(__file__).parents[1] / "src" / "pptx_agent" / "core"
+PACKAGE = Path(__file__).parents[1] / "src" / "ooxml_edit"
 
-#: Spellings that would mean the core had learned PresentationML or DrawingML.
+#: Spellings that would mean the package had learned one format: the markup languages, the
+#: formats and applications, their part paths, their characteristic tags and prefixes.
 FORBIDDEN = (
-    "presentationml", "drawingml", "wordprocessingml", "slide", "sldid", "sptree",
-    '"p:', "'p:", '"a:', "'a:", '"w:', "'w:", "ppt/", "word/document",
+    # the markup languages
+    "presentationml", "drawingml", "wordprocessingml", "spreadsheetml",
+    # the formats and the applications
+    "pptx", "docx", "xlsx", "powerpoint", "excel", "msword", "microsoft word",
+    # one format's things
+    "slide", "sldid", "sptree", "deck", "presentation", "workbook", "worksheet",
+    # part paths
+    "ppt/", "word/", "xl/",
+    # the formats' own prefixes, spelled as a tag
+    '"p:', "'p:", '"a:', "'a:", '"w:', "'w:", '"x:', "'x:", '"c:', "'c:",
+    "``p:", "``a:", "``w:", "``x:", "``c:",
 )
+
+#: What the package may import besides the standard library and itself.
+ALLOWED_THIRD_PARTY = {"lxml"}
 
 
 def _modules() -> list[Path]:
-    return sorted(CORE.glob("*.py"))
+    return sorted(PACKAGE.glob("*.py"))
+
+
+def test_the_package_has_its_modules():
+    assert {path.stem for path in _modules()} >= {"__init__", "opc", "xml", "history", "stamp"}
 
 
 @pytest.mark.parametrize("module", _modules(), ids=lambda path: path.stem)
-def test_core_has_no_format_vocabulary(module):
+def test_no_format_vocabulary(module):
     source = module.read_text(encoding="utf-8").lower()
     found = [token for token in FORBIDDEN if token in source]
     assert not found, f"{module.name} mentions {found}"
 
 
 @pytest.mark.parametrize("module", _modules(), ids=lambda path: path.stem)
-def test_core_imports_only_itself(module):
+def test_imports_only_the_standard_library_lxml_and_itself(module):
     tree = ast.parse(module.read_text(encoding="utf-8"))
+    stdlib = set(sys.stdlib_module_names)
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
             if node.level:
-                assert node.level == 1, f"{module.name} reaches outside core: {node.module}"
-            else:
-                assert not (node.module or "").startswith("pptx_agent"), node.module
+                assert node.level == 1, f"{module.name} reaches outside the package: {node.module}"
+                continue
+            names = [node.module or ""]
         elif isinstance(node, ast.Import):
-            assert not any(alias.name.startswith("pptx_agent") for alias in node.names)
+            names = [alias.name for alias in node.names]
+        else:
+            continue
+        for name in names:
+            top = name.partition(".")[0]
+            assert top in stdlib or top in ALLOWED_THIRD_PARTY or top == "ooxml_edit", (
+                f"{module.name} imports {name}"
+            )
 
 
-def test_core_imports_without_the_presentation_layer():
-    """Importing the core alone must not drag in (and register) the PresentationML layer."""
+def test_importing_registers_only_the_shared_namespaces():
+    """A fresh import knows the packaging namespaces, no format's prefixes, no child orders."""
     code = (
-        "import sys, pptx_agent.core.opc, pptx_agent.core.history, pptx_agent.core.stamp\n"
-        "from pptx_agent.core.xml import NAMESPACES\n"
-        "assert 'p' not in NAMESPACES and 'a' not in NAMESPACES, NAMESPACES\n"
-        "assert not [m for m in sys.modules if m.startswith(('pptx_agent.oxml', 'pptx_agent.edit'))]\n"
-    )
-    # pptx_agent/__init__ imports the edit layer, so load the core modules without it.
-    bootstrap = (
-        "import importlib.util, sys, types, pathlib\n"
-        f"root = pathlib.Path({str(CORE.parent)!r})\n"
-        "package = types.ModuleType('pptx_agent'); package.__path__ = [str(root)]\n"
-        "sys.modules['pptx_agent'] = package\n"
+        "import ooxml_edit, ooxml_edit.opc, ooxml_edit.history, ooxml_edit.stamp\n"
+        "from ooxml_edit.xml import NAMESPACES, CHILD_ORDER\n"
+        "assert set(NAMESPACES) == {'r', 'mc', 'ct', 'pr'}, NAMESPACES\n"
+        "assert not CHILD_ORDER, CHILD_ORDER\n"
     )
     completed = subprocess.run(
-        [sys.executable, "-c", bootstrap + code], capture_output=True, text=True
+        [sys.executable, "-c", code], capture_output=True, text=True, cwd=str(PACKAGE.parent)
     )
     assert completed.returncode == 0, completed.stderr
 
 
 def test_ordered_insertion_works_for_a_foreign_vocabulary():
-    """A different format can register its own namespace and sequence and get correct order."""
-    from pptx_agent.core.xml import make, parse_xml, register_child_order, register_namespaces
-    from pptx_agent.core.xml import append_in_order, local_name
+    """A format can register its own namespace and sequence and get correct order."""
+    from ooxml_edit.xml import append_in_order, local_name, make, parse_xml
+    from ooxml_edit.xml import register_child_order, register_namespaces
 
-    register_namespaces({"tst": "urn:pptx-agent:test"})
+    register_namespaces({"tst": "urn:ooxml-edit:test"})
     register_child_order({"tst:props": ("tst:first", ("tst:item", "tst:other"), "tst:last")})
-    root = parse_xml(b'<tst:props xmlns:tst="urn:pptx-agent:test"><tst:item/><tst:last/></tst:props>')
+    root = parse_xml(b'<tst:props xmlns:tst="urn:ooxml-edit:test"><tst:item/><tst:last/></tst:props>')
 
     append_in_order(root, make("tst:other"))
     append_in_order(root, make("tst:first"))

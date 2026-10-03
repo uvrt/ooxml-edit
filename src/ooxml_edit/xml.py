@@ -297,7 +297,7 @@ def prefixed_name(element: Element) -> str:
     return local
 
 
-#: Kept for callers of the E0 name.
+#: Kept for callers of the earlier, private name.
 _prefixed_name = prefixed_name
 
 
