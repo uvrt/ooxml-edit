@@ -131,6 +131,15 @@ class OpcPackage:
     def dirty_parts(self) -> frozenset[str]:
         return frozenset(self._dirty)
 
+    def changed_parts(self) -> frozenset[str]:
+        """Parts that differ from what was read: edited trees, and parts added, replaced or
+        removed.  Empty again once every change is undone."""
+        return frozenset(self._dirty) | frozenset(self._raw_changes)
+
+    def opened(self) -> "OpcPackage":
+        """The package as it was read, before any change -- a separate, read-only copy."""
+        return type(self)(list(self._entries), dict(self._original))
+
     def replace_part(self, path: str, data: bytes) -> None:
         """Overwrite (or add) a part with raw bytes, dropping any parsed tree for it.
 
@@ -649,21 +658,30 @@ class OpcPackage:
 
     # -- saving ----------------------------------------------------------------------------
 
-    def to_bytes(self) -> bytes:
+    def to_bytes(self, replacements: dict[str, bytes] | None = None) -> bytes:
         buffer = io.BytesIO()
-        self.write(buffer)
+        self.write(buffer, replacements)
         return buffer.getvalue()
 
-    def save(self, target: str | os.PathLike[str]) -> None:
+    def save(self, target: str | os.PathLike[str],
+             replacements: dict[str, bytes] | None = None) -> None:
         with open(os.fspath(target), "wb") as handle:
-            self.write(handle)
+            self.write(handle, replacements)
 
-    def write(self, target: BinaryIO) -> None:
-        """Write the package, reproducing entry order, timestamps and compression."""
+    def write(self, target: BinaryIO, replacements: dict[str, bytes] | None = None) -> None:
+        """Write the package, reproducing entry order, timestamps and compression.
+
+        ``replacements`` (part name -> bytes) are written instead of the parts' own bytes
+        without changing the package: what a format layer derives at save time.  Only
+        existing parts can be replaced.
+        """
+        replacements = {normalize_part_path(k): v for k, v in (replacements or {}).items()}
         with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as archive:
             for info in self._entries:
                 path = normalize_part_path(info.filename)
-                data = self.read(path)
+                data = replacements.get(path) if path in self._parts else None
+                if data is None:
+                    data = self.read(path)
                 if data is None:
                     continue
                 entry = zipfile.ZipInfo(info.filename, date_time=info.date_time)
