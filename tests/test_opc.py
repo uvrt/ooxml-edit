@@ -327,6 +327,46 @@ def test_release_reaps_what_nothing_else_uses(data, package):
     assert package.to_bytes() == data
 
 
+def test_release_removes_a_relationships_part_left_empty(data, package):
+    """Word writes no empty relationships part, so the last relationship takes it along."""
+    history = History(package)
+    history.checkpoint()
+    root = package.tree(PAGE2)
+    root.remove(root[0])
+    package.mark_dirty(PAGE2)
+    assert package.release(PAGE2, ["rId1"]) == []  # the picture is still page 1's
+    assert not package.has_part(rels_path_for(PAGE2))
+    assert rels_path_for(PAGE2) not in entries(package.to_bytes())
+    assert package.relationships(PAGE2) == {}
+    assert history.undo()
+    assert package.to_bytes() == data
+
+
+def test_release_keeps_a_relationships_part_with_relationships_left(package):
+    root = package.tree(PAGE1)
+    root.remove(root.find(qn("tst:object")))
+    package.mark_dirty(PAGE1)
+    package.release(PAGE1, ["rId3"])
+    assert package.has_part(rels_path_for(PAGE1))
+    assert set(package.relationships(PAGE1)) == {"rId1", "rId2", "rId4"}
+
+
+def test_release_leaves_a_relationships_part_alone_when_nothing_was_released(package):
+    package.release(PAGE2, ["rId1"])  # still referenced: kept
+    assert package.has_part(rels_path_for(PAGE2))
+    assert package.changed_parts() == frozenset()
+
+
+def test_a_relationship_added_after_release_emptied_the_part_writes_it_again(package):
+    root = package.tree(PAGE2)
+    root.remove(root[0])
+    package.mark_dirty(PAGE2)
+    package.release(PAGE2, ["rId1"])
+    rel_id = package.add_relationship(PAGE2, synthetic.REL_IMAGE, IMAGE)
+    reread = OpcPackage.open(package.to_bytes())
+    assert reread.related_part(PAGE2, rel_id) == IMAGE
+
+
 def test_reap_removes_a_default_no_part_uses_any_more(data, package):
     """The last picture of a kind removed takes its extension's Default along, as Word does."""
     history = History(package)

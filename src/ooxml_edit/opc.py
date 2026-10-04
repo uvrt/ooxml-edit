@@ -528,8 +528,10 @@ class OpcPackage:
 
         Call it after an edit removed references -- a deleted picture, a replaced image fill.
         A relationship is removed only if its id no longer appears anywhere in the part (see
-        :meth:`referenced_values`), so it is safe to pass ids that are still in use.  Returns
-        the parts removed.
+        :meth:`referenced_values`), so it is safe to pass ids that are still in use.  A
+        relationships part left with no relationship is removed too, as Word does: it writes
+        no empty one.  Returns the parts removed -- reaped targets, not that relationships
+        part.
         """
         part_path = normalize_part_path(part_path)
         relationships = self.relationships(part_path)
@@ -538,13 +540,18 @@ class OpcPackage:
             return []
         still_used = self.referenced_values(part_path)
         targets = []
+        released = False
         for rel_id in wanted:
             if rel_id in still_used:
                 continue
             rel = relationships[rel_id]
             self.remove_relationship(part_path, rel_id)
+            released = True
             if rel.target_part is not None:
                 targets.append(rel.target_part)
+        rels = rels_path_for(part_path)
+        if released and not _relationship_nodes(self.tree(rels)):
+            self.remove_part(rels)
         return self.reap(targets)
 
     def reap(self, candidates: Iterable[str]) -> list[str]:
