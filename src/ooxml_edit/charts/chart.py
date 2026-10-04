@@ -1295,8 +1295,9 @@ def _new_series(template: _Series, series: list[_Series], name, values: list) ->
             remove(pt)
         if sizes is not None:
             new.sizes._set_count(len(values))
-        if new.sizes.formula is not None:
-            remove(new.sizes.formula)  # sizes for a new series are not in the workbook
+        # Sizes for a new series are not in the workbook, so they become a literal: a
+        # reference without its formula is not allowed by the schema.
+        _to_literal(new.sizes)
     return element
 
 
