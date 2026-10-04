@@ -432,14 +432,38 @@ def test_a_new_title_is_rich_text_that_inherits_its_formatting():
     assert deleted.get("val") == "0"
 
 
-def test_a_host_language_goes_into_the_empty_run_of_a_new_title():
+def test_a_host_language_goes_into_the_end_of_a_new_titles_paragraph():
     document = opened(lang="nl-NL")
     document.chart("line").set_title("")
-    assert b'<a:r><a:rPr lang="nl-NL"/><a:t/></a:r>' in \
-        document.package.read(document.chart("line").part)
+    data = document.package.read(document.chart("line").part)
+    assert b'<a:p><a:pPr><a:defRPr/></a:pPr><a:endParaRPr lang="nl-NL"/></a:p>' in data
+    assert b"<a:r>" not in data.split(b"<c:title>")[1].split(b"</c:title>")[0]
     plain = opened()
     plain.chart("line").set_title("")
-    assert b'<a:r><a:rPr/><a:t/></a:r>' in plain.package.read(plain.chart("line").part)
+    assert b'<a:p><a:pPr><a:defRPr/></a:pPr></a:p>' in plain.package.read(plain.chart("line").part)
+
+
+def test_the_text_of_a_new_title_keeps_the_host_language():
+    # The text written into a new title takes its run's properties from the paragraph's
+    # end, so a chart title and an axis title alike carry the language, before and after
+    # the document is saved and opened again.
+    document = opened(lang="nl-NL")
+    chart = document.chart("line")
+    chart.set_title("Omzet")
+    chart.set_axis_title("value", "Euro")
+    chart.set_axis_title("category", "Maand")
+    for reopened in (document, cs.Opened(document.to_bytes())):
+        root = etree.fromstring(reopened.package.read(chart.part))
+        titles = [root.find(f"{C}chart/{C}title")] + [
+            root.find(f"{C}chart/{C}plotArea/{C}{axis}/{C}title") for axis in ("catAx", "valAx")]
+        for title in titles:
+            runs = list(title.iter("{%s}r" % cs.A))
+            assert len(runs) == 1
+            assert runs[0].find("{%s}rPr" % cs.A).get("lang") == "nl-NL"
+            end = title.find(f"{C}tx/{C}rich/{{{cs.A}}}p/{{{cs.A}}}endParaRPr")
+            assert end is not None and end.get("lang") == "nl-NL"
+    assert chart.title == "Omzet" and chart.axis_title("value") == "Euro"
+    check_charts(document.to_bytes())
 
 
 def test_a_host_template_builds_new_titles():

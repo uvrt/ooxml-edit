@@ -1383,7 +1383,12 @@ def _write_title(editor: _Editor, owner: Element, text: str | None, *, vertical:
 
 
 def default_title_text(vertical: bool, *, lang: str | None = None) -> Element:
-    """The ``c:tx`` of a new title: rich text, one empty run, rotated when ``vertical``."""
+    """The ``c:tx`` of a new title: rich text, one empty paragraph, rotated when
+    ``vertical``.
+
+    ``lang`` goes on the paragraph's ``a:endParaRPr``, which is where the text then written
+    into the title (:func:`~.dmltext.replace_body_text`) takes its run's properties from: an
+    empty run's would be dropped with the run, and the title would have no language."""
     tx = make("c:tx")
     rich = make("c:rich")
     body = make("a:bodyPr")
@@ -1396,10 +1401,8 @@ def default_title_text(vertical: bool, *, lang: str | None = None) -> Element:
     properties = make("a:pPr")
     properties.append(make("a:defRPr"))
     paragraph.append(properties)
-    run = make("a:r")
-    run.append(make("a:rPr") if lang is None else make("a:rPr", lang=lang))
-    run.append(make("a:t"))
-    paragraph.append(run)
+    if lang is not None:
+        paragraph.append(make("a:endParaRPr", lang=lang))
     rich.append(paragraph)
     tx.append(rich)
     return tx
