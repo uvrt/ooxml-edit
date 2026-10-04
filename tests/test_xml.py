@@ -129,6 +129,32 @@ def test_unknown_children_stay_last_and_unordered_parents_append():
     assert _names(loose) == ["b", "a"]
 
 
+def test_insert_in_order_attaches_a_detached_child_even_where_no_order_is_known():
+    """Never a silent no-op: an unordered parent, or a child its sequence does not name,
+    gets the child appended, as append_in_order would."""
+    loose = make("tst:loose")
+    loose.append(make("tst:b"))
+    child = make("tst:a")
+    insert_in_order(loose, child)
+    assert child.getparent() is loose and _names(loose) == ["b", "a"]
+
+    root = _parse("<tst:name/><tst:end/>")
+    unlisted = make("tst:unlisted")
+    insert_in_order(root, unlisted)
+    assert unlisted.getparent() is root and _names(root)[-1] == "unlisted"
+
+    size = make("tst:size")
+    insert_in_order(root, size)
+    assert _names(root) == ["name", "size", "end", "unlisted"]
+
+
+def test_insert_in_order_moves_a_child_from_another_parent():
+    first, second = _parse("<tst:size/>"), _parse("<tst:name/><tst:end/>")
+    size = first[0]
+    insert_in_order(second, size)
+    assert _names(first) == [] and _names(second) == ["name", "size", "end"]
+
+
 def test_subelement_finds_or_creates_in_order():
     root = _parse("<tst:end/>")
     size = subelement(root, "tst:size", w="3")

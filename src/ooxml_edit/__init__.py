@@ -14,4 +14,4 @@ register their namespaces and child-order tables with :mod:`.xml` and subclass t
 ``tests/test_neutrality.py`` enforces the rule.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"

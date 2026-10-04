@@ -203,8 +203,10 @@ def subelement(parent: Element, tag: str, **attributes: str) -> Element:
 
 
 def append_in_order(parent: Element, child: Element) -> Element:
-    """Attach a detached ``child`` to ``parent`` at its schema position.  Returns ``child``."""
-    parent.append(child)
+    """Attach a detached ``child`` to ``parent`` at its schema position.  Returns ``child``.
+
+    :func:`insert_in_order` with the child returned, for building trees in one expression.
+    """
     insert_in_order(parent, child)
     return child
 
@@ -241,13 +243,18 @@ def _ranks(parent_name: str) -> dict[str, int] | None:
 
 
 def insert_in_order(parent: Element, child: Element) -> None:
-    """Move ``child`` to the position ``parent``'s schema sequence requires.
+    """Put ``child`` at the position ``parent``'s schema sequence requires.
 
-    ``child`` must already be a child of ``parent``.  Parents with no sequence entry keep the
-    child where it is -- appended, which is what repeating-choice parents want.  Among siblings
-    of equal rank (a repeating choice) the child lands after the last of them, so a run added
-    to a paragraph goes after the existing runs but before the end-of-paragraph properties.
+    ``child`` may already be a child of ``parent``, which moves it; a detached child (or one
+    under another parent) is appended to ``parent`` first, so it is never left unattached.
+    Parents with no sequence entry, and children the sequence does not name, keep the child
+    where it is -- appended, which is what repeating-choice parents and extension elements
+    want.  Among siblings of equal rank (a repeating choice) the child lands after the last
+    of them, so a run added to a paragraph goes after the existing runs but before the
+    end-of-paragraph properties.
     """
+    if child.getparent() is not parent:
+        parent.append(child)
     ranks = _ranks(prefixed_name(parent))
     if ranks is None:
         return
