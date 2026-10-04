@@ -1,9 +1,14 @@
-"""ooxml-edit stays format-neutral and self-contained.
+"""ooxml-edit's core stays format-neutral and self-contained.
 
 The package is shared by editors of different formats, and that only works if no one
-format's knowledge creeps in.  This checks it mechanically rather than by review: no format
-vocabulary in the source, no imports beyond the standard library, lxml and the package
-itself, and nothing registered on import beyond the packaging namespaces every format shares.
+format's knowledge creeps in.  This checks the core -- the modules directly in
+``ooxml_edit`` -- mechanically rather than by review: no format vocabulary in the source,
+no imports beyond the standard library, lxml and the core itself, and nothing registered on
+import beyond the packaging namespaces every format shares.
+
+The optional :mod:`ooxml_edit.charts` subpackage speaks DrawingML, which every format
+embeds; the core never imports it, and ``test_charts_neutrality.py`` keeps it free of any
+one document format.
 """
 
 from __future__ import annotations
@@ -38,6 +43,7 @@ ALLOWED_THIRD_PARTY = {"lxml"}
 
 
 def _modules() -> list[Path]:
+    """The core: the package's own modules, not its subpackages."""
     return sorted(PACKAGE.glob("*.py"))
 
 
@@ -71,6 +77,36 @@ def test_imports_only_the_standard_library_lxml_and_itself(module):
             assert top in stdlib or top in ALLOWED_THIRD_PARTY or top == "ooxml_edit", (
                 f"{module.name} imports {name}"
             )
+
+
+@pytest.mark.parametrize("module", _modules(), ids=lambda path: path.stem)
+def test_the_core_does_not_import_the_charts_subpackage(module):
+    tree = ast.parse(module.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            names = [node.module or ""] + [alias.name for alias in node.names]
+            if node.level == 0:
+                names = [node.module or ""]
+        elif isinstance(node, ast.Import):
+            names = [alias.name for alias in node.names]
+        else:
+            continue
+        for name in names:
+            assert "charts" not in name.split("."), f"{module.name} imports {name}"
+
+
+def test_importing_the_core_never_imports_the_charts_subpackage():
+    code = (
+        "import sys\n"
+        "import ooxml_edit, ooxml_edit.opc, ooxml_edit.xml, ooxml_edit.history\n"
+        "import ooxml_edit.stamp\n"
+        "loaded = sorted(m for m in sys.modules if m.startswith('ooxml_edit.charts'))\n"
+        "assert not loaded, loaded\n"
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, cwd=str(PACKAGE.parent)
+    )
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_importing_registers_only_the_shared_namespaces():
