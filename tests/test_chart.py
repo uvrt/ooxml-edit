@@ -432,14 +432,38 @@ def test_a_new_title_is_rich_text_that_inherits_its_formatting():
     assert deleted.get("val") == "0"
 
 
-def test_a_host_language_goes_into_the_empty_run_of_a_new_title():
+def test_a_host_language_goes_into_the_end_of_a_new_titles_paragraph():
     document = opened(lang="nl-NL")
     document.chart("line").set_title("")
-    assert b'<a:r><a:rPr lang="nl-NL"/><a:t/></a:r>' in \
-        document.package.read(document.chart("line").part)
+    data = document.package.read(document.chart("line").part)
+    assert b'<a:p><a:pPr><a:defRPr/></a:pPr><a:endParaRPr lang="nl-NL"/></a:p>' in data
+    assert b"<a:r>" not in data.split(b"<c:title>")[1].split(b"</c:title>")[0]
     plain = opened()
     plain.chart("line").set_title("")
-    assert b'<a:r><a:rPr/><a:t/></a:r>' in plain.package.read(plain.chart("line").part)
+    assert b'<a:p><a:pPr><a:defRPr/></a:pPr></a:p>' in plain.package.read(plain.chart("line").part)
+
+
+def test_the_text_of_a_new_title_keeps_the_host_language():
+    # The text written into a new title takes its run's properties from the paragraph's
+    # end, so a chart title and an axis title alike carry the language, before and after
+    # the document is saved and opened again.
+    document = opened(lang="nl-NL")
+    chart = document.chart("line")
+    chart.set_title("Omzet")
+    chart.set_axis_title("value", "Euro")
+    chart.set_axis_title("category", "Maand")
+    for reopened in (document, cs.Opened(document.to_bytes())):
+        root = etree.fromstring(reopened.package.read(chart.part))
+        titles = [root.find(f"{C}chart/{C}title")] + [
+            root.find(f"{C}chart/{C}plotArea/{C}{axis}/{C}title") for axis in ("catAx", "valAx")]
+        for title in titles:
+            runs = list(title.iter("{%s}r" % cs.A))
+            assert len(runs) == 1
+            assert runs[0].find("{%s}rPr" % cs.A).get("lang") == "nl-NL"
+            end = title.find(f"{C}tx/{C}rich/{{{cs.A}}}p/{{{cs.A}}}endParaRPr")
+            assert end is not None and end.get("lang") == "nl-NL"
+    assert chart.title == "Omzet" and chart.axis_title("value") == "Euro"
+    check_charts(document.to_bytes())
 
 
 def test_a_host_template_builds_new_titles():
@@ -649,3 +673,83 @@ def test_a_random_walk_keeps_cache_and_workbook_in_step(name, seed):
     cs.assert_valid(document.to_bytes())
     document.undo_all()
     assert cs.parts(document.to_bytes()) == cs.parts(DATA)
+
+
+# ------------------------------------------------------------------------------------------
+# A new series' c16:uniqueId, as Word and PowerPoint give one on saving
+# ------------------------------------------------------------------------------------------
+
+C16 = "http://schemas.microsoft.com/office/drawing/2014/chart"
+UNIQUE_ID = re.compile(r"\{00000000-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}\}")
+
+
+def _ids(document, chart) -> list[str | None]:
+    root = etree.fromstring(document.package.read(chart.part))
+    out = []
+    for ser in root.iter(C + "ser"):
+        node = next(ser.iter("{%s}uniqueId" % C16), None)
+        out.append(None if node is None else node.get("val"))
+    return out
+
+
+@pytest.mark.parametrize("name", CHARTS)
+def test_a_new_series_gets_a_unique_id_and_the_others_keep_theirs(name):
+    document = opened()
+    chart = document.chart(name)
+    before = _ids(document, chart)
+    count = chart.point_count
+    chart.add_series("Added", [1] * count)
+    chart.add_series("Front", [2] * count, index=0)
+    after = _ids(document, chart)
+    added = [value for value in after if value not in before]
+    assert len(added) == 2 and len(set(added)) == 2
+    assert all(UNIQUE_ID.fullmatch(value) for value in added)
+    # The series that were there are left as they were, with an id or without one.
+    assert [value for value in after if value not in added] == before
+    root = etree.fromstring(document.package.read(chart.part))
+    for ser in root.iter(C + "ser"):
+        node = next(ser.iter("{%s}uniqueId" % C16), None)
+        if node is None or node.get("val") not in added:
+            continue
+        ext = node.getparent()
+        assert etree.QName(ext).localname == "ext" and ext.get("uri") == \
+            "{C3380CC4-5D6E-409C-BE32-E72D297353CC}"
+        assert ext.getparent() is ser[-1]  # c:extLst, the series' last child
+    check_charts(document.to_bytes())
+
+
+def test_the_ids_are_deterministic_and_step_past_one_already_taken():
+    first, second = opened(), opened()
+    for document in (first, second):
+        chart = document.chart("bar")
+        chart.add_series("Added", [1] * chart.point_count)
+    assert first.to_bytes() == second.to_bytes()
+    value = _ids(first, first.chart("bar"))[-1]
+    # The same edit on a chart whose first series already holds that id writes another.
+    third = opened()
+    chart = third.chart("bar")
+    root = third.package.tree(chart.part)
+    ser = next(root.iter(C + "ser"))
+    extensions = etree.SubElement(ser, C + "extLst")
+    ext = etree.SubElement(extensions, C + "ext", nsmap={"c16": C16})
+    ext.set("uri", "{C3380CC4-5D6E-409C-BE32-E72D297353CC}")
+    etree.SubElement(ext, "{%s}uniqueId" % C16).set("val", value)
+    chart.add_series("Added", [1] * chart.point_count)
+    ids = _ids(third, chart)
+    assert ids[0] == value and ids[-1] != value and UNIQUE_ID.fullmatch(ids[-1])
+
+
+def test_a_series_added_by_a_model_gets_an_id_and_undo_takes_it_away():
+    document = opened()
+    chart = document.chart("line")
+    from ooxml_edit.charts.model import apply_chart_model, canonical_chart
+
+    model = chart.data
+    model["series"].append({"name": "Modelled", "values": [1] * len(model["categories"])})
+    apply_chart_model(chart, canonical_chart(model, "line"), "line")
+    assert UNIQUE_ID.fullmatch(_ids(document, chart)[-1])
+    edited = document.to_bytes()
+    document.undo_all()
+    assert cs.parts(document.to_bytes()) == cs.parts(DATA)
+    document.redo_all()
+    assert document.to_bytes() == edited

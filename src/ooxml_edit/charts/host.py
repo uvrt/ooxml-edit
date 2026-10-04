@@ -53,8 +53,8 @@ class GraphicHost:
     #: What the format calls the whole document, for messages ("linked from outside the ...").
     document: str = "document"
     #: ``lang`` for the run and paragraph properties of text this package creates -- the
-    #: end-of-paragraph properties of a new diagram node, the (empty) run of a new title;
-    #: ``None`` writes none.
+    #: end-of-paragraph properties of a new diagram node and of a new title's paragraph,
+    #: which the title's text then takes its run's properties from; ``None`` writes none.
     lang: str | None = None
     #: Builds the ``c:tx`` of a new chart or axis title, given whether the title is vertical;
     #: ``None`` uses :func:`~.chart.default_title_text`.  The text is then written into it
