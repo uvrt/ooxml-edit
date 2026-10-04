@@ -8,7 +8,10 @@ import zipfile
 import pytest
 
 from ooxml_edit.history import History
+from lxml import etree
+
 from ooxml_edit.opc import (
+    CONTENT_TYPES_NS,
     CONTENT_TYPES_PART,
     OpcPackage,
     normalize_part_path,
@@ -126,10 +129,56 @@ def test_a_new_extension_gets_a_default_and_a_known_one_an_override(package):
     assert overrides[-1] == "/doc/pages/page3.xml"
 
 
-def test_a_forced_override_is_written_even_when_the_default_agrees(package):
-    package.add_part("doc/extra.xml", b"<x/>", "application/xml", override=True)
+def _content_type_nodes(package, kind):
     types = package.tree(CONTENT_TYPES_PART)
-    assert "/doc/extra.xml" in [n.get("PartName") for n in types]
+    return [n for n in types if n.tag.endswith(kind)]
+
+
+def test_an_added_part_its_extension_default_already_types_declares_nothing(data, package):
+    """Word writes no Override that repeats a Default, so neither does add_part, forced or not."""
+    package.add_part("doc/extra.xml", b"<x/>", "application/xml", override=True)
+    package.add_part("doc/extra2.xml", b"<x/>", "application/xml")
+    assert CONTENT_TYPES_PART not in package.changed_parts()
+    assert package.content_type("doc/extra.xml") == "application/xml"
+    assert entries(package.to_bytes())[CONTENT_TYPES_PART] == entries(data)[CONTENT_TYPES_PART]
+
+
+def test_a_forced_override_is_written_when_the_extension_has_no_default(package):
+    package.add_part("doc/extra.dat", b"x", "application/x-test", override=True)
+    assert "/doc/extra.dat" in [n.get("PartName") for n in _content_type_nodes(package, "Override")]
+    assert "dat" not in [n.get("Extension") for n in _content_type_nodes(package, "Default")]
+
+
+def test_declare_content_type_can_still_force_an_override_the_default_agrees_with(package):
+    package.add_part("doc/extra.xml", b"<x/>")
+    package.declare_content_type("doc/extra.xml", "application/xml", override=True)
+    assert "/doc/extra.xml" in [n.get("PartName") for n in _content_type_nodes(package, "Override")]
+
+
+def test_declaring_a_new_type_changes_the_existing_override(data, package):
+    """A template's main part becoming a document's: one Override, with the new type."""
+    history = History(package)
+    history.checkpoint()
+    package.declare_content_type(MAIN, synthetic.CT_NOTE)
+    assert package.content_type(MAIN) == synthetic.CT_NOTE
+    overrides = [n for n in _content_type_nodes(package, "Override") if n.get("PartName") == "/" + MAIN]
+    assert len(overrides) == 1
+    package.declare_content_type(MAIN, synthetic.CT_PAGE, override=True)
+    assert package.content_type(MAIN) == synthetic.CT_PAGE
+    assert [n.get("PartName") for n in _content_type_nodes(package, "Override")].count("/" + MAIN) == 1
+    assert history.undo()
+    assert package.to_bytes() == data
+
+
+def test_declaring_a_type_removes_duplicate_overrides(package):
+    types = package.tree(CONTENT_TYPES_PART)
+    duplicate = etree.SubElement(types, "{%s}Override" % CONTENT_TYPES_NS)
+    duplicate.set("PartName", "/" + PAGE1)
+    duplicate.set("ContentType", synthetic.CT_NOTE)
+    package.mark_dirty(CONTENT_TYPES_PART)
+    package.declare_content_type(PAGE1, synthetic.CT_MAIN)
+    assert package.content_type(PAGE1) == synthetic.CT_MAIN
+    assert [n.get("PartName") for n in _content_type_nodes(package, "Override")].count("/" + PAGE1) == 1
 
 
 def test_new_content_types_are_indented_like_their_siblings(package):
@@ -276,6 +325,37 @@ def test_release_reaps_what_nothing_else_uses(data, package):
     assert not package.has_part(EMBEDDED)
     assert history.undo()
     assert package.to_bytes() == data
+
+
+def test_reap_removes_a_default_no_part_uses_any_more(data, package):
+    """The last picture of a kind removed takes its extension's Default along, as Word does."""
+    history = History(package)
+    history.checkpoint()
+    media = package.add_part("doc/media/image2.gif", b"GIF89a", "image/gif")
+    package.add_relationship(ORPHAN, synthetic.REL_IMAGE, media)
+    assert "gif" in [n.get("Extension") for n in _content_type_nodes(package, "Default")]
+    assert package.release(ORPHAN, ["rId1"]) == [media]
+    assert "gif" not in [n.get("Extension") for n in _content_type_nodes(package, "Default")]
+    text = package.read(CONTENT_TYPES_PART).decode()
+    assert "\n  \n" not in text and text.endswith("/>\n</Types>")
+    assert history.undo()
+    assert package.to_bytes() == data
+
+
+def test_reap_keeps_a_default_another_part_still_uses(package):
+    first = package.add_part("doc/media/image2.gif", b"GIF89a", "image/gif")
+    package.add_part("doc/media/image3.gif", b"GIF89a3", "image/gif")
+    package.add_relationship(ORPHAN, synthetic.REL_IMAGE, first)
+    package.release(ORPHAN, ["rId1"])
+    assert not package.has_part(first)
+    assert package.content_type("doc/media/image3.gif") == "image/gif"
+
+
+def test_reap_prunes_only_the_defaults_of_extensions_it_emptied(package):
+    package.remove_relationship(MAIN, "rId1")
+    package.reap([PAGE1])  # two xml parts, of many, and the only bin part
+    defaults = [n.get("Extension") for n in _content_type_nodes(package, "Default")]
+    assert defaults == ["rels", "xml"]
 
 
 def test_copy_part_shares_or_copies_each_relationship(package):

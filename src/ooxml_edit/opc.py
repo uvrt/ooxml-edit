@@ -162,14 +162,22 @@ class OpcPackage:
 
         ``content_type`` is registered as a ``Default`` for the part's extension when the
         extension has none yet -- the convention for media -- and as an ``Override`` for the
-        part name otherwise, or always with ``override=True``.
+        part name when the extension's ``Default`` gives another type.  ``override=True``
+        asks for an ``Override`` instead of a new ``Default``.  When the extension's
+        ``Default`` already gives ``content_type`` nothing is declared, ``override`` or not:
+        Word writes no ``Override`` that repeats a ``Default``.
         """
         path = normalize_part_path(path)
         if path in self._parts:
             raise ValueError(f"part {path!r} already exists")
         self.replace_part(path, data)
         if content_type is not None:
-            self.declare_content_type(path, content_type, override=override)
+            if self._default_type(path) == content_type:
+                # A stale Override for this name (a part removed and added again) would
+                # still win over the Default; it goes, and nothing new is written.
+                self._remove_override(path)
+            else:
+                self.declare_content_type(path, content_type, override=override)
         return path
 
     def remove_part(self, path: str) -> None:
@@ -302,19 +310,28 @@ class OpcPackage:
     def declare_content_type(self, path: str, content_type: str, *, override: bool = False) -> None:
         """Make ``path`` resolve to ``content_type``, touching ``[Content_Types].xml`` only if
         it does not already.  ``override`` forces a per-part ``Override`` even when the
-        extension's ``Default`` already says the same thing."""
+        extension's ``Default`` already says the same thing.
+
+        A part that already has an ``Override`` keeps it, with its ``ContentType`` changed --
+        a template's main part becoming a document's, say -- rather than gaining a second one
+        that :meth:`content_type` would never read.  Duplicate ``Override`` elements for the
+        part are removed.  An extension's ``Default`` is never changed: other parts share it.
+        """
+        path = normalize_part_path(path)
         if self.content_type(path) == content_type and not (override and not self._has_override(path)):
             return
         root = self.tree(CONTENT_TYPES_PART)
         if root is None:
             raise ValueError("the package has no [Content_Types].xml")
-        path = normalize_part_path(path)
+        existing = self._overrides(path)
+        if existing:
+            existing[0].set("ContentType", content_type)
+            for node in existing[1:]:
+                _remove_keeping_layout(node)
+            self.mark_dirty(CONTENT_TYPES_PART)
+            return
         extension = path.rsplit(".", 1)[-1].lower() if "." in path else ""
-        has_default = any(
-            node.tag == "{%s}Default" % CONTENT_TYPES_NS
-            and (node.get("Extension") or "").lower() == extension
-            for node in root
-        )
+        has_default = self._default_node(path) is not None
         if extension and not has_default and not override:
             node = etree.Element("{%s}Default" % CONTENT_TYPES_NS)
             node.set("Extension", extension)
@@ -330,6 +347,37 @@ class OpcPackage:
             node.set("ContentType", content_type)
         _match_tail(node)
         self.mark_dirty(CONTENT_TYPES_PART)
+
+    def _default_node(self, path: str) -> Element | None:
+        """The ``Default`` for ``path``'s extension, if any."""
+        root = self.tree(CONTENT_TYPES_PART)
+        if root is None or "." not in path:
+            return None
+        extension = path.rsplit(".", 1)[-1].lower()
+        for node in root:
+            if node.tag == "{%s}Default" % CONTENT_TYPES_NS \
+                    and (node.get("Extension") or "").lower() == extension:
+                return node
+        return None
+
+    def _default_type(self, path: str) -> str | None:
+        node = self._default_node(normalize_part_path(path))
+        return None if node is None else node.get("ContentType")
+
+    def _prune_defaults(self, extensions: Iterable[str]) -> None:
+        """Remove the ``Default`` of each of ``extensions`` that no part has any more."""
+        root = self.tree(CONTENT_TYPES_PART)
+        if root is None:
+            return
+        in_use = {path.rsplit(".", 1)[-1].lower() for path in self._parts if "." in path}
+        unused = {extension.lower() for extension in extensions} - in_use
+        nodes = [node for node in root
+                 if node.tag == "{%s}Default" % CONTENT_TYPES_NS
+                 and (node.get("Extension") or "").lower() in unused]
+        for node in nodes:
+            _remove_keeping_layout(node)
+        if nodes:
+            self.mark_dirty(CONTENT_TYPES_PART)
 
     def _overrides(self, path: str) -> list[Element]:
         root = self.tree(CONTENT_TYPES_PART)
@@ -507,7 +555,9 @@ class OpcPackage:
         from any part in the package, the package root included, reachable or not -- is
         dropped from it, repeatedly, until it is stable.  What remains is referenced only from
         within itself (a page and its notes, which point at each other), and is removed with
-        its relationships parts and content-type overrides.  Returns the removed parts.
+        its relationships parts and content-type overrides.  An extension's ``Default`` goes
+        too once no part has that extension (the last picture of a kind removed), since Word
+        writes none for an extension the package does not use.  Returns the removed parts.
         """
         doomed: set[str] = set()
         pending = [normalize_part_path(path) for path in candidates]
@@ -539,6 +589,7 @@ class OpcPackage:
         for path in removed:
             if path in self._parts:
                 self.remove_part(path)
+        self._prune_defaults({path.rsplit(".", 1)[-1] for path in removed if "." in path})
         return removed
 
     def unreachable_parts(self) -> set[str]:
