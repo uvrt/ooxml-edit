@@ -2,40 +2,50 @@
 
 A SmartArt diagram is stored as data -- a tree of points (``dgm:pt``) wired by connections
 (``dgm:cxn``) in the data-model part -- plus a laid-out copy the application caches beside it
-(``dsp:drawing``, related from the slide through ``dsp:dataModelExt@relId``).  The data
-model is the truth.  Measured on PowerPoint for Mac 16 (see ROADMAP.md, Phase E4):
+(``dsp:drawing``, related from the host part through ``dsp:dataModelExt@relId``).  The data
+model is the truth.  Measured in PowerPoint for Mac 16 (how Word treats the cache has not been
+measured yet):
 
 * PowerPoint **re-lays the diagram out from the data model** whenever it opens a deck.  A
-  cached drawing whose text disagrees with the data model is ignored -- the PDF shows the
+  cached drawing whose text disagrees with the data model is ignored -- its PDF shows the
   data model's text -- and a missing drawing is regenerated, on screen and on save.
 * So is a node added to the data model with no presentation points of its own, and a node
-  removed with its presentation points: PowerPoint lays the diagram out with the node, or
-  without it, and writes the presentation points back on save.
+  removed with its presentation points: the diagram is laid out with the node, or without
+  it, and the presentation points are written back on save.
 
-Every other reader (pptx2svg, Keynote, LibreOffice, Google Slides) draws the *cached*
-drawing.  So a text edit updates the data model and, where it can be done exactly, the
-drawing too: the drawing shape that shows a node is found through the node's ``presOf``
-connection (data point -> presentation point, whose ``modelId`` the drawing's ``dsp:sp``
-carries), and its paragraphs are only rewritten when they are, verifiably, the texts of
-the nodes that shape presents, in their ``destOrd`` order.  Anything less certain -- and
-every added or removed node, which moves the layout -- drops the cached drawing instead,
-which PowerPoint regenerates and other readers show as an empty frame until it has.
+Most other readers draw the *cached* drawing.  So a text edit updates the data model and,
+where it can be done exactly, the drawing too: the drawing shape that shows a node is found
+through the node's ``presOf`` connection (data point -> presentation point, whose
+``modelId`` the drawing's ``dsp:sp`` carries), and its paragraphs are only rewritten when
+they are, verifiably, the texts of the nodes that shape presents, in their ``destOrd``
+order.  Anything less certain -- and every added or removed node, which moves the layout --
+leaves a drawing that cannot be patched exactly.  What happens to it then is the host's
+choice, ``on_inexact_drawing``:
+
+* ``"drop"`` (the default) forgets it -- relationship, part and ``dataModelExt`` -- which an
+  application that lays the diagram out again regenerates, and other readers show as an
+  empty frame until it has;
+* ``"keep"`` leaves it as it was, stale;
+* ``"refuse"`` raises :class:`DiagramDrawingError` and changes nothing (the host's ``edit``
+  rolls the step back).
+
+``notify`` hears about each drawing dropped or kept stale, in words.
 """
 
 from __future__ import annotations
 
 import copy
 import uuid
-from typing import TYPE_CHECKING, Callable
+from contextlib import contextmanager
+from typing import Callable
 
-from ..oxml.xml import Element, append_in_order, local_name, make, qn, register_child_order, remove
-from .text import _paragraph_text, _replace_body_text
+from ..xml import Element, append_in_order, local_name, make, qn, remove
+from .dmltext import paragraph_text, replace_body_text
+from .host import GraphicHost
+from .namespaces import DGM_NS, DSP_NS  # noqa: F401  (re-exported)
 
-if TYPE_CHECKING:  # pragma: no cover
-    from .document import Shape
-
-DGM_NS = "http://schemas.openxmlformats.org/drawingml/2006/diagram"
-DSP_NS = "http://schemas.microsoft.com/office/drawing/2008/diagram"
+#: What to do with a cached drawing an edit cannot keep exactly in step.
+DRAWING_POLICIES = ("drop", "keep", "refuse")
 #: The cached drawing's relationship type, both spellings (Microsoft's and ISO's).
 REL_DIAGRAM_DRAWING = (
     "http://schemas.microsoft.com/office/2007/relationships/diagramDrawing",
@@ -44,12 +54,9 @@ REL_DIAGRAM_DRAWING = (
 #: ``a:ext`` URI under which the data model names its drawing.
 DATA_MODEL_EXT_URI = "http://schemas.microsoft.com/office/drawing/2008/diagram"
 
-register_child_order({
-    "dgm:pt": ("dgm:prSet", "dgm:spPr", "dgm:t", "dgm:extLst"),
-    "dgm:t": ("a:bodyPr", "a:lstStyle", "a:p"),
-    "dsp:txBody": ("a:bodyPr", "a:lstStyle", "a:p"),
-    "dgm:dataModel": ("dgm:ptLst", "dgm:cxnLst", "dgm:bg", "dgm:whole", "dgm:extLst"),
-})
+
+class DiagramDrawingError(ValueError):
+    """An edit would leave the cached drawing out of step, and the host refuses that."""
 
 #: Point types that carry the diagram's text.  A ``dgm:pt`` without a type is a node.
 TEXT_TYPES = frozenset({"node", "asst"})
@@ -64,7 +71,7 @@ def _text(point: Element) -> str:
     body = point.find(qn("dgm:t"))
     if body is None:
         return ""
-    return "\n".join(_paragraph_text(p) for p in body.findall(qn("a:p")))
+    return "\n".join(paragraph_text(p) for p in body.findall(qn("a:p")))
 
 
 def _ord(cxn: Element, attribute: str = "srcOrd") -> int:
@@ -81,8 +88,11 @@ def new_model_id() -> str:
 class _Model:
     """The data-model part, indexed."""
 
-    def __init__(self, root: Element) -> None:
+    def __init__(self, root: Element, host: GraphicHost | None = None) -> None:
         self.root = root
+        #: The holder, during an edit; and what the edit has to say about the drawing.
+        self.host = host
+        self.notes: list[str] = []
         self.points_list = root.find(qn("dgm:ptLst"))
         self.cxn_list = root.find(qn("dgm:cxnLst"))
         points = [] if self.points_list is None else self.points_list.findall(qn("dgm:pt"))
@@ -147,33 +157,37 @@ class _Model:
 
 
 class Diagram:
-    """The SmartArt in a graphic frame.  Re-resolved from the document on every call.
+    """The SmartArt a :class:`~.host.GraphicHost` holds.  ``resolve`` is called afresh on
+    every call, so a ``Diagram`` survives undo.
 
     Nodes are listed depth first, in order (``diagram.nodes[0]`` is the first top-level
     node), and addressed by their ``modelId``, which never changes.
     """
 
-    def __init__(self, resolve: Callable[[], "Shape"]) -> None:
+    def __init__(self, resolve: Callable[[], GraphicHost], on_inexact_drawing: str = "drop",
+                 notify: Callable[[str], None] | None = None) -> None:
+        if on_inexact_drawing not in DRAWING_POLICIES:
+            raise ValueError(f"on_inexact_drawing is one of {', '.join(DRAWING_POLICIES)}")
         self._resolve = resolve
+        self.on_inexact_drawing = on_inexact_drawing
+        self.notify = notify
 
     # -- where it lives ----------------------------------------------------------------------
 
     @property
     def address(self) -> str:
-        return self._resolve().id
+        return self._resolve().address
 
     def _relationship(self, attribute: str) -> str | None:
-        shape = self._resolve()
-        node = shape._element.find(
-            f"{qn('a:graphic')}/{qn('a:graphicData')}/{qn('dgm:relIds')}")
+        host = self._resolve()
+        node = next(host.frame.iter(qn("dgm:relIds")), None)
         if node is None:
             return None
-        return shape._slide.document.package.related_part(shape._slide.part_path,
-                                                          node.get(qn(attribute)))
+        return host.package.related_part(host.part, node.get(qn(attribute)))
 
     @property
     def part(self) -> str:
-        """The data-model part, ``ppt/diagrams/data1.xml``."""
+        """The data-model part, e.g. ``.../diagrams/data1.xml``."""
         part = self._relationship("r:dm")
         if part is None:
             raise ValueError(f"{self.address}: the diagram's data model is missing")
@@ -188,18 +202,18 @@ class Diagram:
 
     @property
     def drawing_part(self) -> str | None:
-        """The cached drawing, ``ppt/diagrams/drawing1.xml``, if there is one."""
-        shape = self._resolve()
+        """The cached drawing, e.g. ``.../diagrams/drawing1.xml``, if there is one."""
+        host = self._resolve()
         rel_id = _Model(self._root()).drawing_rel_id()
         if rel_id is None:
             return None
-        rel = shape._slide.document.package.relationships(shape._slide.part_path).get(rel_id)
+        rel = host.package.relationships(host.part).get(rel_id)
         if rel is None or rel.type not in REL_DIAGRAM_DRAWING or rel.target_part is None:
             return None
         return rel.target_part if self._package().has_part(rel.target_part) else None
 
     def _package(self):
-        return self._resolve()._slide.document.package
+        return self._resolve().package
 
     def _root(self) -> Element:
         root = self._package().tree(self.part)
@@ -232,7 +246,7 @@ class Diagram:
 
     @property
     def model(self) -> dict:
-        """``{"layout", "nodes": [{"id", "lvl", "t"}]}`` -- what the full-state SVG carries."""
+        """``{"layout", "nodes": [{"id", "lvl", "t"}]}`` -- what :mod:`.model` reads."""
         return diagram_model(self._root(), self.layout)
 
     # -- editing -----------------------------------------------------------------------------
@@ -249,26 +263,22 @@ class Diagram:
             old = {key: _text(p) for key, p in model.points.items()}
             body = point.find(qn("dgm:t"))
             if body is None:
-                body = make("dgm:t")
-                body.append(make("a:bodyPr"))
-                body.append(make("a:lstStyle"))
-                paragraph = make("a:p")
-                paragraph.append(make("a:endParaRPr", lang="en-US"))
-                body.append(paragraph)
+                body = _empty_text(model.host.lang)
                 append_in_order(point, body)
-            _replace_body_text(body, text)
+            replace_body_text(body, text)
             properties = point.find(qn("dgm:prSet"))
             if properties is not None and text and properties.get("phldr") is not None:
                 del properties.attrib["phldr"]  # no longer a placeholder showing its prompt
             if not self._update_drawing(model, node.id, old, text):
-                self._drop_drawing(model)
+                self._inexact_drawing(model)
         return self
 
     def add_node(self, text: str = "", *, parent: "DiagramNode | str | None" = None,
                  index: int | None = None) -> "DiagramNode":
         """A new node under ``parent`` (default: the top level) at ``index`` among its
-        siblings (default: last), formatted like a sibling.  The cached drawing is dropped;
-        PowerPoint lays the diagram out again with the node in it."""
+        siblings (default: last), formatted like a sibling.  The layout moves, so the cached
+        drawing goes as ``on_inexact_drawing`` says (by default it is dropped, and an
+        application that lays diagrams out again does so with the node in it)."""
         with self._edit() as model:
             document = model.document
             if document is None:
@@ -283,9 +293,10 @@ class Diagram:
                 raise IndexError(f"index {index} out of range 0..{len(siblings)}")
             template = siblings[min(position, len(siblings) - 1)][1] if siblings else None
             node_id, par_id, sib_id, cxn_id = (new_model_id() for _ in range(4))
-            node = _node_point(node_id, template, text)
-            parent_transition = _transition(par_id, "parTrans", cxn_id)
-            sibling_transition = _transition(sib_id, "sibTrans", cxn_id)
+            lang = model.host.lang
+            node = _node_point(node_id, template, text, lang)
+            parent_transition = _transition(par_id, "parTrans", cxn_id, lang)
+            sibling_transition = _transition(sib_id, "sibTrans", cxn_id, lang)
             anchor = next((p for p in model.points_list.findall(qn("dgm:pt"))
                            if p.get("type") == "pres"), None)
             for point in (node, parent_transition, sibling_transition):
@@ -308,12 +319,12 @@ class Diagram:
                 first_presentation.addprevious(connection)
             else:
                 model.cxn_list.append(connection)
-            self._drop_drawing(model)
+            self._inexact_drawing(model)
         return DiagramNode(self, node_id)
 
     def remove_node(self, which: "int | str | DiagramNode") -> "Diagram":
         """Delete a node and everything under it, with their presentation points.  The
-        cached drawing is dropped; PowerPoint lays the diagram out again without them."""
+        layout moves, so the cached drawing goes as ``on_inexact_drawing`` says."""
         node = which if isinstance(which, DiagramNode) else self.node(which)
         if len(self.nodes) <= 1 + len(node.descendants):
             raise ValueError(f"{self.address}: a diagram keeps at least one node")
@@ -348,33 +359,28 @@ class Diagram:
                     if cxn.get("type") in _PARENT_OF and cxn.get("srcId") == parent_id \
                             and _ord(cxn) > gone_order:
                         cxn.set("srcOrd", str(_ord(cxn) - 1))
-            self._drop_drawing(model)
+            self._inexact_drawing(model)
         return self
 
     # -- internals ---------------------------------------------------------------------------
 
+    @contextmanager
     def _edit(self):
-        from contextlib import contextmanager
-
-        @contextmanager
-        def editing():
-            shape = self._resolve()
-            document = shape._slide.document
-            part = self.part
-            with document.batch():
-                document.history.checkpoint()
-                model = _Model(document.package.tree(part))
-                model.shape = shape  # type: ignore[attr-defined]
-                yield model
-                document.package.mark_dirty(part)
-
-        return editing()
+        host = self._resolve()
+        part = self.part
+        with host.edit():
+            model = _Model(host.package.tree(part), host)
+            yield model
+            host.package.mark_dirty(part)
+        if self.notify is not None:
+            for message in model.notes:
+                self.notify(message)
 
     def _drawing_root(self, model: _Model) -> tuple[str | None, Element | None]:
-        shape = model.shape  # type: ignore[attr-defined]
+        host = model.host
         rel_id = model.drawing_rel_id()
-        package = shape._slide.document.package
-        rel = None if rel_id is None else package.relationships(shape._slide.part_path).get(rel_id)
+        package = host.package
+        rel = None if rel_id is None else package.relationships(host.part).get(rel_id)
         if rel is None or rel.target_part is None or not package.has_part(rel.target_part):
             return None, None
         return rel.target_part, package.tree(rel.target_part)
@@ -410,15 +416,15 @@ class Diagram:
                     start = len(expected)
                     count = len(lines)
                 expected.extend(lines)
-            if start is None or [_paragraph_text(p) for p in paragraphs] != expected:
+            if start is None or [paragraph_text(p) for p in paragraphs] != expected:
                 return False
             edits.append((paragraphs[start:start + count]))
-        package = model.shape._slide.document.package  # type: ignore[attr-defined]
+        package = model.host.package
         for paragraphs in edits:
             holder = make("dsp:txBody")
             for paragraph in paragraphs:
                 holder.append(copy.deepcopy(paragraph))
-            _replace_body_text(holder, text)
+            replace_body_text(holder, text)
             anchor = paragraphs[0]
             for paragraph in list(holder):
                 if local_name(paragraph) == "p":
@@ -429,16 +435,34 @@ class Diagram:
         package.mark_dirty(part)
         return True
 
+    def _inexact_drawing(self, model: _Model) -> None:
+        """The cached drawing cannot be kept exactly in step: act on ``on_inexact_drawing``."""
+        rel_id = model.drawing_rel_id()
+        if rel_id is None:
+            return
+        host = model.host
+        if self.on_inexact_drawing == "refuse":
+            raise DiagramDrawingError(f"{host.address}: the edit cannot keep the cached "
+                                      f"drawing exactly in step, and the drawing is kept")
+        if self.on_inexact_drawing == "keep":
+            model.notes.append(f"{host.address}: the cached drawing was kept, and no longer "
+                               f"shows what the data model says")
+            return
+        self._drop_drawing(model)
+        model.notes.append(f"{host.address}: the cached drawing was dropped; "
+                           f"{host.application} lays the diagram out again")
+
     def _drop_drawing(self, model: _Model) -> None:
-        """Forget the cached drawing: PowerPoint lays the diagram out again (measured)."""
-        shape = model.shape  # type: ignore[attr-defined]
+        """Forget the cached drawing, which an application that lays diagrams out again
+        regenerates (measured)."""
+        host = model.host
         rel_id = model.drawing_rel_id()
         if rel_id is None:
             return
         model.forget_drawing()
-        package = shape._slide.document.package
-        if rel_id in package.relationships(shape._slide.part_path):
-            package.release(shape._slide.part_path, [rel_id])
+        package = host.package
+        if rel_id in package.relationships(host.part):
+            package.release(host.part, [rel_id])
 
 
 class DiagramNode:
@@ -513,7 +537,19 @@ def diagram_model(root: Element, layout: str | None = None) -> dict:
     return model
 
 
-def _node_point(model_id: str, template: Element | None, text: str) -> Element:
+def _empty_text(lang: str | None) -> Element:
+    """A ``dgm:t`` holding one empty paragraph."""
+    body = make("dgm:t")
+    body.append(make("a:bodyPr"))
+    body.append(make("a:lstStyle"))
+    paragraph = make("a:p")
+    paragraph.append(make("a:endParaRPr") if lang is None else make("a:endParaRPr", lang=lang))
+    body.append(paragraph)
+    return body
+
+
+def _node_point(model_id: str, template: Element | None, text: str,
+                lang: str | None = None) -> Element:
     point = make("dgm:pt", modelId=model_id)
     if template is not None and template.get("type") == "asst":
         point.set("type", "asst")
@@ -525,29 +561,19 @@ def _node_point(model_id: str, template: Element | None, text: str) -> Element:
         for paragraph in body.findall(qn("a:p"))[1:]:
             remove(paragraph)
     if body is None:
-        body = make("dgm:t")
-        body.append(make("a:bodyPr"))
-        body.append(make("a:lstStyle"))
-        paragraph = make("a:p")
-        paragraph.append(make("a:endParaRPr", lang="en-US"))
-        body.append(paragraph)
+        body = _empty_text(lang)
     point.append(body)
-    _replace_body_text(body, text)
+    replace_body_text(body, text)
     return point
 
 
-def _transition(model_id: str, kind: str, cxn_id: str) -> Element:
+def _transition(model_id: str, kind: str, cxn_id: str, lang: str | None = None) -> Element:
     point = make("dgm:pt", modelId=model_id, type=kind, cxnId=cxn_id)
     point.append(make("dgm:prSet"))
     point.append(make("dgm:spPr"))
-    body = make("dgm:t")
-    body.append(make("a:bodyPr"))
-    body.append(make("a:lstStyle"))
-    paragraph = make("a:p")
-    paragraph.append(make("a:endParaRPr", lang="en-US"))
-    body.append(paragraph)
-    point.append(body)
+    point.append(_empty_text(lang))
     return point
 
 
-__all__ = ["Diagram", "DiagramNode", "diagram_model"]
+__all__ = ["DRAWING_POLICIES", "Diagram", "DiagramDrawingError", "DiagramNode", "diagram_model",
+           "new_model_id"]

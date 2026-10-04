@@ -3,19 +3,19 @@
 A chart's numbers are stored twice, and an edit has to change both:
 
 * the **caches** in the chart part (``c:strCache``, ``c:numCache``: ``ptCount`` and one
-  ``c:pt idx=`` per point), which is what PowerPoint -- and pptx2svg -- draws from; and
+  ``c:pt idx=`` per point), which is what every application and renderer draws from; and
 * the **embedded workbook** the chart's formulas (``c:f``, ``Sheet1!$B$2:$B$4``) point
-  into, which is what PowerPoint's "Edit Data" opens.  It is a package inside the package,
-  edited cell by cell through :mod:`.workbook`.
+  into, which is what the application's "Edit Data" opens.  It is a package inside the
+  package, edited cell by cell through :mod:`.workbook`.
 
-Update only the cache and the chart looks right until someone clicks Edit Data: PowerPoint
-then shows, and writes back, the old numbers.  So every edit here writes the cache, the
+Update only the cache and the chart looks right until someone clicks Edit Data: the
+application then shows, and writes back, the old numbers.  So every edit here writes the cache, the
 cells, and -- when series or categories are added or removed -- the formulas and the
 workbook's table, in one undo step.  A chart whose workbook is linked from outside the
 package, embedded as something other than a workbook, or missing, is edited in the cache
 only, with a :class:`ChartDataWarning`.
 
-**The workbook layout this understands** is the one PowerPoint writes and every chart
+**The workbook layout this understands** is the one Office writes and every chart
 generator copies: categories in one column, each series' values in the column beside it
 with its name in the row above (or the same thing transposed, series in rows).  Value and
 label edits only need each formula to be one rectangle.  Adding or removing a category or a
@@ -23,9 +23,9 @@ series also needs the lines to line up -- every series over the same rows -- bec
 what lets a point be inserted by moving cells; a workbook that is laid out otherwise is
 refused with :class:`ChartDataError` rather than guessed at.
 
-Charts are DrawingML, not PresentationML: a Word document embeds the same part.  This module
-only reaches the slide through the :class:`~pptx_agent.edit.document.Shape` that holds the
-chart.
+Charts are DrawingML, and every Office document embeds the same chart part.  This module
+reaches the document only through the :class:`~.host.GraphicHost` the format layer resolves:
+the frame that points at the chart, the part that relates it, and the format's undo step.
 """
 
 from __future__ import annotations
@@ -34,26 +34,14 @@ import copy
 import math
 import warnings
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, Callable, Iterator, Sequence
+from typing import Any, Callable, Iterator, Sequence
 
-from ..oxml.xml import (
-    Element,
-    append_in_order,
-    find,
-    local_name,
-    make,
-    qn,
-    register_child_order,
-    remove,
-    subelement,
-)
-from .text import _paragraph_text, _replace_body_text
+from ..xml import Element, append_in_order, find, local_name, make, qn, remove, subelement
+from .dmltext import paragraph_text, replace_body_text
+from .host import GraphicHost, chart_part
+from .namespaces import C_NS  # noqa: F401  (re-exported)
 from .workbook import Area, Cell, SheetRange, Workbook, Worksheet, number_text, parse_formula
 
-if TYPE_CHECKING:  # pragma: no cover
-    from .document import Shape
-
-C_NS = "http://schemas.openxmlformats.org/drawingml/2006/chart"
 REL_PACKAGE = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/package"
 
 #: The plot types a plot area may hold, as ``c:<type>Chart`` elements.
@@ -65,41 +53,6 @@ PLOT_TAGS: tuple[str, ...] = (
 )
 PLOT_TYPES: tuple[str, ...] = tuple(tag[2:-5] for tag in PLOT_TAGS)
 AXIS_TAGS: tuple[str, ...] = ("c:catAx", "c:valAx", "c:dateAx", "c:serAx")
-
-_TEXT_ORDER = ("a:bodyPr", "a:lstStyle", "a:p")
-_AXIS_HEAD = ("c:axId", "c:scaling", "c:delete", "c:axPos", "c:majorGridlines",
-              "c:minorGridlines", "c:title", "c:numFmt", "c:majorTickMark", "c:minorTickMark",
-              "c:tickLblPos", "c:spPr", "c:txPr", "c:crossAx", ("c:crosses", "c:crossesAt"))
-register_child_order({
-    "c:chart": ("c:title", "c:autoTitleDeleted", "c:pivotFmts", "c:view3D", "c:floor",
-                "c:sideWall", "c:backWall", "c:plotArea", "c:legend", "c:plotVisOnly",
-                "c:dispBlanksAs", "c:showDLblsOverMax", "c:extLst"),
-    "c:title": ("c:tx", "c:layout", "c:overlay", "c:spPr", "c:txPr", "c:extLst"),
-    "c:legend": ("c:legendPos", "c:legendEntry", "c:layout", "c:overlay", "c:spPr",
-                 "c:txPr", "c:extLst"),
-    "c:catAx": _AXIS_HEAD + ("c:auto", "c:lblAlgn", "c:lblOffset", "c:tickLblSkip",
-                             "c:tickMarkSkip", "c:noMultiLvlLbl", "c:extLst"),
-    "c:valAx": _AXIS_HEAD + ("c:crossBetween", "c:majorUnit", "c:minorUnit", "c:dispUnits",
-                             "c:extLst"),
-    "c:dateAx": _AXIS_HEAD + ("c:auto", "c:lblOffset", "c:baseTimeUnit", "c:majorUnit",
-                              "c:majorTimeUnit", "c:minorUnit", "c:minorTimeUnit", "c:extLst"),
-    "c:serAx": _AXIS_HEAD + ("c:tickLblSkip", "c:tickMarkSkip", "c:extLst"),
-    # Every chart type's series in one sequence: each type's own order is a subsequence.
-    "c:ser": ("c:idx", "c:order", "c:tx", "c:spPr", "c:invertIfNegative", "c:pictureOptions",
-              "c:marker", "c:explosion", "c:dPt", "c:dLbls", "c:trendline", "c:errBars",
-              "c:cat", "c:xVal", "c:val", "c:yVal", "c:bubbleSize", "c:bubble3D", "c:shape",
-              "c:smooth", "c:extLst"),
-    "c:strRef": ("c:f", "c:strCache", "c:extLst"),
-    "c:numRef": ("c:f", "c:numCache", "c:extLst"),
-    "c:multiLvlStrRef": ("c:f", "c:multiLvlStrCache", "c:extLst"),
-    "c:strCache": ("c:ptCount", "c:pt", "c:extLst"),
-    "c:strLit": ("c:ptCount", "c:pt", "c:extLst"),
-    "c:numCache": ("c:formatCode", "c:ptCount", "c:pt", "c:extLst"),
-    "c:numLit": ("c:formatCode", "c:ptCount", "c:pt", "c:extLst"),
-    "c:multiLvlStrCache": ("c:ptCount", "c:lvl", "c:extLst"),
-    "c:lvl": ("c:pt", "c:extLst"),
-    "c:rich": _TEXT_ORDER,
-})
 
 #: The reference kinds a data source (``c:tx``, ``c:cat``, ``c:val``...) may hold.
 _REF_TAGS = ("c:strRef", "c:numRef", "c:multiLvlStrRef", "c:strLit", "c:numLit", "c:v")
@@ -357,10 +310,11 @@ class _Series:
 class _Editor:
     """One edit's view of the chart part and (opened lazily) its workbook."""
 
-    def __init__(self, package, part: str) -> None:
-        self.package = package
+    def __init__(self, host: GraphicHost, part: str) -> None:
+        self.host = host
+        self.package = host.package
         self.part = part
-        self.root = package.tree(part)
+        self.root = host.package.tree(part)
         self.changed = False
         self._workbook: Workbook | None = None
         self._workbook_part: str | None = None
@@ -373,7 +327,7 @@ class _Editor:
     def workbook(self) -> Workbook | None:
         if not self._opened:
             self._opened = True
-            part, reason = workbook_part(self.package, self.part)
+            part, reason = workbook_part(self.package, self.part, document=self.host.document)
             if part is None:
                 self.cache_only = reason
             else:
@@ -430,12 +384,15 @@ class _Editor:
     def warn(self) -> None:
         if self.cache_only is not None:
             warnings.warn(f"{self.part}: only the chart's cached data was changed, because "
-                          f"{self.cache_only}; PowerPoint's Edit Data will show the old values",
+                          f"{self.cache_only}; {self.host.application}'s Edit Data will show "
+                          f"the old values",
                           ChartDataWarning, stacklevel=4)
 
 
-def workbook_part(package, chart_part: str) -> tuple[str | None, str]:
-    """The embedded workbook behind a chart, or ``None`` and why there is none."""
+def workbook_part(package, chart_part: str, *, document: str = "document"
+                  ) -> tuple[str | None, str]:
+    """The embedded workbook behind a chart, or ``None`` and why there is none.  ``document``
+    is what the reason calls the package ("linked from outside the document")."""
     root = package.tree(chart_part)
     node = None if root is None else root.find(qn("c:externalData"))
     if node is None:
@@ -444,7 +401,7 @@ def workbook_part(package, chart_part: str) -> tuple[str | None, str]:
     if rel is None:
         return None, "its workbook relationship is missing"
     if rel.is_external:
-        return None, f"its workbook is linked from outside the deck ({rel.target})"
+        return None, f"its workbook is linked from outside the {document} ({rel.target})"
     if rel.type != REL_PACKAGE or rel.target_part is None or not package.has_part(rel.target_part):
         return None, "its data is embedded as an OLE object, not as a workbook"
     return rel.target_part, ""
@@ -458,7 +415,7 @@ def workbook_part(package, chart_part: str) -> tuple[str | None, str]:
 class _Block:
     """The chart's data as lines of cells: each source a row or column, over the same span.
 
-    ``down`` means points run down a column (series in columns, PowerPoint's default).
+    ``down`` means points run down a column (series in columns, Office's default).
     """
 
     def __init__(self, sheet: Worksheet, down: bool, start: int, count: int) -> None:
@@ -499,40 +456,41 @@ def _line_of(sheet_range: SheetRange, down: bool) -> tuple[int, int, int]:
 
 
 class Chart:
-    """The chart in a graphic frame.  Re-resolved from the document on every call, like
-    :class:`~pptx_agent.edit.table.Table`, so it survives undo.
+    """The chart a :class:`~.host.GraphicHost` holds.  ``resolve`` is called afresh on every
+    call, so a ``Chart`` survives undo.
 
     Series are numbered in document order (``chart.series[0]``); categories by position.
     Values are numbers or ``None`` for a blank; category labels are text (numbers, for a
     chart whose categories are numeric or dates).
     """
 
-    def __init__(self, resolve: Callable[[], "Shape"]) -> None:
+    def __init__(self, resolve: Callable[[], GraphicHost]) -> None:
         self._resolve = resolve
 
     # -- where it lives ----------------------------------------------------------------------
 
     @property
     def address(self) -> str:
-        return self._resolve().id
+        return self._resolve().address
 
     @property
     def part(self) -> str:
-        """The chart part, ``ppt/charts/chart1.xml``."""
-        shape = self._resolve()
-        part = chart_part_of(shape)
+        """The chart part, e.g. ``.../charts/chart1.xml``."""
+        host = self._resolve()
+        part = chart_part(host)
         if part is None:
-            raise ValueError(f"{shape.id}: the chart's part is missing")
+            raise ValueError(f"{host.address}: the chart's part is missing")
         return part
 
     @property
     def workbook_part(self) -> str | None:
-        """The embedded workbook (``ppt/embeddings/...xlsx``), or ``None`` when there is none
+        """The embedded workbook (``.../embeddings/...xlsx``), or ``None`` when there is none
         to keep in step -- then edits change the cache only, with a warning."""
-        return workbook_part(self._package(), self.part)[0]
+        host = self._resolve()
+        return workbook_part(host.package, self.part, document=host.document)[0]
 
     def _package(self):
-        return self._resolve()._slide.document.package
+        return self._resolve().package
 
     def _root(self) -> Element:
         root = self._package().tree(self.part)
@@ -623,7 +581,7 @@ class Chart:
 
     @property
     def data(self) -> dict[str, Any]:
-        """Everything above in one dictionary -- what the full-state SVG carries."""
+        """Everything above in one dictionary -- what :mod:`.model` reads."""
         return chart_model(self._root())
 
     # -- editing: values and labels ----------------------------------------------------------
@@ -811,11 +769,9 @@ class Chart:
 
     @contextmanager
     def _edit(self) -> Iterator[_Editor]:
-        shape = self._resolve()
-        document = shape._slide.document
-        editor = _Editor(document.package, self.part)
-        with document.batch():
-            document.history.checkpoint()
+        host = self._resolve()
+        editor = _Editor(host, self.part)
+        with host.edit():
             yield editor
             editor.finish()
         editor.warn()
@@ -1122,16 +1078,8 @@ class Series:
 
 
 # ------------------------------------------------------------------------------------------
-# Reading helpers (shared with the full-state SVG)
+# Reading helpers (shared with :mod:`.model`)
 # ------------------------------------------------------------------------------------------
-
-
-def chart_part_of(shape: "Shape") -> str | None:
-    node = shape._element.find(f"{qn('a:graphic')}/{qn('a:graphicData')}/{qn('c:chart')}")
-    if node is None:
-        return None
-    return shape._slide.document.package.related_part(shape._slide.part_path,
-                                                      node.get(qn("r:id")))
 
 
 def _series_of(root: Element) -> list[_Series]:
@@ -1203,7 +1151,7 @@ def _title_text(title: Element | None) -> str | None:
         return None
     rich = tx.find(qn("c:rich"))
     if rich is not None:
-        return "\n".join(_paragraph_text(p) for p in rich.findall(qn("a:p")))
+        return "\n".join(paragraph_text(p) for p in rich.findall(qn("a:p")))
     source = _Data(tx)
     points = source.points()
     return points[0] if points else None
@@ -1425,27 +1373,37 @@ def _write_title(editor: _Editor, owner: Element, text: str | None, *, vertical:
         remove(tx)
         tx = None
     if tx is None:
-        tx = make("c:tx")
-        rich = make("c:rich")
-        body = make("a:bodyPr")
-        if vertical:
-            body.set("rot", "-5400000")
-            body.set("vert", "horz")
-        rich.append(body)
-        rich.append(make("a:lstStyle"))
-        paragraph = make("a:p")
-        properties = make("a:pPr")
-        properties.append(make("a:defRPr"))
-        paragraph.append(properties)
-        run = make("a:r")
-        run.append(make("a:rPr", lang="en-US"))
-        run.append(make("a:t"))
-        paragraph.append(run)
-        rich.append(paragraph)
-        tx.append(rich)
+        host = editor.host
+        template = host.title_template
+        tx = template(vertical) if template is not None else default_title_text(
+            vertical, lang=host.lang)
         append_in_order(title, tx)
-    _replace_body_text(tx.find(qn("c:rich")), text)
+    replace_body_text(tx.find(qn("c:rich")), text)
 
 
-__all__ = ["Chart", "ChartDataError", "ChartDataWarning", "Series", "chart_model",
-           "chart_part_of", "workbook_part"]
+def default_title_text(vertical: bool, *, lang: str | None = None) -> Element:
+    """The ``c:tx`` of a new title: rich text, one empty run, rotated when ``vertical``."""
+    tx = make("c:tx")
+    rich = make("c:rich")
+    body = make("a:bodyPr")
+    if vertical:
+        body.set("rot", "-5400000")
+        body.set("vert", "horz")
+    rich.append(body)
+    rich.append(make("a:lstStyle"))
+    paragraph = make("a:p")
+    properties = make("a:pPr")
+    properties.append(make("a:defRPr"))
+    paragraph.append(properties)
+    run = make("a:r")
+    run.append(make("a:rPr") if lang is None else make("a:rPr", lang=lang))
+    run.append(make("a:t"))
+    paragraph.append(run)
+    rich.append(paragraph)
+    tx.append(rich)
+    return tx
+
+
+__all__ = ["AXIS_TAGS", "Chart", "ChartDataError", "ChartDataWarning", "PLOT_TAGS", "PLOT_TYPES",
+           "Series", "chart_model", "chart_part", "decode_number", "default_title_text",
+           "workbook_part"]

@@ -1,9 +1,9 @@
 """The workbook behind a chart: an embedded ``.xlsx`` edited cell by cell, with lxml only.
 
 A chart's numbers live twice: in the chart part's caches, which is what every application
-draws from, and in the embedded workbook, which is what PowerPoint's "Edit Data" opens.  An
-edit that updates one and not the other is invisible until someone clicks Edit Data and
-PowerPoint shows -- and then writes back -- the old numbers.  So every chart edit in
+draws from, and in the embedded workbook, which is what the application's "Edit Data" opens.
+An edit that updates one and not the other is invisible until someone clicks Edit Data and
+the application shows -- and then writes back -- the old numbers.  So every chart edit in
 :mod:`.chart` comes here as well.
 
 The workbook is a package inside the package.  It is opened with the format-neutral core
@@ -12,7 +12,7 @@ level down: sheets, styles, themes and anything else nobody touched are written 
 bytes that were read.  What is SpreadsheetML -- cell references, shared strings, tables -- is
 here, outside the core.
 
-What this module keeps in step, because Excel (which PowerPoint's Edit Data *is*) reports a
+What this module keeps in step, because Excel (which Office's Edit Data *is*) reports a
 repair otherwise:
 
 * cells in row and column order, rows with their ``spans`` hint and the sheet's
@@ -33,11 +33,9 @@ from dataclasses import dataclass, replace
 from typing import Iterator
 
 from lxml import etree
-from ooxml_edit.opc import OpcPackage, normalize_part_path
-from ooxml_edit.xml import Element, qn, register_namespaces, remove
-
-SML_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
-register_namespaces({"x": SML_NS})
+from ..opc import OpcPackage, normalize_part_path
+from ..xml import Element, qn, remove
+from .namespaces import SML_NS
 
 _REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/"
 REL_WORKSHEET = _REL + "worksheet"
