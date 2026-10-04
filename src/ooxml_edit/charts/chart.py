@@ -31,10 +31,13 @@ the frame that points at the chart, the part that relates it, and the format's u
 from __future__ import annotations
 
 import copy
+import hashlib
 import math
 import warnings
 from contextlib import contextmanager
 from typing import Any, Callable, Iterator, Sequence
+
+from lxml import etree
 
 from ..xml import Element, append_in_order, find, local_name, make, qn, remove, subelement
 from .dmltext import paragraph_text, replace_body_text
@@ -685,6 +688,7 @@ class Chart:
                 series[0].element.addprevious(element)
             element.tail = template.element.tail
             new = _Series(element)
+            _give_unique_id(editor, element)
             _renumber_order(series, new, position)
             editor.changed = True
             if block is not None:
@@ -1242,6 +1246,37 @@ def _shift_point_formats(ser: Element, index: int, delta: int) -> None:
             remove(holder)
         elif position >= index if delta > 0 else position > index:
             node.set("val", str(position + delta))
+
+
+#: The ``c:ext`` a series' ``c16:uniqueId`` is written in, and its namespace.
+SERIES_ID_EXT = "{C3380CC4-5D6E-409C-BE32-E72D297353CC}"
+C16_NS = "http://schemas.microsoft.com/office/drawing/2014/chart"
+
+
+def _give_unique_id(editor: _Editor, element: Element) -> str:
+    """Give a series this package adds a ``c16:uniqueId``, as Word and PowerPoint both do
+    when they save a chart one of whose series has none: in the series' own ``c:extLst``,
+    ``<c:ext uri="{C3380CC4-...}" xmlns:c16="...">``, its value ``{00000000-XXXX-XXXX-
+    XXXX-XXXXXXXXXXXX}`` -- the first group zero, as both write it for a series added
+    beside others.  Both choose the rest at random; here it is the first 24 hex digits of a
+    SHA-256 of the chart part's name, the series' ``c:idx`` and every id the chart already
+    holds, so the same edit writes the same bytes.  An id the chart already holds moves the
+    hash on.  The chart's other series are left as they are, with or without an id."""
+    taken = {node.get("val") for node in editor.root.iter(f"{{{C16_NS}}}uniqueId")}
+    idx = element.find(qn("c:idx")).get("val")
+    seed = "\n".join([editor.part, idx, *sorted(v for v in taken if v)])
+    step = 0
+    while True:
+        digest = hashlib.sha256(f"{seed}\n{step}".encode()).hexdigest().upper()
+        value = f"{{00000000-{digest[0:4]}-{digest[4:8]}-{digest[8:12]}-{digest[12:24]}}}"
+        if value not in taken:
+            break
+        step += 1
+    extensions = append_in_order(element, make("c:extLst"))
+    ext = etree.SubElement(extensions, qn("c:ext"), nsmap={"c16": C16_NS})
+    ext.set("uri", SERIES_ID_EXT)
+    etree.SubElement(ext, f"{{{C16_NS}}}uniqueId").set("val", value)
+    return value
 
 
 def _new_series(template: _Series, series: list[_Series], name, values: list) -> Element:
