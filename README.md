@@ -5,6 +5,10 @@ back losslessly, parts added, copied, removed and reaped, schema-ordered inserti
 redo with batches, and durable ids stamped into an extension list. What a `.pptx` editor,
 a `.docx` editor and an `.xlsx` editor all need, and nothing any one of them needs alone.
 
+Beside that core, an optional subpackage, [`ooxml_edit.charts`](#ooxml_editcharts-optional),
+edits what a deck and a Word document embed alike: charts with their embedded workbooks,
+and SmartArt diagrams.
+
 Depends on **lxml**, and only on lxml. Python 3.10+.
 
 ## Why it exists
@@ -92,10 +96,54 @@ package.save("out.zip")
   path, content type or relationship type of one format. `tests/test_neutrality.py` checks
   the source for them mechanically, and checks that importing the package registers only the
   packaging namespaces every format shares.
-- **DrawingML and charts.** A deck and a Word document carry the same chart parts and
-  the same DrawingML, but editing them is a vocabulary, not a package operation; they stay
-  with the editors until two of them need the same code.
+- **DrawingML and charts, in the core.** A deck and a Word document carry the same chart
+  parts and the same DrawingML, but editing them is a vocabulary, not a package operation.
+  They live in the optional `ooxml_edit.charts` subpackage, which the core never imports.
 - **Rendering.** That is the renderers', on ooxml-common.
+
+## `ooxml_edit.charts` (optional)
+
+A chart part, the workbook behind it and a SmartArt diagram's data model are the same
+markup wherever they are embedded, so the editing is here once, for every format. It is
+optional and imported explicitly -- `import ooxml_edit.charts` -- and importing the core
+registers none of its vocabulary. It still needs nothing but lxml.
+
+| Module | What it is |
+| --- | --- |
+| `charts.host` | `GraphicHost`: where a chart or diagram lives, as the format layer sees it -- the package, the part whose relationships name it, the frame `c:chart` or `dgm:relIds` sits under (at any depth), the format's undo step, an address, and the words for messages (the application whose Edit Data opens the workbook, what the document is called), with an optional `lang` and title template; `chart_part(host)`, `diagram_parts(host)` |
+| `charts.chart` | `Chart(resolve)` and `Series`: chart types, categories, series names and values, titles, axis titles and the legend, read and edited; categories and series added and removed. Every edit writes the caches (`ptCount`, `pt idx`) and the workbook cells together, moves the cells and rewrites the formulas when the shape of the data changes, keeps per-point formatting on its point and a table over the data in step -- one undo step each. A chart whose workbook is linked, an OLE object or missing is edited in its cache only, with a `ChartDataWarning`; a workbook laid out so that insertion cannot follow is refused with `ChartDataError` before anything changes |
+| `charts.workbook` | The embedded `.xlsx`, edited cell by cell inside the package: numbers, shared or inline strings, cells in order, `dimension` and `spans`, tables that grow, shrink and are named after their headers, a formula a value replaces removed with the calculation chain |
+| `charts.diagram` | `Diagram(resolve, on_inexact_drawing="drop", notify=None)` and `DiagramNode`: node text, nodes added and removed. The cached drawing is patched exactly where it can be -- the shape that shows a node is found through its `presOf` connection -- and otherwise dropped (PowerPoint lays the diagram out again from its data, measured), kept stale, or the edit refused, as the host chooses |
+| `charts.dmltext` | DrawingML text rewritten in place, keeping mixed formatting character by character -- what a chart title, a diagram node and a text box share |
+| `charts.model` | A chart's and a diagram's content as JSON-ready data: `chart_model`, `diagram_model`, `canonical_chart` and `canonical_diagram` to validate untrusted input, and `apply_chart_model` and `apply_diagram_model` to bring the document there through the edits; refusals are `ChartModelError` |
+| `charts.namespaces` | The `a:`, `c:`, `dgm:`, `dsp:` and `x:` namespaces and the child orders of every element the edits insert into, DrawingML runs and paragraphs included |
+
+A format layer builds a `GraphicHost` each time a chart is resolved, so a `Chart` survives
+undo:
+
+```python
+from ooxml_edit.charts import Chart, GraphicHost
+from ooxml_edit.history import History
+from ooxml_edit.opc import OpcPackage
+
+package = OpcPackage.open("in.zip")
+history = History(package)
+
+def host() -> GraphicHost:
+    frame = find_the_frame(package.tree("doc/main.xml"))   # the format's own lookup
+    return GraphicHost(package=package, part="doc/main.xml", frame=frame,
+                       edit=history.batch, address="chart 1", application="the editor")
+
+chart = Chart(host)
+chart.series[0].set_value(2, 4285)            # cache and workbook cell
+chart.add_category("Q4", [4400, 530])         # cells, formulas and table follow
+chart.set_title("Revenue")
+history.undo()                                # the original bytes, workbook included
+```
+
+The registry of child orders is last-wins: the subpackage owns the sequences of the DrawingML
+text, chart and diagram elements, so a format layer should not register its own copies of
+them.
 
 ## Install
 
@@ -112,8 +160,10 @@ pip install -e '.[dev]'     # + pytest
 python -m pytest -q
 ```
 
-The tests build the small packages they need (`tests/synthetic.py`); no Office document is
-committed here.
+The tests build the small packages they need (`tests/synthetic.py`, and
+`tests/charts_synthetic.py` for charts of every kind, their workbooks and SmartArt); no
+Office document is committed here. Chart edits are checked against the embedded workbook
+by an independent reader, `tests/xlsx.py`, rather than by the code that wrote it.
 
 ## Licence
 
