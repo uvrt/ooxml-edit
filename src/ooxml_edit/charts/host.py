@@ -52,11 +52,14 @@ class GraphicHost:
     application: str = "the application"
     #: What the format calls the whole document, for messages ("linked from outside the ...").
     document: str = "document"
-    #: ``lang`` for the run and paragraph properties of text this package creates (a new
-    #: title, a new node); ``None`` writes none.
+    #: ``lang`` for the run and paragraph properties of text this package creates -- the
+    #: end-of-paragraph properties of a new diagram node, the (empty) run of a new title;
+    #: ``None`` writes none.
     lang: str | None = None
     #: Builds the ``c:tx`` of a new chart or axis title, given whether the title is vertical;
-    #: ``None`` uses :func:`~.chart.default_title_text`.  The text is written into it after.
+    #: ``None`` uses :func:`~.chart.default_title_text`.  The text is then written into it
+    #: by :func:`~.dmltext.replace_body_text`, so a run with no text to inherit from takes
+    #: its formatting from the paragraph's ``a:endParaRPr``, if the template gives one.
     title_template: Callable[[bool], Element] | None = None
 
 
