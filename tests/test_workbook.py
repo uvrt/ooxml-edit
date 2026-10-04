@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from conftest import FIXTURE_DIR
-from pptx_agent import Document
-from pptx_agent.edit.workbook import (
+import charts_synthetic as cs
+from ooxml_edit.charts.workbook import (
     Area,
     Cell,
     Workbook,
@@ -15,6 +14,18 @@ from pptx_agent.edit.workbook import (
     number_text,
     parse_formula,
 )
+from ooxml_edit.opc import OpcPackage
+from xlsx import Book
+
+
+def _workbook(**options) -> Workbook:
+    """A 4 x 4 block: categories down column A, three series beside them, names on top."""
+    cells = {(1, 2): "One", (1, 3): "Two", (1, 4): "Three"}
+    for row in range(2, 5):
+        cells[(row, 1)] = f"Q{row - 1}"
+        for col in range(2, 5):
+            cells[(row, col)] = row * col
+    return Workbook(OpcPackage.open(cs.Book(cells, **options).to_bytes()))
 
 
 def test_columns_and_cells():
@@ -54,16 +65,13 @@ def test_lenient_table_ref():
         Area.parse("A1:D4'")
 
 
-def test_cells_stay_in_order_and_the_dimension_follows(financial_report):
-    document = Document.open(str(financial_report))
-    book = Workbook(document.package.open_embedded(
-        "ppt/embeddings/Microsoft_Excel_Worksheet2.xlsx"))
+@pytest.mark.parametrize("shared", [True, False], ids=["shared", "inline"])
+def test_cells_stay_in_order_and_the_dimension_follows(shared):
+    book = _workbook(shared=shared, table=(1, 1, 4, 4))
     sheet = book.sheet("Sheet1")
     sheet.set_value(Cell(7, 6), 5)        # below and right of everything
     sheet.set_value(Cell(1, 5), "Header")  # into an existing row, at its end
     sheet.set_value(Cell(6, 1), "Lone")    # a new row between others
-    from xlsx import Book
-
     reread = Book(book.to_bytes()).sheet("Sheet1")  # asserts row and cell order itself
     assert reread.value("F7") == 5.0 and reread.value("E1") == "Header"
     assert reread.dimension == "A1:F7"
@@ -72,7 +80,37 @@ def test_cells_stay_in_order_and_the_dimension_follows(financial_report):
 
 
 def test_a_missing_sheet_is_none():
-    document = Document.open(str(FIXTURE_DIR / "authoring-integration.pptx"))
-    book = Workbook(document.package.open_embedded(
-        "ppt/embeddings/Microsoft_Excel_Worksheet1.xlsx"))
+    book = _workbook()
     assert book.sheet_names == ["Sheet1"] and book.sheet("Nope") is None
+
+
+def test_strings_are_shared_or_inline_as_the_workbook_has_them():
+    shared = _workbook()
+    shared.sheet("Sheet1").set_value(Cell(5, 1), "Q1")  # already a shared string
+    book = Book(shared.to_bytes())
+    assert book.strings.count("Q1") == 1 and book.sheet("Sheet1").value("A5") == "Q1"
+    assert int(book.string_counts[0]) == book.count_shared()
+    inline = _workbook(shared=False)
+    inline.sheet("Sheet1").set_value(Cell(5, 1), "Q4")
+    book = Book(inline.to_bytes())
+    assert book.strings == [] and book.sheet("Sheet1").value("A5") == "Q4"
+
+
+def test_a_value_replacing_a_formula_takes_the_calculation_chain_with_it():
+    book = _workbook(formulas={(3, 2): "B2*2"})
+    assert "xl/calcChain.xml" in Book(book.to_bytes()).archive.namelist()
+    book.sheet("Sheet1").set_value(Cell(3, 2), 7)
+    reread = Book(book.to_bytes())
+    assert "xl/calcChain.xml" not in reread.archive.namelist()
+    assert reread.sheet("Sheet1").value("B3") == 7
+
+
+def test_a_table_moves_and_renames_with_its_cells():
+    book = _workbook(table=(1, 1, 4, 4))
+    sheet = book.sheet("Sheet1")
+    sheet.set_value(Cell(1, 3), "Renamed")
+    sheet.sync_tables()
+    reread = Book(book.to_bytes()).sheet("Sheet1")
+    X = "{%s}" % cs.X
+    names = [c.get("name") for c in reread.tables[0].iter(X + "tableColumn")]
+    assert names[1:] == ["One", "Renamed", "Three"]

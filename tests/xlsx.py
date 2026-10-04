@@ -1,6 +1,6 @@
 """An independent look at a chart's embedded workbook, for checking what the library wrote.
 
-Deliberately not :mod:`pptx_agent.edit.workbook`: a check that reads the workbook with the
+Deliberately not :mod:`ooxml_edit.charts.workbook`: a check that reads the workbook with the
 code that wrote it proves only that the code agrees with itself.  This is the zipfile, lxml
 and the format, nothing else.
 """
