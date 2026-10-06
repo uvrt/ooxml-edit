@@ -753,3 +753,89 @@ def test_a_series_added_by_a_model_gets_an_id_and_undo_takes_it_away():
     assert cs.parts(document.to_bytes()) == cs.parts(DATA)
     document.redo_all()
     assert document.to_bytes() == edited
+
+
+# ------------------------------------------------------------------------------------------
+# workbook_values: what Edit Data shows, read back
+# ------------------------------------------------------------------------------------------
+
+
+def _agrees(chart) -> bool:
+    book = chart.workbook_values()
+    categories = book["categories"]
+    return (categories is None or categories["values"] == chart.categories) and \
+        [s["values"]["values"] for s in book["series"]] == [s.values for s in chart.series] and \
+        [s["name"]["value"] for s in book["series"]] == [s.name for s in chart.series]
+
+
+@pytest.mark.parametrize("name", CHARTS)
+def test_the_workbook_values_agree_with_the_cache(name):
+    document = opened()
+    chart = document.chart(name)
+    book = chart.workbook_values()
+    assert book["workbook"] == chart.workbook_part and "missing" not in book
+    assert book["sheet"] == "Sheet1"
+    assert all(s["values"]["ref"].startswith("Sheet1!") for s in book["series"])
+    assert _agrees(chart)
+
+
+def test_the_workbook_values_name_their_formulas():
+    book = opened().chart("bar").workbook_values()
+    assert book["categories"] == {"ref": "Sheet1!$A$2:$A$5", "values": ["Q1", "Q2", "Q3", "Q4"]}
+    assert book["series"][0] == {"name": {"ref": "Sheet1!$B$1", "value": "North"},
+                                 "values": {"ref": "Sheet1!$B$2:$B$5", "values": [10, 12.5, 9, 14]}}
+
+
+def test_reading_the_workbook_changes_nothing_and_follows_every_edit():
+    document = opened()
+    chart = document.chart("bar")
+    before = document.to_bytes()
+    chart.workbook_values()
+    assert document.to_bytes() == before
+    chart.series[0].set_value(1, 999)
+    chart.add_category("Q5", [1, 2])
+    chart.series[1].name = "Southeast"
+    book = chart.workbook_values()
+    assert book["categories"]["ref"] == "Sheet1!$A$2:$A$6"
+    assert book["series"][0]["values"]["values"] == [10, 999, 9, 14, 1]
+    assert book["series"][1]["name"]["value"] == "Southeast"
+    assert _agrees(chart)
+    document.undo_all()
+    assert chart.workbook_values()["series"][1]["name"]["value"] == "South"
+
+
+def test_scatter_and_bubble_values_are_read_through_their_x_and_y():
+    for name in ("scatter", "bubble"):
+        assert _agrees(opened().chart(name))
+
+
+@pytest.mark.parametrize("name", list(REASONS))
+def test_without_a_workbook_the_values_say_why(name):
+    book = opened().chart(name).workbook_values()
+    assert book == {"workbook": None, "sheet": None, "categories": None, "series": [],
+                    "missing": REASONS[name]}
+
+
+def test_what_cannot_be_read_is_none_not_a_guess():
+    document = opened()
+    chart = document.chart("bar")
+    root = document.package.tree(chart.part)
+    formulas = list(root.iter(f"{C}f"))
+    formulas[0].text = "Sheet1!$B$1"                       # still one range: kept
+    by_text = {f.text: f for f in formulas}
+    by_text["Sheet1!$B$2:$B$5"].text = "Nowhere!$B$2:$B$5"  # a sheet the workbook lacks
+    by_text["Sheet1!$C$2:$C$5"].text = "(Sheet1!$C$2,Sheet1!$C$4)"  # not one range
+    book = chart.workbook_values()
+    assert book["series"][0]["values"] == {"ref": "Nowhere!$B$2:$B$5", "values": None}
+    assert book["series"][1]["values"] == {"ref": "(Sheet1!$C$2,Sheet1!$C$4)", "values": None}
+    assert book["sheet"] == "Nowhere"
+
+
+def test_a_rectangle_reads_as_rows():
+    document = opened()
+    chart = document.chart("bar")
+    root = document.package.tree(chart.part)
+    category = next(f for f in root.iter(f"{C}f") if f.text == "Sheet1!$A$2:$A$5")
+    category.text = "Sheet1!$A$2:$B$3"
+    assert chart.workbook_values()["categories"] == {
+        "ref": "Sheet1!$A$2:$B$3", "values": [["Q1", 10], ["Q2", 12.5]]}

@@ -21,6 +21,7 @@ the property the entire editing layer rests on.
 
 from __future__ import annotations
 
+import copy
 import io
 import os
 import posixpath
@@ -34,6 +35,8 @@ from .xml import Element, parse_xml, serialize
 
 CONTENT_TYPES_PART = "[Content_Types].xml"
 CONTENT_TYPES_NS = "http://schemas.openxmlformats.org/package/2006/content-types"
+#: The declaration Office writes ``[Content_Types].xml`` with, line end included.
+CONTENT_TYPES_DECLARATION = b'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n'
 
 RELS_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
 REL_OFFICE_DOCUMENT = (
@@ -347,6 +350,33 @@ class OpcPackage:
             node.set("ContentType", content_type)
         _match_tail(node)
         self.mark_dirty(CONTENT_TYPES_PART)
+
+    def content_types_with(self, path: str, content_type: str, *, override: bool = True) -> bytes:
+        """``[Content_Types].xml`` as :meth:`declare_content_type` would leave it, serialized
+        as Office writes that part -- without changing the package.
+
+        For writing a copy of the package as something else -- the main part retyped, say,
+        when a template is saved under a document's name -- through :meth:`save`'s
+        ``replacements``, while the open package stays what it is::
+
+            package.save(target, {CONTENT_TYPES_PART: package.content_types_with(main, wanted)})
+
+        ``override`` defaults to ``True`` here: a part retyped this way is one whose type
+        must not depend on its extension's ``Default``.
+        """
+        root = self.tree(CONTENT_TYPES_PART)
+        if root is None:
+            raise ValueError("the package has no [Content_Types].xml")
+        was_dirty = CONTENT_TYPES_PART in self._dirty
+        self._trees[CONTENT_TYPES_PART] = copy.deepcopy(root)
+        try:
+            self.declare_content_type(path, content_type, override=override)
+            edited = self._trees[CONTENT_TYPES_PART]
+        finally:
+            self._trees[CONTENT_TYPES_PART] = root
+            if not was_dirty:
+                self._dirty.discard(CONTENT_TYPES_PART)
+        return CONTENT_TYPES_DECLARATION + etree.tostring(edited, encoding="UTF-8")
 
     def _default_node(self, path: str) -> Element | None:
         """The ``Default`` for ``path``'s extension, if any."""

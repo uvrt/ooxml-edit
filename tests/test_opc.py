@@ -507,3 +507,21 @@ def test_a_zip_with_directory_entries_opens(data):
             target.writestr(info, source.read(info))
     package = OpcPackage.open(buffer.getvalue())
     assert "doc/" not in package.part_names and package.has_part(MAIN)
+
+
+def test_content_types_with_retypes_a_copy_and_leaves_the_package_alone(data, package):
+    replaced = package.content_types_with(MAIN, synthetic.CT_NOTE)
+    assert package.content_type(MAIN) != synthetic.CT_NOTE
+    assert CONTENT_TYPES_PART not in package.dirty_parts
+    assert package.to_bytes() == data
+    assert replaced.startswith(b'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n<')
+    copy = OpcPackage.open(package.to_bytes({CONTENT_TYPES_PART: replaced}))
+    assert copy.content_type(MAIN) == synthetic.CT_NOTE
+    overrides = [n for n in etree.fromstring(replaced) if n.get("PartName") == "/" + MAIN]
+    assert len(overrides) == 1
+    # An edit already made is kept in the copy, and stays the package's own.
+    package.declare_content_type(PAGE1, synthetic.CT_MAIN)
+    again = OpcPackage.open(package.to_bytes(
+        {CONTENT_TYPES_PART: package.content_types_with(MAIN, synthetic.CT_NOTE)}))
+    assert again.content_type(PAGE1) == synthetic.CT_MAIN and again.content_type(MAIN) == synthetic.CT_NOTE
+    assert CONTENT_TYPES_PART in package.dirty_parts and package.content_type(MAIN) != synthetic.CT_NOTE
