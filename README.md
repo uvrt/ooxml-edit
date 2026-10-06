@@ -5,9 +5,11 @@ back losslessly, parts added, copied, removed and reaped, schema-ordered inserti
 redo with batches, and durable ids stamped into an extension list. What a `.pptx` editor,
 a `.docx` editor and an `.xlsx` editor all need, and nothing any one of them needs alone.
 
-Beside that core, an optional subpackage, [`ooxml_edit.charts`](#ooxml_editcharts-optional),
-edits what a deck and a Word document embed alike: charts with their embedded workbooks,
-and SmartArt diagrams.
+Beside that core, two optional subpackages:
+[`ooxml_edit.charts`](#ooxml_editcharts-optional) edits what a deck and a Word document
+embed alike: charts with their embedded workbooks, and SmartArt diagrams;
+[`ooxml_edit.tools`](#ooxml_edittools-optional) is the plumbing of an agent tool layer the
+editors build their tools on.
 
 Depends on **lxml**, and only on lxml. Python 3.10+.
 
@@ -54,7 +56,7 @@ requires. That is the whole reason for the dependency.
 | --- | --- |
 | `ooxml_edit.opc` | `OpcPackage`: parts as original bytes plus lazily parsed trees; content types, and `content_types_with` for a copy written with a part retyped while the open package stays as it is; relationships, internal and external; adding, replacing, removing and copying parts; `release` and `reap`, which remove a part only once it is proved unreferenced from anywhere in the package, and leave no empty relationships part and no unused `Default` behind, as Word writes none; packages inside the package (`open_embedded`, `replace_embedded`); snapshots for undo; saving with entry order, timestamps and compression kept, optionally with derived parts written in place (`replacements`); `changed_parts` and `opened` |
 | `ooxml_edit.xml` | The namespace registry and `qn`; attribute helpers; `register_child_order` and `insert_in_order`, which put a new child where its parent's schema sequence requires, with rank groups for repeating choices, and append a detached child where no sequence is known; `replace_choice`; `remove`, which keeps the whitespace around what it removes |
-| `ooxml_edit.history` | `History`: undo, redo and nested batches over anything with `snapshot` and `restore`; a failed batch rolls back |
+| `ooxml_edit.history` | `History`: undo, redo and nested batches over anything with `snapshot` and `restore`; a failed batch rolls back; `version` numbers every state, never reusing a number, and undo and redo restore it, so a cache keyed by version is never stale |
 | `ooxml_edit.stamp` | `ExtensionStamp`: an id frozen into an `extLst`/`ext` extension, which Office keeps when it does not know the URI |
 
 The losslessness rule, which everything else rests on:
@@ -100,6 +102,8 @@ package.save("out.zip")
   parts and the same DrawingML, but editing them is a vocabulary, not a package operation.
   They live in the optional `ooxml_edit.charts` subpackage, which the core never imports.
 - **Rendering.** That is the renderers', on ooxml-common.
+- **Any one format's tools.** `ooxml_edit.tools` is plumbing only; pptx-agent and
+  docx-agent define their tools on it, in their own packages.
 
 ## `ooxml_edit.charts` (optional)
 
@@ -145,6 +149,46 @@ The registry of child orders is last-wins: the subpackage owns the sequences of 
 text, chart and diagram elements, so a format layer should not register its own copies of
 them.
 
+## `ooxml_edit.tools` (optional)
+
+The shared plumbing of an agent tool layer: an application imports a format library's
+tools, and a model edits documents only through them -- no code execution, no raw XML, no
+file system. Format-neutral and held to the core's rules by `tests/test_neutrality.py`;
+standard library only, and no provider SDK. The plan it implements is
+[docs/TOOLS-ROADMAP.md](docs/TOOLS-ROADMAP.md) (phase T0).
+
+| Module | What it is |
+| --- | --- |
+| `tools.registry` | `Tool`, `ToolGroup`, the `@tool` decorator, and the parameter helpers (`string`, `integer`, `number`, `boolean`, `array`, `obj`) that build each tool's schema; a definition outside the common strict subset fails when the tool is made |
+| `tools.schema` | the common strict subset both providers accept, its checker, and the call validator, which also enforces what the subset cannot say (numeric bounds, lengths, "exactly one of") |
+| `tools.adapters` | definitions for the Anthropic Messages API (strict on as many tools as the per-request limits allow, writing tools first; optional deferred loading and caching), the OpenAI Responses API (all required, optional ones nullable; optional namespaces and tool search) and Chat Completions; results as `tool_result` blocks, `function_call_output` items, or tool messages plus a user message with the images; checkers for each provider's documented rules. Plain dicts |
+| `tools.results` | the result envelope, error codes with `valid_options`, image token estimates, truncation and paging |
+| `tools.session` | `Session`: documents opened from bytes (`d1`), inputs registered as blobs (`b1`), outputs handed to the application as bytes; a re-entrant lock per document, taken in a fixed order across documents; versions (`History.version`) and version-keyed caches; an injected clock |
+| `tools.limits` | size limits, magic-byte checks, image sizes read from headers, and a zip-bomb guard |
+| `tools.worker` | a process pool for rendering and layout whose deadlines are kept: a worker past its deadline is killed and the call reports `timeout` |
+| `tools.logs`, `tools.prompts` | call records with argument digests, not content; the shared system-prompt fragment (mechanics only, no house style) |
+
+```python
+from ooxml_edit.tools import Toolbox
+
+toolbox = Toolbox(LIBRARY_TOOLS, formats=[LIBRARY_FORMAT])   # from a format library
+session = toolbox.session(clock=fixed_clock)
+d1 = session.open(document_bytes, name="report.pptx")        # "d1"
+b1 = session.add_blob(logo_bytes, name="logo.png")             # "b1"
+
+tools = toolbox.definitions("anthropic")                       # or "openai-responses"
+results = toolbox.dispatch_many(session, calls)                # [(name, arguments), ...]
+message = toolbox.render_results("anthropic", list(zip(ids, results)))
+
+for out in session.take_outputs():                             # files a tool saved
+    store(out.name, out.data)
+```
+
+Calls on one document run one at a time in the order the model emitted them; calls on
+different documents run concurrently. A mutating call is one undo step, and a failed one
+changes nothing. Saving refuses new validation problems unless the application (never the
+model) passes `allow_new_problems=True`.
+
 ## Install
 
 Not on PyPI yet. From a checkout:
@@ -158,6 +202,7 @@ pip install -e '.[dev]'     # + pytest
 
 ```sh
 python -m pytest -q
+python -m pytest -m provider     # online checks; need ANTHROPIC_API_KEY, skipped without
 ```
 
 The tests build the small packages they need (`tests/synthetic.py`, and
