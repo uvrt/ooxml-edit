@@ -12,6 +12,10 @@ invert each operation.
 Batches collapse several edits into one undo step.  They nest, and only the outermost pair has
 an effect, so a compound operation built from primitives that each checkpoint still ends up as
 a single step.
+
+Every state the history can return to has a :attr:`History.version`.  A new step gets a number
+no earlier state ever had, and undo and redo bring back the number of the state they restore,
+so equal versions mean equal content and a cache keyed by version never serves a stale entry.
 """
 
 from __future__ import annotations
@@ -30,8 +34,11 @@ class History:
     def __init__(self, package: Snapshottable, max_depth: int = 50) -> None:
         self._package = package
         self._max_depth = max_depth
-        self._undo: list[Any] = []
-        self._redo: list[Any] = []
+        #: Each entry pairs a snapshot with the version of the state it holds.
+        self._undo: list[tuple[Any, int]] = []
+        self._redo: list[tuple[Any, int]] = []
+        self._version = 0
+        self._last_version = 0
         self._batch_depth = 0
         #: State as of the start of the outermost open batch.
         self._batch_snapshot: Any | None = None
@@ -46,10 +53,22 @@ class History:
         self._push(self._package.snapshot())
 
     def _push(self, snapshot: Any) -> None:
-        self._undo.append(snapshot)
+        self._undo.append((snapshot, self._version))
         if len(self._undo) > self._max_depth:
             del self._undo[0]
         self._redo.clear()
+        self._last_version += 1
+        self._version = self._last_version
+
+    @property
+    def version(self) -> int:
+        """The current state's number: 0 when opened, a new one for every step recorded.
+
+        Monotonic in the sense that a step never reuses a number, even after undo; undo and
+        redo restore the number of the state they bring back.  A batch counts once, when the
+        outermost one closes, and a batch that fails leaves the version as it was.
+        """
+        return self._version
 
     # -- batching --------------------------------------------------------------------------
 
@@ -88,15 +107,19 @@ class History:
     def undo(self) -> bool:
         if not self._undo:
             return False
-        self._redo.append(self._package.snapshot())
-        self._package.restore(self._undo.pop())
+        snapshot, version = self._undo.pop()
+        self._redo.append((self._package.snapshot(), self._version))
+        self._package.restore(snapshot)
+        self._version = version
         return True
 
     def redo(self) -> bool:
         if not self._redo:
             return False
-        self._undo.append(self._package.snapshot())
-        self._package.restore(self._redo.pop())
+        snapshot, version = self._redo.pop()
+        self._undo.append((self._package.snapshot(), self._version))
+        self._package.restore(snapshot)
+        self._version = version
         return True
 
     def clear(self) -> None:
