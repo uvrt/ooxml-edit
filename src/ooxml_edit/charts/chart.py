@@ -587,6 +587,85 @@ class Chart:
         """Everything above in one dictionary -- what :mod:`.model` reads."""
         return chart_model(self._root())
 
+    def workbook_values(self) -> dict[str, Any]:
+        """What the embedded workbook -- the sheet Edit Data opens -- holds for the chart's
+        ranges, read cell by cell through each series' formulas; nothing changes.  Every edit
+        here keeps it equal to the cache, and this is how to check that::
+
+            book = chart.workbook_values()
+            assert book["categories"]["values"] == chart.categories
+            assert [s["values"]["values"] for s in book["series"]] == [s.values for s in chart.series]
+            assert [s["name"]["value"] for s in book["series"]] == [s.name for s in chart.series]
+
+        ``{"workbook": part, "sheet": name, "categories": {"ref", "values"}, "series":
+        [{"name": {"ref", "value"}, "values": {"ref", "values"}}, ...]}``, the series in
+        :attr:`series` order.  Each ``ref`` is the formula's text (``Sheet1!$B$2:$B$5``) and
+        each value a cell's: a number, text, ``True``/``False``, or ``None`` for an empty
+        cell.  A range of one row or column gives a list of values, one per point; a
+        rectangle (a multi-level category range) a list of its rows, each a list.
+        ``sheet`` is the sheet the series' values are on, a list of names when they are on
+        several, ``None`` when none has a formula.  ``categories`` are the first series'
+        with a formula (``None`` when no series has categories).
+
+        Where there is nothing to read the entry says so rather than guessing: a source
+        that is a literal has ``ref`` ``None`` and no values; a formula that is not one
+        range (a defined name, several areas), or names a sheet the workbook lacks, has its
+        ``ref`` and ``None``; a series with no name has ``name`` ``None``.  A chart with no
+        embedded workbook (none, linked from outside, an OLE object) or one that cannot be
+        read gives ``workbook`` ``None``, the reason under ``"missing"``, and no series.
+        """
+        host = self._resolve()
+        package = host.package
+        part, reason = workbook_part(package, self.part, document=host.document)
+        out: dict[str, Any] = {"workbook": part, "sheet": None, "categories": None, "series": []}
+        workbook = None
+        if part is not None:
+            try:
+                workbook = Workbook(package.open_embedded(part))
+            except Exception as error:  # a corrupt or foreign embedding
+                reason = f"its embedded workbook could not be read ({error})"
+        if workbook is None:
+            out["workbook"] = None
+            out["missing"] = reason
+            return out
+
+        def read(source: _Data, single: bool = False) -> dict[str, Any] | None:
+            key = "value" if single else "values"
+            if source.ref is None:
+                return None
+            formula = source.formula
+            text = formula.text if formula is not None else None
+            sheet_range = source.range
+            sheet = None if sheet_range is None else workbook.sheet(sheet_range.sheet)
+            if sheet is None:
+                return {"ref": text, key: None}
+            area = sheet_range.area
+            if single:
+                return {"ref": text, "value": sheet.value(area.first)}
+            if sheet_range.is_line:
+                return {"ref": text, "values": [sheet.value(sheet_range.cell(k))
+                                                for k in range(sheet_range.length)]}
+            rows = [[sheet.value(Cell(row, column))
+                     for column in range(area.first.column, area.last.column + 1)]
+                    for row in range(area.first.row, area.last.row + 1)]
+            return {"ref": text, "values": rows}
+
+        sheets: list[str] = []
+        fallback = None
+        for each in self._series():
+            if out["categories"] is None and each.categories.formula is not None:
+                out["categories"] = read(each.categories)
+            elif fallback is None and each.categories.ref is not None:
+                fallback = read(each.categories)
+            out["series"].append({"name": read(each.name, single=True), "values": read(each.values)})
+            sheet_range = each.values.range
+            if sheet_range is not None and sheet_range.sheet not in sheets:
+                sheets.append(sheet_range.sheet)
+        if out["categories"] is None:
+            out["categories"] = fallback
+        out["sheet"] = sheets[0] if len(sheets) == 1 else (sheets or None)
+        return out
+
     # -- editing: values and labels ----------------------------------------------------------
 
     def set_category(self, index: int, label) -> "Chart":

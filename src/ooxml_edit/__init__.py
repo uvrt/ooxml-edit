@@ -20,4 +20,4 @@ register their namespaces and child-order tables with :mod:`.xml` and subclass t
 keeps the subpackage free of any one document format.
 """
 
-__version__ = "0.2.1"
+__version__ = "0.2.2"
