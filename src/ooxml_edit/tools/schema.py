@@ -218,6 +218,60 @@ def canonical(schema: Mapping[str, Any]) -> dict[str, Any]:
     return strip(copy.deepcopy(dict(schema)))
 
 
+def required_first(schema: Mapping[str, Any]) -> dict[str, Any]:
+    """``schema`` with every object's required properties before its optional ones, each
+    part in its given order, at any depth.
+
+    Strict decoding writes an object's keys in the schema's order: once the model has
+    written a property, it can no longer write one listed before it.  A model writes the
+    arguments it must give first (``doc``, then where), so an optional property listed
+    before a later required one is lost -- Claude's strict grammar dropped
+    ``word_insert_markdown``'s ``markdown`` when the model wrote ``at`` (listed after it)
+    first.  With the required ones first, every optional property can still follow.
+    """
+
+    def order(node: Any) -> Any:
+        if not isinstance(node, Mapping):
+            return node
+        node = dict(node)
+        properties = node.get("properties")
+        if isinstance(properties, Mapping):
+            required = set(node.get("required", ()))
+            names = ([name for name in properties if name in required]
+                     + [name for name in properties if name not in required])
+            node["properties"] = {name: order(properties[name]) for name in names}
+        if isinstance(node.get("items"), Mapping):
+            node["items"] = order(node["items"])
+        return node
+
+    return order(copy.deepcopy(dict(schema)))
+
+
+def required_after_optional(schema: Mapping[str, Any]) -> list[str]:
+    """The dotted names of required properties listed after an optional one, at any depth:
+    what :func:`required_first` puts right."""
+    found: list[str] = []
+
+    def visit(node: Any, where: str) -> None:
+        if not isinstance(node, Mapping):
+            return
+        properties = node.get("properties")
+        if isinstance(properties, Mapping):
+            required = set(node.get("required", ()))
+            seen_optional = False
+            for name, child in properties.items():
+                if name not in required:
+                    seen_optional = True
+                elif seen_optional:
+                    found.append(f"{where}.{name}" if where else name)
+                visit(child, f"{where}.{name}" if where else name)
+        if isinstance(node.get("items"), Mapping):
+            visit(node["items"], where + "[]")
+
+    visit(schema, "")
+    return found
+
+
 def walk_properties(schema: Mapping[str, Any]) -> Iterable[tuple[str, Mapping[str, Any], bool]]:
     """Every property at any depth: ``(dotted name, schema, required)``."""
 

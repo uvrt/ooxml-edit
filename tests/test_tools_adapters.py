@@ -37,6 +37,60 @@ def _many(count: int, optional: int, *, mutates: bool = True, prefix: str = "w")
 # -- Anthropic ---------------------------------------------------------------------------------
 
 
+def _late_required():
+    """A tool written with an optional property before a required one, at the top and in
+    its items, as word_insert_markdown was (doc, markdown, blob, at)."""
+    from ooxml_edit.tools import Tool, array
+
+    schema = {"type": "object", "properties": {
+        "doc": {"type": "string", "description": "Doc."},
+        "markdown": {"type": "string", "description": "Text."},
+        "at": {"type": "string", "description": "Where."},
+        "rows": {"type": "array", "description": "Rows.", "items": {
+            "type": "object", "properties": {"note": {"type": "string"},
+                                             "cells": {"type": "integer"}},
+            "required": ["cells"], "additionalProperties": False}}},
+        "required": ["doc", "at", "rows"], "additionalProperties": False}
+    return Tool("late", "A tool.", schema, handlers={None: lambda call, **kw: None},
+                mutates=True)
+
+
+def test_the_builders_list_required_properties_first_in_the_given_order():
+    made = tool("ordered", "A tool.",
+                {"doc": string("Doc."), "markdown": string("Text.", optional=True),
+                 "blob": string("Blob.", optional=True), "at": string("Where."),
+                 "box": obj({"x": integer(optional=True), "y": integer()}, "Box.")},
+                mutates=True)(lambda call, **kw: None)
+    assert list(made.schema["properties"]) == ["doc", "at", "box", "markdown", "blob"]
+    assert list(made.schema["properties"]["box"]["properties"]) == ["y", "x"]
+    assert made.schema["required"] == ["doc", "at", "box"]
+
+
+def test_every_adapter_sends_required_properties_first_at_every_level():
+    late = _late_required()
+    for provider in ("anthropic", "openai-responses", "openai-chat"):
+        (sent,) = [d for d in adapters.definitions_for(provider, [late])
+                   if d.get("name") == "late" or d.get("function", {}).get("name") == "late"]
+        schema = (sent.get("input_schema") or sent.get("parameters")
+                  or sent["function"]["parameters"])
+        assert list(schema["properties"]) == ["doc", "at", "rows", "markdown"], provider
+        assert list(schema["properties"]["rows"]["items"]["properties"]) == ["cells", "note"]
+    anthropic = adapters.to_anthropic([late])
+    assert anthropic[0]["strict"] is True and anthropic_problems(anthropic) == []
+
+
+def test_anthropic_problems_name_a_required_property_after_an_optional_one():
+    late = _late_required()
+    sent = adapters.to_anthropic([late])
+    sent[0]["input_schema"] = late.canonical          # as written, not as the adapter sends it
+    problems = anthropic_problems(sent)
+    assert any("late.at: a required property after an optional one" in p for p in problems)
+    assert any("late.rows[].cells" in p for p in problems)
+    sent[0]["strict"] = False                         # only strict tools are held to it
+    assert anthropic_problems(sent) == []
+
+
+
 def test_anthropic_definitions_meet_the_documented_rules(toolbox):
     definitions = toolbox.definitions("anthropic", defer=False)
     assert anthropic_problems(definitions) == []

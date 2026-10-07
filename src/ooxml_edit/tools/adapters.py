@@ -3,12 +3,13 @@
 One canonical schema per tool (see :mod:`.schema`) becomes:
 
 * **Anthropic Messages** (:func:`to_anthropic`): optional properties left out of
-  ``required``; ``strict: true`` on as many tools as the per-request strict limits allow,
+  ``required`` and listed after the required ones at every level (strict decoding writes
+  keys in schema order, so an optional property before a required one would be lost); ``strict: true`` on as many tools as the per-request strict limits allow,
   writing tools first (:func:`anthropic_strict_plan`); the rest are sent non-strict, and the
   dispatcher validates every call anyway.  Optionally ``defer_loading`` on the non-core tools
   with the BM25 tool-search tool, and ``cache_control`` on the last tool that is not deferred.
 * **OpenAI Responses** (:func:`to_openai_responses`): every property required, an optional
-  one made nullable, ``strict: true`` everywhere; optionally each group as a ``namespace``
+  one made nullable and listed after the ones the tool requires, ``strict: true`` everywhere; optionally each group as a ``namespace``
   with ``defer_loading`` and the ``tool_search`` tool.
 * **OpenAI Chat Completions** (:func:`to_openai_chat`), the fallback: the same parameters,
   nested under ``function``.
@@ -43,6 +44,7 @@ from typing import Any, Iterable, Mapping, Sequence
 
 from .registry import CORE, Tool, ToolGroup
 from .results import Result
+from .schema import required_after_optional, required_first
 
 # -- provider limits ---------------------------------------------------------------------------
 
@@ -152,7 +154,7 @@ def to_anthropic(tools: Iterable[Tool], *, defer: bool = False, cache: bool = Tr
     definitions: list[dict[str, Any]] = [dict(ANTHROPIC_TOOL_SEARCH)] if deferring else []
     for tool in tools:
         definition: dict[str, Any] = {"name": tool.name, "description": tool.description,
-                                      "input_schema": tool.canonical}
+                                      "input_schema": required_first(tool.canonical)}
         definition["strict"] = bool(plan.get(tool.name, False))
         if deferring and not tool.core:
             definition["defer_loading"] = True
@@ -221,6 +223,9 @@ def anthropic_problems(definitions: Sequence[Mapping[str, Any]],
         if definition.get("strict"):
             strict_tools += 1
             strings += free_strings(schema)
+            for late in required_after_optional(schema):
+                problems.append(f"{name}.{late}: a required property after an optional one; "
+                                "strict decoding loses the optional one once it is written")
             for where, node in _nodes(schema):
                 for key in node:
                     if key not in ANTHROPIC_KEYWORDS:
@@ -273,7 +278,7 @@ def openai_strict_schema(schema: Mapping[str, Any]) -> dict[str, Any]:
             node["items"] = convert(node["items"])
         return node
 
-    return convert(copy.deepcopy(dict(schema)))
+    return convert(required_first(schema))
 
 
 def _nullable(node: dict[str, Any]) -> dict[str, Any]:
@@ -292,7 +297,7 @@ def _function(tool: Tool) -> dict[str, Any]:
         # Sent as written, ``strict: false`` stated: omitted, the Responses API would
         # normalise it into strict mode, which a free-form object cannot take.
         return {"type": "function", "name": tool.name, "description": tool.description,
-                "parameters": tool.canonical, "strict": False}
+                "parameters": required_first(tool.canonical), "strict": False}
     return {"type": "function", "name": tool.name, "description": tool.description,
             "parameters": openai_strict_schema(tool.canonical), "strict": True}
 

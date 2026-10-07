@@ -154,7 +154,7 @@ def test_optional_parameters_are_counted_at_every_depth():
     item = tool("toy_x", "X.", {
         "a": string("A.", optional=True),
         "b": obj({"c": string("C.", optional=True), "d": string("D.")}, "B.")})(lambda c, **k: 0)
-    assert item.optional_parameters() == ["a", "b.c"]
+    assert item.optional_parameters() == ["b.c", "a"]      # required b is listed first
     assert isinstance(item, Tool)
 
 
