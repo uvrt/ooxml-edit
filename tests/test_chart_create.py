@@ -231,3 +231,18 @@ def test_the_host_hook_needs_nothing_format_specific():
     host = document.host("new")
     assert isinstance(host, GraphicHost)
     assert chart.chart_type == "pie" and chart.axes == []
+
+
+def test_a_host_s_look_sizes_new_titles_and_data_labels():
+    document, _ = new("bar")
+    chart = document.chart("new", look=WORD_LOOK)
+    chart.set_title("Chart")
+    chart.set_axis_title("category", "Region")    # vertical on a bar chart
+    chart.set_axis_title("value", "EUR m")        # horizontal
+    chart.set_data_labels(True)
+    root = chart._root()
+    sizes = {etree.QName(t.getparent()).localname if t.getparent().tag != C + "chart" else "chart":
+             t.find(f"{C}tx//{A}defRPr").get("sz") for t in root.iter(C + "title")}
+    assert sizes == {"chart": "1400", "catAx": "1000", "valAx": "1000"}
+    assert {n.get("sz") for n in root.iter(A + "defRPr")
+            if n.getparent().getparent().getparent().getparent().tag == C + "dLbls"} == {"900"}

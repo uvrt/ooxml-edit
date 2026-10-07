@@ -918,7 +918,8 @@ class Chart:
                 raise IndexError(f"{self.address}: no series {index}")
         with self._edit() as editor:
             all_series = self._series(editor.root)
-            size = _label_size(editor.root)
+            look = editor.host.look
+            size = look.data_labels if look is not None else _label_size(editor.root)
             for index in chosen:
                 ser = all_series[index]
                 current = ser.element.find(qn("c:dLbls"))
@@ -1628,6 +1629,13 @@ def _write_title(editor: _Editor, owner: Element, text: str | None, *, vertical:
             return
         remove(tx)
         tx = None
+    if tx is None and editor.host.look is not None:
+        from .create import title_text  # the creation module builds on this one
+
+        look = editor.host.look
+        size = look.title if owner.tag == qn("c:chart") else look.axis_title
+        tx = title_text(size, vertical=vertical, lang=editor.host.lang)
+        append_in_order(title, tx)
     if tx is None:
         host = editor.host
         template = host.title_template

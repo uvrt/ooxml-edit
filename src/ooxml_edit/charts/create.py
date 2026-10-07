@@ -288,11 +288,20 @@ def title_element(text: str, size: int, *, vertical: bool = False, lang: str | N
                   ) -> Element:
     """A chart or axis ``c:title`` with ``text``, in Office's default title style."""
     rot = "-5400000" if vertical else "0"
+    tx = title_text(size, vertical=vertical, lang=lang)
+    replace_body_text(tx[0], text)
+    return _e("c:title", None, tx, _val("c:overlay", 0), _none_sp(),
+              text_properties(size, rot=rot, title=True, lang=lang))
+
+
+def title_text(size: int, *, vertical: bool = False, lang: str | None = None) -> Element:
+    """The empty ``c:tx`` of a title in Office's default title style, ``size`` hundredths of
+    a point; text is then written into it with :func:`~.dmltext.replace_body_text`, its runs
+    taking their properties from the paragraph's end (``lang``)."""
+    rot = "-5400000" if vertical else "0"
     rich = _e("c:rich", None, _body(rot), _e("a:lstStyle"),
               _e("a:p", None, _e("a:pPr", None, text_defaults(size, title=True)), _end(lang)))
-    replace_body_text(rich, text)
-    return _e("c:title", None, _e("c:tx", None, rich), _val("c:overlay", 0), _none_sp(),
-              text_properties(size, rot=rot, title=True, lang=lang))
+    return _e("c:tx", None, rich)
 
 
 def _ids(seed: str) -> tuple[str, str, str]:
@@ -709,4 +718,4 @@ def add_chart(package, part: str, kind: str, categories: Sequence, series: Seque
 __all__ = ["ACCENTS", "CHART_KINDS", "ChartLook", "LEGEND_POSITIONS", "NewChart",
            "POWERPOINT_LOOK", "VARIATIONS", "WORD_LOOK", "add_chart", "chart_data",
            "chart_space", "chart_workbook", "series_color", "text_properties",
-           "title_element"]
+           "title_element", "title_text"]

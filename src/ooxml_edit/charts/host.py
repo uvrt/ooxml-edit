@@ -71,6 +71,11 @@ class GraphicHost:
     #: by :func:`~.dmltext.replace_body_text`, so a run with no text to inherit from takes
     #: its formatting from the paragraph's ``a:endParaRPr``, if the template gives one.
     title_template: Callable[[bool], Element] | None = None
+    #: The application's new-chart look (:data:`~.create.POWERPOINT_LOOK`,
+    #: :data:`~.create.WORD_LOOK`): when given, a new chart title and a new axis title are
+    #: written at its measured sizes, in Office's title style, and ``title_template`` is not
+    #: used.  Data labels shown on a chart take its ``data_labels`` size too.
+    look: Any = None
 
 
 def _find(frame: Element, tag: str) -> Element | None:
