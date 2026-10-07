@@ -11,7 +11,7 @@ invert each operation.
 
 Batches collapse several edits into one undo step.  They nest, and only the outermost pair has
 an effect, so a compound operation built from primitives that each checkpoint still ends up as
-a single step.
+a single step.  A batch that leaves the content as it found it records no step at all.
 
 Every state the history can return to has a :attr:`History.version`.  A new step gets a number
 no earlier state ever had, and undo and redo bring back the number of the state they restore,
@@ -74,7 +74,10 @@ class History:
 
     @contextmanager
     def batch(self) -> Iterator[None]:
-        """Collapse everything inside into a single undo step.  Nestable."""
+        """Collapse everything inside into a single undo step.  Nestable.
+
+        A batch whose content ends as it began (a read, or edits that cancel out) records no
+        step and keeps the version; a failed one rolls back and records none."""
         if self._batch_depth == 0:
             self._batch_snapshot = self._package.snapshot()
         self._batch_depth += 1
@@ -89,8 +92,11 @@ class History:
             raise
         self._batch_depth -= 1
         if self._batch_depth == 0 and self._batch_snapshot is not None:
-            self._push(self._batch_snapshot)
-            self._batch_snapshot = None
+            snapshot, self._batch_snapshot = self._batch_snapshot, None
+            # A batch that changed nothing is no step: undo would otherwise undo nothing,
+            # and the version would claim a new state with the old content.
+            if self._package.snapshot() != snapshot:
+                self._push(snapshot)
 
     @property
     def in_batch(self) -> bool:
