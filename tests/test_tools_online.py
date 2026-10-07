@@ -21,6 +21,7 @@ import pytest
 
 from ooxml_edit.tools import Toolbox
 from ooxml_edit.tools.adapters import anthropic_problems
+from ooxml_edit.tools.schema import example_arguments
 
 import synthetic
 import tools_toys
@@ -109,3 +110,58 @@ def test_a_deferred_tool_is_found_by_tool_search_and_called(toolbox):
     called = [block["name"] for block in reply["content"] if block["type"] == "tool_use"]
     assert "server_tool_use" in kinds, kinds
     assert called == ["toy_ppt_find_label"], kinds
+
+
+# -- strict decoding keeps every field given -------------------------------------------------------
+
+
+def _missing(given, got, where=""):
+    """The dotted paths of ``given`` that ``got`` lacks: objects compared key by key, an
+    array by its first item."""
+    if isinstance(given, dict):
+        if not isinstance(got, dict):
+            return [where or "the arguments"]
+        lost = []
+        for key, value in given.items():
+            path = f"{where}.{key}" if where else key
+            lost += [path] if key not in got else _missing(value, got[key], path)
+        return lost
+    if isinstance(given, list) and given:
+        if not isinstance(got, list) or not got:
+            return [where]
+        return _missing(given[0], got[0], where + "[]")
+    return []
+
+
+def _ask_for(name, schema, arguments):
+    """A user message asking for one call with every argument, the optional ones listed
+    first: a model writes the arguments it must give first, which is what lost trial 3's
+    optional fields when they were listed before a required one."""
+    required = set(schema.get("required", ()))
+    order = [k for k in arguments if k not in required] + [k for k in arguments if k in required]
+    lines = "\n".join(f"- {key}: {json.dumps(arguments[key])}" for key in order)
+    return (f"This is a test of the tool interface; nothing is edited. Call {name} exactly "
+            f"once, with exactly these arguments and values, none dropped or changed, and "
+            f"nothing else:\n{lines}")
+
+
+def test_strict_tools_keep_every_field_given(toolbox):
+    """Each strict tool, as the adapter sends it, gets one scripted request asking for a
+    call that uses every optional field; every field must arrive (finding S1 of trial 3)."""
+    strict = [d for d in toolbox.definitions("anthropic", defer=False) if d.get("strict")]
+    assert strict
+    lost = {}
+    for definition in strict:
+        arguments = example_arguments(definition["input_schema"])
+        reply = _post("messages", {
+            "model": MODEL, "max_tokens": 1500, "tools": [definition],
+            "tool_choice": {"type": "auto"}, "output_config": {"effort": "low"},
+            "messages": [{"role": "user", "content": _ask_for(
+                definition["name"], definition["input_schema"], arguments)}]})
+        calls = [b for b in reply["content"] if b["type"] == "tool_use"]
+        assert [c["name"] for c in calls] == [definition["name"]], reply["content"]
+        missing = _missing(arguments, calls[0]["input"])
+        if missing:
+            lost[definition["name"]] = missing
+    print(f"\nstrict tools checked: {[d['name'] for d in strict]}")
+    assert lost == {}, lost
