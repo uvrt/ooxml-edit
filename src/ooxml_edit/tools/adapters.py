@@ -54,6 +54,15 @@ class StrictLimits:
     tools: int = 20
     optional_parameters: int = 24
     union_parameters: int = 16
+    #: Not documented: past about 33 free-text strings (string properties and array items
+    #: with no enum) over the strict tools, Claude returns 400 "Schema is too complex"
+    #: (measured on Sonnet 5.5, 2026-10-07: 34 compiled beside the rest of a request, 35
+    #: did not).  It is a guard, not the whole rule: some 32-string sets failed too, which
+    #: is why reading tools are not sent strict by default (``reads``).
+    string_parameters: int = 32
+    #: Whether reading tools may be strict.  Their arguments are an id and a few options,
+    #: which the dispatcher checks as well; strict grammar is spent on writing tools.
+    reads: bool = False
 
 
 ANTHROPIC_STRICT_LIMITS = StrictLimits()
@@ -76,6 +85,13 @@ OPENAI_MAX_DEPTH = 10
 OPENAI_MAX_ENUM_VALUES = 1000
 
 
+def free_strings(schema: Mapping[str, Any]) -> int:
+    """String properties and array items without an enum, at any depth: what makes a strict
+    grammar large."""
+    return sum(1 for _, node in _nodes(schema)
+               if node.get("type") == "string" and "enum" not in node)
+
+
 def _ordered(tools: Iterable[Tool]) -> list[Tool]:
     """Core tools first, the rest after, each in registration order."""
     tools = list(tools)
@@ -86,39 +102,52 @@ def _ordered(tools: Iterable[Tool]) -> list[Tool]:
 
 
 def anthropic_strict_plan(tools: Iterable[Tool],
-                          limits: StrictLimits = ANTHROPIC_STRICT_LIMITS) -> dict[str, bool]:
+                          limits: StrictLimits = ANTHROPIC_STRICT_LIMITS, *,
+                          first: Sequence[str] = ()) -> dict[str, bool]:
     """Which tools are sent ``strict: true``: in priority order, while the limits hold.
 
-    Priority is the tool's ``priority`` (lower first), else writing tools before reading
-    ones, then registration order.  A tool that would break a limit is sent non-strict and
+    Priority is the order of ``first`` (the format libraries' lists of their most-used
+    writing tools, :attr:`~.session.DocumentFormat.strict_first`), then the tool's
+    ``priority`` (lower first), else writing tools before reading ones, then registration
+    order.  A tool that would break a limit is sent non-strict and
     the next one is still tried, so a small tool after an option-heavy one keeps strict.
     The canonical subset has no unions, so the union limit is never reached.  A tool made
     with ``strict=False`` (``batch``) is never strict.
     """
     tools = list(tools)
+    rank = {name: index for index, name in enumerate(dict.fromkeys(first))}
     order = sorted(range(len(tools)), key=lambda i: (
+        rank.get(tools[i].name, len(rank)),
         tools[i].priority if tools[i].priority is not None else (0 if tools[i].mutates else 1),
         i))
     plan = {tool.name: False for tool in tools}
-    count = optional = 0
+    count = optional = strings = 0
     for index in order:
         tool = tools[index]
-        if not tool.strict:
+        if not tool.strict or not (tool.mutates or limits.reads):
             continue
         cost = len(tool.optional_parameters())
-        if count + 1 <= limits.tools and optional + cost <= limits.optional_parameters:
+        text = free_strings(tool.canonical)
+        if (count + 1 <= limits.tools and optional + cost <= limits.optional_parameters
+                and strings + text <= limits.string_parameters):
             plan[tool.name] = True
             count += 1
             optional += cost
+            strings += text
     return plan
 
 
 def to_anthropic(tools: Iterable[Tool], *, defer: bool = False, cache: bool = True,
-                 strict: bool = True,
-                 limits: StrictLimits = ANTHROPIC_STRICT_LIMITS) -> list[dict[str, Any]]:
-    """Claude tool definitions for ``tools`` (the Messages API's ``tools`` list)."""
+                 strict: bool = True, limits: StrictLimits = ANTHROPIC_STRICT_LIMITS,
+                 strict_first: Sequence[str] = ()) -> list[dict[str, Any]]:
+    """Claude tool definitions for ``tools`` (the Messages API's ``tools`` list).
+
+    With ``defer`` every non-core tool is sent ``defer_loading: true`` and the BM25
+    tool-search tool comes first; ``cache_control`` goes on the last tool that is loaded.
+    The strict limits are counted over every strict tool sent, deferred or not.
+    """
     tools = _ordered(tools)
-    plan = anthropic_strict_plan(tools, limits) if strict else {}
+    plan = anthropic_strict_plan(tools, limits, first=strict_first) if strict else {}
     deferring = defer and any(not tool.core for tool in tools)
     definitions: list[dict[str, Any]] = [dict(ANTHROPIC_TOOL_SEARCH)] if deferring else []
     for tool in tools:
@@ -164,7 +193,7 @@ def anthropic_problems(definitions: Sequence[Mapping[str, Any]],
                        limits: StrictLimits = ANTHROPIC_STRICT_LIMITS) -> list[str]:
     """Where a Claude ``tools`` list breaks the documented rules for strict tool use."""
     problems: list[str] = []
-    strict_tools = optional = unions = 0
+    strict_tools = optional = unions = strings = 0
     loaded = 0
     names = set()
     for definition in definitions:
@@ -191,6 +220,7 @@ def anthropic_problems(definitions: Sequence[Mapping[str, Any]],
             problems.append(f"{name}: input_schema must be an object")
         if definition.get("strict"):
             strict_tools += 1
+            strings += free_strings(schema)
             for where, node in _nodes(schema):
                 for key in node:
                     if key not in ANTHROPIC_KEYWORDS:
@@ -211,6 +241,9 @@ def anthropic_problems(definitions: Sequence[Mapping[str, Any]],
     if optional > limits.optional_parameters:
         problems.append(f"{optional} optional parameters in strict tools; at most "
                         f"{limits.optional_parameters}")
+    if strings > limits.string_parameters:
+        problems.append(f"{strings} free-text strings in strict tools; above "
+                        f"{limits.string_parameters} Claude answers 'Schema is too complex'")
     if unions > limits.union_parameters:
         problems.append(f"{unions} union-typed parameters in strict tools; at most "
                         f"{limits.union_parameters}")
@@ -434,6 +467,20 @@ def _nodes(schema: Mapping[str, Any], where: str = "") -> Iterable[tuple[str, Ma
         yield from _nodes(items, f"{where}[]")
 
 
+def openai_allowed_tools(names: Iterable[str], *, chat: bool = False,
+                         mode: str = "auto") -> dict[str, Any]:
+    """An OpenAI ``tool_choice`` that lets the model call only ``names``, without changing
+    the ``tools`` list (so its cache holds): the Responses shape, or with ``chat`` the Chat
+    Completions one."""
+    names = list(dict.fromkeys(names))
+    if chat:
+        return {"type": "allowed_tools", "allowed_tools": {
+            "mode": mode, "tools": [{"type": "function", "function": {"name": name}}
+                                    for name in names]}}
+    return {"type": "allowed_tools", "mode": mode,
+            "tools": [{"type": "function", "name": name} for name in names]}
+
+
 # -- one entry point per direction -------------------------------------------------------------
 
 PROVIDERS = ("anthropic", "openai-responses", "openai-chat")
@@ -445,6 +492,9 @@ def definitions_for(provider: str, tools: Iterable[Tool], **options: Any) -> lis
     if provider == "openai-responses":
         return to_openai_responses(tools, **options)
     if provider == "openai-chat":
+        if options.get("defer") or options.get("namespaces"):
+            raise ValueError("Chat Completions has no tool search or namespaces; pick groups "
+                             "instead (definitions(groups=[...]))")
         return to_openai_chat(tools)
     raise ValueError(f"unknown provider {provider!r}; one of {', '.join(PROVIDERS)}")
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import dataclasses
 import json
 
 import pytest
@@ -37,7 +38,7 @@ def _many(count: int, optional: int, *, mutates: bool = True, prefix: str = "w")
 
 
 def test_anthropic_definitions_meet_the_documented_rules(toolbox):
-    definitions = toolbox.definitions("anthropic")
+    definitions = toolbox.definitions("anthropic", defer=False)
     assert anthropic_problems(definitions) == []
     by_name = {d["name"]: d for d in definitions}
     title = by_name["toy_ppt_set_title"]
@@ -50,11 +51,22 @@ def test_anthropic_definitions_meet_the_documented_rules(toolbox):
 
 def test_anthropic_strict_stays_within_the_per_request_limits():
     tools = _many(30, 1)
-    plan = anthropic_strict_plan(tools)
+    roomy = StrictLimits(string_parameters=1000)
+    plan = anthropic_strict_plan(tools, roomy)
     assert sum(plan.values()) == 20
-    definitions = adapters.to_anthropic(tools)
-    assert anthropic_problems(definitions) == []
+    definitions = adapters.to_anthropic(tools, limits=roomy)
+    assert anthropic_problems(definitions, roomy) == []
     assert [d["strict"] for d in definitions].count(True) == 20
+
+
+def test_anthropic_strict_keeps_the_grammar_small():
+    tools = _many(30, 1)                      # two free-text strings each
+    plan = anthropic_strict_plan(tools)
+    assert sum(plan.values()) == 16           # 32 strings
+    assert anthropic_problems(adapters.to_anthropic(tools)) == []
+    readers = _many(5, 0, mutates=False, prefix="r")
+    assert not any(anthropic_strict_plan(readers).values())
+    assert all(anthropic_strict_plan(readers, StrictLimits(reads=True)).values())
 
 
 def test_anthropic_strict_counts_optional_parameters_across_tools():
@@ -69,9 +81,59 @@ def test_anthropic_strict_counts_optional_parameters_across_tools():
 def test_anthropic_writing_tools_get_strict_first():
     readers = _many(15, 0, mutates=False, prefix="r")
     writers = _many(15, 0, mutates=True, prefix="w")
-    plan = anthropic_strict_plan(readers + writers)
+    plan = anthropic_strict_plan(readers + writers, StrictLimits(reads=True))
     assert all(plan[t.name] for t in writers)
     assert sum(plan[t.name] for t in readers) == 5
+
+
+def test_anthropic_strict_follows_the_formats_first_list():
+    readers = _many(3, 10, mutates=False, prefix="r")
+    writers = _many(3, 10, mutates=True, prefix="w")
+    reads = StrictLimits(reads=True, string_parameters=1000)
+    plan = anthropic_strict_plan(readers + writers, reads, first=["r2", "w1"])
+    assert [name for name, strict in plan.items() if strict] == ["r2", "w1"]  # 20 of 24
+    definitions = adapters.to_anthropic(readers + writers, strict_first=["r1", "w2"],
+                                        limits=reads)
+    assert {d["name"] for d in definitions if d["strict"]} == {"r1", "w2"}
+
+
+def test_the_toolbox_takes_the_strict_order_from_its_formats():
+    first = tools_toys.FORMATS[0]
+    with Toolbox(tools_toys.TOOLS, formats=[dataclasses.replace(first, strict_first=(
+            "toy_word_insert",)), *tools_toys.FORMATS[1:]], groups=tools_toys.GROUPS) as box:
+        assert box.strict_first == ["toy_word_insert"]
+        plan = adapters.anthropic_strict_plan(box.tools.values(), first=box.strict_first)
+        assert plan["toy_word_insert"] and not plan["toy_ppt_render"]   # readers: never
+    with Toolbox(tools_toys.TOOLS, formats=tools_toys.FORMATS,
+                 strict_first=["toy_docx_read"]) as box:
+        assert box.strict_first == ["toy_docx_read"]
+
+
+def test_by_default_every_tool_is_sent_with_tool_search_and_picked_groups_are_loaded(toolbox):
+    everything = toolbox.definitions("anthropic")
+    assert everything[0]["type"].startswith("tool_search_tool_bm25")
+    deferred = {d["name"] for d in everything if d.get("defer_loading")}
+    assert deferred == {t.name for t in toolbox.tools.values() if not t.core}
+    assert anthropic_problems(everything) == []
+    picked = toolbox.definitions("anthropic", groups=["toy_render"])
+    assert not any(d.get("defer_loading") or "type" in d for d in picked)
+    assert {d["name"] for d in picked} == {t.name for t in toolbox.select("toy_render")}
+    spaced = toolbox.definitions("openai-responses")
+    assert any(d["type"] == "namespace" for d in spaced) and spaced[-1] == {"type": "tool_search"}
+    assert openai_problems(spaced) == []
+    flat = toolbox.definitions("openai-chat")
+    assert openai_problems(flat, chat=True) == []
+    with pytest.raises(ValueError, match="no tool search"):
+        toolbox.definitions("openai-chat", defer=True)
+
+
+def test_allowed_tools_narrow_calls_without_changing_the_tools(toolbox):
+    choice = toolbox.allowed_tools(["toy_render"])
+    names = [entry["name"] for entry in choice["tools"]]
+    assert choice["type"] == "allowed_tools" and choice["mode"] == "auto"
+    assert set(names) == {t.name for t in toolbox.select("toy_render")}
+    chat = toolbox.allowed_tools("toy_render", provider="openai-chat")
+    assert [entry["function"]["name"] for entry in chat["allowed_tools"]["tools"]] == names
 
 
 def test_anthropic_problems_catch_a_broken_request():
@@ -129,7 +191,7 @@ def test_anthropic_error_result_sets_is_error_and_parallel_results_share_one_mes
 
 
 def test_responses_definitions_meet_the_strict_rules(toolbox):
-    definitions = toolbox.definitions("openai-responses")
+    definitions = toolbox.definitions("openai-responses", defer=False)
     assert openai_problems(definitions) == []
     render = next(d for d in definitions if d.get("name") == "toy_ppt_render")
     assert render["strict"] is True and render["type"] == "function"

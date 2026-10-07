@@ -169,13 +169,13 @@ def test_a_handler_changes_no_definition_and_an_unknown_name_is_refused():
 
 
 def test_definitions_meet_each_providers_rules_with_batch_sent_non_strict(toolbox):
-    anthropic = toolbox.definitions("anthropic")
+    anthropic = toolbox.definitions("anthropic", defer=False)
     assert anthropic_problems(anthropic) == []
     batch = next(d for d in anthropic if d["name"] == "batch")
     assert batch["strict"] is False
     assert batch["input_schema"]["properties"]["ops"]["items"]["properties"]["arguments"][
         "additionalProperties"] is True
-    responses = toolbox.definitions("openai-responses")
+    responses = toolbox.definitions("openai-responses", defer=False)
     assert openai_problems(responses) == []
     batch = next(d for d in responses if d["name"] == "batch")
     assert batch["strict"] is False and batch["parameters"]["required"] == ["ops"]

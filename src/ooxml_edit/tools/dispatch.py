@@ -221,9 +221,14 @@ class Toolbox:
                  groups: Iterable[ToolGroup] = (), limits: Limits | None = None,
                  allow_new_problems: bool = False, workers: int = 2,
                  start_method: str = "spawn", log_arguments: bool = False,
-                 error_map: Mapping[type[BaseException], Any] | None = None) -> None:
+                 error_map: Mapping[type[BaseException], Any] | None = None,
+                 strict_first: Sequence[str] | None = None) -> None:
         self.tools: dict[str, Tool] = merge_tools(tools)
         self.formats: dict[str, DocumentFormat] = {fmt.kind: fmt for fmt in formats}
+        #: Claude's strict priority: the application's order, else each format's in turn.
+        self.strict_first: list[str] = list(dict.fromkeys(
+            strict_first if strict_first is not None
+            else [name for fmt in self.formats.values() for name in fmt.strict_first]))
         self.groups: dict[str, ToolGroup] = {group.name: group for group in groups}
         self.limits = limits or Limits()
         #: The validate gate's override: the application's to set, never the model's.
@@ -269,13 +274,42 @@ class Toolbox:
         return [tool for tool in self.tools.values() if tool.group in wanted]
 
     def definitions(self, provider: str = "anthropic", *,
-                    groups: str | Iterable[str] | None = None, **options: Any) -> list[dict[str, Any]]:
+                    groups: str | Iterable[str] | None = None, defer: bool | None = None,
+                    **options: Any) -> list[dict[str, Any]]:
         """Provider-ready tool definitions: ``anthropic``, ``openai-responses`` or
-        ``openai-chat``.  Options go to the adapter (``defer``, ``cache``, ``namespaces``)."""
+        ``openai-chat``.
+
+        ``groups`` picks what is sent: ``None`` or ``"all"`` for every tool, or the core
+        plus the named groups.  ``defer`` loads the non-core tools on demand through the
+        provider's tool search: on Claude ``defer_loading`` and the BM25 search tool, with
+        ``cache_control`` on the last core tool; on the Responses API each group a
+        ``namespace`` with ``defer_loading``, and ``tool_search``.  By default it is on when
+        every tool is sent to a provider that has tool search, and off when the application
+        picked groups.  Chat Completions has no tool search: pick groups there.  Other
+        options go to the adapter (``cache``, ``strict``, ``namespaces``).
+        """
         tools = self.select(groups)
-        if provider == "openai-responses":
+        everything = groups is None or groups == "all"
+        if defer is None:
+            defer = everything and provider in ("anthropic", "openai-responses")
+        if provider == "anthropic":
+            options.setdefault("strict_first", self.strict_first)
+            options["defer"] = defer
+        elif provider == "openai-responses":
             options.setdefault("groups", self.groups.values())
+            options.setdefault("namespaces", defer)
+            options["defer"] = defer
+        elif defer:
+            options["defer"] = defer
         return adapters.definitions_for(provider, tools, **options)
+
+    def allowed_tools(self, groups: str | Iterable[str] | None = None, *,
+                      provider: str = "openai-responses") -> dict[str, Any]:
+        """An OpenAI ``tool_choice`` limiting calls to the core and ``groups``, while the
+        ``tools`` sent (and so the cache) stay the same: for an application that sends
+        every definition without tool search and narrows by turn."""
+        names = [tool.name for tool in self.select(groups)]
+        return adapters.openai_allowed_tools(names, chat=provider == "openai-chat")
 
     def system_prompt(self, *, extra: str | None = None) -> str:
         """The shared fragment, each format's fragment, then the application's ``extra``."""
