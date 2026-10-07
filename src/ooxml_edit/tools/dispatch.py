@@ -4,7 +4,8 @@
 describe, makes sessions, emits provider definitions, and runs calls.  A call goes:
 
 1. the tool is looked up (an unknown name is ``invalid_arguments``, with the near names);
-2. the arguments -- a dict, or the JSON string OpenAI sends -- are validated against the
+2. the arguments -- a dict, or the JSON string OpenAI sends; an array or object argument
+   written as a JSON string is parsed too -- are validated against the
    tool's schema, bounds and either/or rules included, whatever the provider's strict mode
    did (``invalid_arguments`` names the field and the allowed values);
 3. the documents the call names are locked, in a fixed order;
@@ -426,6 +427,7 @@ class Toolbox:
                 raise ToolError("invalid_arguments", f"the arguments are not JSON: {exc}") from None
         if arguments is None:
             arguments = {}
+        arguments = _json_strings(tool.schema, arguments)
         try:
             clean = validate_call(tool.schema, arguments)
         except CallError as exc:
@@ -712,6 +714,34 @@ class Toolbox:
             entry.log.append(record)
         if logger.isEnabledFor(logging.INFO):
             log_call(record)
+
+
+def _json_strings(schema: Mapping[str, Any], arguments: Any) -> Any:
+    """``arguments`` with an array or object argument that came as a JSON string parsed.
+
+    A model sometimes writes a non-strict tool's array as a string holding the JSON
+    (``batch``'s ``ops: "[{...}]"``), as the OpenAI APIs send a whole call's arguments.  Only
+    a top-level property whose schema is an array or object, and only when the string
+    parses to that type, is taken; anything else is left for the validator to refuse."""
+    if not isinstance(arguments, Mapping):
+        return arguments
+    properties = schema.get("properties") or {}
+    fixed = None
+    for name, value in arguments.items():
+        kind = (properties.get(name) or {}).get("type")
+        if kind not in ("array", "object") or not isinstance(value, str):
+            continue
+        text = value.strip()
+        if not text.startswith("[" if kind == "array" else "{"):
+            continue
+        try:
+            parsed = json.loads(text)
+        except ValueError:
+            continue
+        if isinstance(parsed, list if kind == "array" else dict):
+            fixed = dict(arguments) if fixed is None else fixed
+            fixed[name] = parsed
+    return arguments if fixed is None else fixed
 
 
 def _message(exc: BaseException) -> str:

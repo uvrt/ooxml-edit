@@ -297,6 +297,19 @@ def test_a_failing_op_rolls_the_whole_batch_back_and_names_itself(toolbox, sessi
     assert CHECKS == []
 
 
+def test_ops_written_as_a_json_string_are_parsed(toolbox, session):
+    # Trial 3: the model sometimes sent batch's ops as a string holding the JSON array.
+    ops = _ops(("t_add", {"doc": "d1", "items": [{"text": "a", "ref": "x"}]}),
+               ("t_set", {"doc": "d1", "target": "$x", "text": "A"}))
+    result = call(toolbox, session, "batch", ops="\n" + json.dumps(ops, indent=1))
+    assert result.ok, result.to_json()
+    assert session.entry("d1").document.items() == ["A"]
+    # A string that is not a JSON array is still refused, naming the field.
+    for wrong in ("t_add", '{"tool": "t_add"}', "[1, 2"):
+        refused = call(toolbox, session, "batch", ops=wrong)
+        assert refused.error.code == "invalid_arguments" and refused.error.field == "ops"
+
+
 def test_an_ops_arguments_are_validated_before_anything_runs(toolbox, session):
     ops = _ops(("t_add", {"doc": "d1", "items": [{"text": "a"}]}),
                ("t_set", {"doc": "d1", "target": "item:1"}))
