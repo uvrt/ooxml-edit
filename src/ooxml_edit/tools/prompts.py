@@ -8,7 +8,7 @@ its address grammar and its describe and read tools.
 
 The shared fragment covers, in order: planning (``describe`` once, then read only what the
 task touches; tools loaded on demand), addresses and refs, fewer and larger calls (``items[]``
-and ``batch``; layout tools rather than arithmetic), results and their ``checks``, rendering
+and ``batch``), results and their ``checks``, rendering
 sparingly, checking before saving, units, and document content as data.
 
 An application's own rules -- a house style, a palette, when a legend is needed -- go in
@@ -45,8 +45,6 @@ Fewer, larger calls
 - Tools that take items[] change many objects in one call. batch runs calls to several \
 tools in one call: in order, all or nothing, one undo step. Prefer these to a call per \
 object.
-- Let the layout and placement tools position things rather than computing coordinates \
-yourself.
 
 Results
 - Every result is JSON: ok, summary, what changed, was created or removed, warnings, and \

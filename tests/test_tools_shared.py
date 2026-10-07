@@ -138,10 +138,11 @@ def test_every_shared_definition_is_in_the_subset_and_batch_alone_is_not_strict(
             assert definition.strict
             check_subset(definition.canonical)
     assert set(shared.SPECS) >= {
-        "open_document", "new_document", "save_document", "list_documents", "close_document",
+        "open_document", "new_document", "save_document", "close_document",
         "undo", "describe", "find_text", "replace_text", "render", "check", "edit_chart",
         "edit_smartart", "set_properties", "batch"}
     assert "read_chart" not in shared.SPECS          # edit_chart's read action (T5b)
+    assert "list_documents" not in shared.SPECS      # the application names them (post-T4)
     assert shared.CORE_NAMES == ["open_document", "new_document", "save_document", "undo",
                                  "describe", "find_text", "replace_text", "render", "check",
                                  "batch"]
@@ -161,7 +162,8 @@ def test_a_free_form_object_is_refused_in_a_strict_tool():
 
 def test_two_kinds_merge_into_one_tool_and_the_session_tools_are_kept_once(toolbox):
     assert set(toolbox.tools["save_document"].handlers) == {"docx", "pptx"}
-    assert toolbox.tools["undo"].handlers == shared.SESSION_TOOLS[3].handlers
+    undo = next(t for t in shared.SESSION_TOOLS if t.name == "undo")
+    assert toolbox.tools["undo"].handlers == undo.handlers
     names = [t.name for t in toolbox.tools.values()]
     assert len(names) == len(set(names))
 
@@ -226,9 +228,7 @@ def test_open_document_on_a_text_blob_points_to_read_blob(toolbox, session, name
     assert "read_blob" in toolbox.system_prompt()
 
 
-def test_list_close_and_undo(toolbox, session):
-    listed = call(toolbox, session, "list_documents")
-    assert [d["doc"] for d in listed.data["documents"]] == ["d1", "d2"]
+def test_close_and_undo(toolbox, session):
     call(toolbox, session, "t_add", doc="d1", items=[{"text": "a"}])
     undone = call(toolbox, session, "undo", doc="d1")
     assert undone.ok and undone.data["steps"] == 1 and session.entry("d1").document.items() == []

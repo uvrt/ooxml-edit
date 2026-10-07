@@ -431,7 +431,8 @@ class Session:
         with self._lock:
             if len(self.documents) >= self.limits.max_documents:
                 raise LimitError(f"{len(self.documents)} documents are open; at most "
-                                 f"{self.limits.max_documents}")
+                                 f"{self.limits.max_documents}: close_document one you are "
+                                 "done with (save it first if it changed)")
             used = sum(entry.size for entry in self.documents.values())
             if used + size > self.limits.max_total_document_bytes:
                 raise LimitError(f"open documents would total {used + size} bytes; at most "
