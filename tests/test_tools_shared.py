@@ -316,6 +316,14 @@ def test_ops_written_as_a_json_string_are_parsed(toolbox, session):
     result = call(toolbox, session, "batch", ops="\n" + json.dumps(ops, indent=1))
     assert result.ok, result.to_json()
     assert session.entry("d1").document.items() == ["A"]
+    # A line break written \v inside the string (no JSON escape) is read as U+000B; an
+    # escaped backslash before a v is left alone.  (The fix round's p8 lost two turns to it.)
+    items = '[{"text": "SteerCo 1:\\vsavings"}, {"text": "a\\\\v"}]'
+    from ooxml_edit.tools.dispatch import _json_strings
+
+    schema = toolbox.tool("t_add").schema
+    assert _json_strings(schema, {"doc": "d1", "items": items})["items"] == [
+        {"text": "SteerCo 1:\vsavings"}, {"text": "a\\v"}]
     # A string that is not a JSON array is still refused, naming the field.
     for wrong in ("t_add", '{"tool": "t_add"}', "[1, 2"):
         refused = call(toolbox, session, "batch", ops=wrong)

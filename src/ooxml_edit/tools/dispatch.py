@@ -716,13 +716,19 @@ class Toolbox:
             log_call(record)
 
 
+#: ``\v`` in JSON text, not itself escaped: no JSON escape, but what a model writes for U+000B.
+_VERTICAL_TAB = re.compile(r"(?<!\\)((?:\\\\)*)\\v")
+
+
 def _json_strings(schema: Mapping[str, Any], arguments: Any) -> Any:
     """``arguments`` with an array or object argument that came as a JSON string parsed.
 
     A model sometimes writes a non-strict tool's array as a string holding the JSON
-    (``batch``'s ``ops: "[{...}]"``), as the OpenAI APIs send a whole call's arguments.  Only
-    a top-level property whose schema is an array or object, and only when the string
-    parses to that type, is taken; anything else is left for the validator to refuse."""
+    (``batch``'s ``ops: "[{...}]"``, a long ``items``), as the OpenAI APIs send a whole
+    call's arguments.  Only a top-level property whose schema is an array or object, and
+    only when the string parses to that type, is taken; anything else is left for the
+    validator to refuse.  Inside such a string a model writes a line break as ``\\v``, which
+    JSON has no escape for: it is read as U+000B, the line break the text tools take."""
     if not isinstance(arguments, Mapping):
         return arguments
     properties = schema.get("properties") or {}
@@ -737,7 +743,10 @@ def _json_strings(schema: Mapping[str, Any], arguments: Any) -> Any:
         try:
             parsed = json.loads(text)
         except ValueError:
-            continue
+            try:
+                parsed = json.loads(_VERTICAL_TAB.sub(r"\1\\u000b", text))
+            except ValueError:
+                continue
         if isinstance(parsed, list if kind == "array" else dict):
             fixed = dict(arguments) if fixed is None else fixed
             fixed[name] = parsed
