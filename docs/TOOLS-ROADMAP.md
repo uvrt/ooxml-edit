@@ -4,7 +4,7 @@ This is the working plan for the **tool layer** over pptx-agent and docx-agent. 
 
 **Effort key:** S ≈ half a day · M ≈ 1–3 days · L ≈ 1–2 weeks · XL ≈ 3+ weeks.
 
-**Next step: T4 and T5** (charts and the remaining gaps; guidance and loading), then trial 3 (T6). T0, the plumbing, is in ooxml-edit 0.3.0 (0.4.0: shared definitions, refs, batch); T1 (PowerPoint core), T2 (Word core) and T3 (layout and complex diagrams) are done.
+**Next step: T4** (charts and the remaining gaps) and T5's follow-up (the tool rationalisation the user decides), then trial 3 (T6). T0, the plumbing, is in ooxml-edit 0.3.0 (0.4.0: shared definitions, refs, batch; 0.6.0: T5's loading and strict rules); T1 (PowerPoint core), T2 (Word core), T3 (layout and complex diagrams) and T5 (guidance and loading) are done.
 
 ---
 
@@ -131,6 +131,7 @@ These come from the earlier research against the official docs, re-checked onlin
   - **Unsupported:** recursion, `minimum`/`maximum`/`multipleOf`, `minLength`/`maxLength`, `maxItems`, `minItems > 1`, `oneOf`.
   - **Per-request limits [verified T0]:** 20 strict tools, 24 optional parameters, 16 union-typed parameters (`anyOf` or type arrays). "These limits apply to the combined total across all strict schemas in a single request"; non-strict tools don't count (https://platform.claude.com/docs/en/build-with-claude/structured-outputs#explicit-limits).
   - Beyond those, an undocumented grammar-size limit returns a 400 ("Schema is too complex for compilation"), and schema compilation times out after 180 s.
+  - **[measured T5, Sonnet 5.5, 2026-10-07]** The grammar limit bites well inside 20/24/16. Twelve strict deck tools with 24 optional parameters and 33 free-text strings compiled. Adding `save_document` (2 more strings) or three plain strings returned "Schema is too complex." Adding three integers or one enum did not. Free-text strings (no enum) are the dimension that counts, but not the only one: one 32-string set also failed. The adapter therefore caps strict tools at 32 free-text strings and sends only **writing** tools strict by default.
   - `additionalProperties: false` is required on every object; `oneOf` is in neither the supported nor the unsupported list, so it is treated as unsupported. Numeric bounds are still unsupported.
 - **`tool_result` content** is a string or a list of `text`, `image`, `document` and `search_result` blocks, with `is_error` (https://platform.claude.com/docs/en/agents-and-tools/tool-use/handle-tool-calls).
   - Results must come first in the user message, and all parallel results go in one message (https://platform.claude.com/docs/en/agents-and-tools/tool-use/parallel-tool-use).
@@ -147,6 +148,8 @@ These come from the earlier research against the official docs, re-checked onlin
   - Keep 3–5 tools non-deferred. Selection "degrades once you exceed 30–50 available tools".
   - A deferred tool cannot carry `cache_control` (a 400); at least one tool must not be deferred; strict mode and `defer_loading` work together.
   - **[verified T0]** The compatibility table lists Opus 5.5, Sonnet 5.5 and Haiku 4.5, **not Sonnet 5**. A scripted Sonnet 5 session must confirm tool search before T5 relies on deferred loading for trial 3; without it, the app picks groups up front (`groups=[…]`).
+  - **[verified T5]** On Sonnet 5.5, with every deck or Word tool sent and the non-core ones deferred, one request found a deferred tool through BM25 search and called it with valid arguments. The deck request found `ppt_align`, the Word request `word_set_tracking`. Deferred definitions are not billed as input until they are loaded: a request carried about 5.2k cached tokens for the core, not the 20k of every tool.
+  - **[measured T5]** count-tokens rejects the tool-search server tool; count without it. It counts tool definitions at about **1.48 times** the offline estimate (compact JSON ÷ 3.5), and Sonnet 5.5 and Opus 5.5 count them the same. A tool's own framing costs about 50 tokens, and the hidden tool prompt 286.
 
 ### OpenAI (adapter only; not called until a GPT-6 trial)
 
@@ -180,7 +183,7 @@ Every tool's **canonical schema** is written in this subset, and a test enforces
 | root `type: object`; `properties`; `required`; `additionalProperties: false` on every object | `oneOf`, `allOf`, `not`, `if/then/else`, `patternProperties`, `dependent*` |
 | `string`, `integer`, `number`, `boolean`, `array` (`items`), nested `object` | numeric bounds (`minimum`, `maximum`, `multipleOf`): Anthropic lacks them |
 | `enum` of strings (at most 50 values per enum, 1000 in total) | `minLength`/`maxLength`, `maxItems`, `minItems > 1` |
-| `description` on every property | recursion and `$ref` (inline everything; nesting at most 6 levels) |
+| `description` on every top-level property; nested properties and array items only where the name, type and enum do not say it all (T5: every description is sent with every request, about 6 tokens of framing each) | recursion and `$ref` (inline everything; nesting at most 6 levels) |
 | `format: "date"` and `"date-time"` only | `format: "uri"` (OpenAI lacks it), `pattern` (kept out for simplicity) |
 | names matching `^[a-z][a-z0-9_]{0,63}$` | `default` (both providers: say it in the description) |
 | | free-form objects (`additionalProperties: true`): every key is named. One exception: a free-form object in a non-strict tool (`batch.ops[].arguments`), which the dispatcher validates against the named tool |
@@ -189,12 +192,13 @@ The canonical form marks each property *required* or *optional*; it does not use
 
 **Anthropic adapter (used now)**
 - Optional properties are left out of `required`.
-- `strict: true` is set on a tool **only while the request stays under the strict limits [verified T0: 20 tools, 24 optional parameters, 16 unions, summed over the strict tools]** (D4):
-  - Writing tools are strict first, in a fixed priority order.
+- `strict: true` is set on a tool **only while the request stays under the strict limits [verified T0: 20 tools, 24 optional parameters, 16 unions, summed over the strict tools; T5: at most 32 free-text strings]** (D4):
+  - Only writing tools are strict (T5: reading tools take an id and a few options, and spending grammar on them pushed a deck request over "Schema is too complex"). They go in each format's `DocumentFormat.strict_first` order, then in registration order.
   - The rest are sent `strict: false`, and the dispatcher validates them; it validates every call anyway. Option-heavy tools (`ppt_layout`, `ppt_copy`, `ppt_set_shape`, `word_format`) will usually fall in this group.
   - Union-typed parameters are never generated, so the union limit cannot bite.
 - `defer_loading` on non-core tools, plus `tool_search_tool_bm25`.
 - `cache_control` on the last core tool.
+- **Default (T5):** `toolbox.definitions("anthropic")` sends every tool, the non-core ones deferred; naming `groups=[…]` loads those groups instead, with no tool search.
 - `tool_choice` is always `auto`.
 - An image result becomes `[{type:"text"}, {type:"image", source:{type:"base64", media_type:"image/png", data}}]`; an error sets `is_error: true`.
 
@@ -678,7 +682,7 @@ These pairs stay format-specific, because their parameters differ too much:
 
 ## Model guidance
 
-**A system-prompt fragment of about 600 tokens, shipped as `prompts.SYSTEM`**, plus one fragment per format of about 300 tokens. The app concatenates them, followed by its own guidance (see "The thinking layer"). The shipped fragments are mechanics only, with no style rules.
+**A system-prompt fragment of about 600 tokens, shipped as `prompts.SYSTEM`**, plus one fragment per format of about 300–400 tokens (T5: 1,163 and 1,111 counted online, shared plus format). The app concatenates them, followed by its own guidance (see "The thinking layer"). The shipped fragments are mechanics only, with no style rules.
 
 1. **Plan before editing:**
    - Call `*_describe` once, then read only what the task touches.
@@ -705,39 +709,112 @@ These pairs stay format-specific, because their parameters differ too much:
    - Points everywhere, dates `YYYY-MM-DD`.
    - Prefer theme colour names to hex, so the result follows the theme when it changes.
 
-**Keeping descriptions short:**
+**Keeping descriptions short (done in T5):**
 - Each tool description is 1–3 sentences: the purpose, when to use it instead of its neighbour, and what it returns.
-- Each property description is at most 15 words, with units and the default stated.
+- Each property description is at most 15 words, with the default stated. Units are not repeated, because the prompt says lengths are points.
+- Nested properties whose name says it all go without a description (`bold`, `x`, a run's `font`). An empty `required` list is left out.
 - Enums replace prose.
 - The text spec is described once (in `ppt_add_shape`) and referred to by the others.
 - No `input_examples` at first. Trial 3 checks whether one `ppt_copy` example earns its tokens on Claude.
-- **Budget, checked by a test:** the core group is ≤ 4,000 tokens per format, and all definitions ≤ 16,500 tokens per format for now (12,000 before T3; T5's description pass is to bring it back down). Estimated offline at 3.5 characters per token: after T3 the pptx core is 3,907 and all 40 deck tools 16,394 (16,745 with `ppt_draw`); the Word core is 2,940. They are to be counted with Anthropic's count-tokens endpoint in CI (marked online) once an API key is available. OpenAI counts are estimated offline until a GPT-6 trial is planned.
 
-**Tool groups and deferred loading:**
+**Budgets after T5's description pass.** Offline is compact JSON ÷ 3.5. Online is Anthropic's count-tokens on `claude-sonnet-5-5` and `claude-opus-5-5`, which count the same; the online figures include the 286-token hidden tool prompt.
+
+| | Offline before | Offline after | Online before | Online after |
+|---|---|---|---|---|
+| Deck core (13) | 3,907 | 3,313 | 5,821 | 5,051 |
+| All deck tools (40) | 16,394 | 13,882 | 23,974 | 20,622 |
+| Word core (13) | 3,199 | 2,878 | 4,664 | 4,250 |
+| All Word tools (44) | 12,592 | 11,444 | 17,581 | 16,123 |
+| Shared prompt + deck fragment | 882 | 986 | 1,055 | 1,163 |
+| Shared prompt + Word fragment | 832 | 968 | 977 | 1,111 |
+
+- **What the budget tests check:**
+  - the core at most 4,000 offline for each format;
+  - all definitions at most 12,000 offline for Word (restored);
+  - all definitions at most **14,000 offline for decks**.
+- **Why decks are not at 12,000:**
+  - What remains is structure, not prose:
+    - the text spec in three tools;
+    - data positions (`place`) in three places;
+    - the outline in three.
+  - Without any description at all, the 40 deck tools still count 13,400 online.
+  - Only merging tools brings it down further. That is the rationalisation below, which the user decides.
+- **The online truth is about 1.48 times the offline estimate.** A 12,000 budget in real tokens would be about 8,100 offline. Neither format reaches that without dropping groups.
+- What a request pays is the **loaded** set: the core plus the tool-search tool, about 5k for decks and 4.2k for Word, cached. The deferred tools cost nothing until tool search loads them.
+
+**Tool groups and deferred loading (final in T5):**
 - **Core, never deferred (12 per format, plus the shared `batch`):**
   - shared: `open_document`, `new_document`, `save_document`, `undo`, `find_text`, `replace_text`, `render`, `check`;
   - pptx: `ppt_describe`, `ppt_read_slides`, `ppt_set_text`, `ppt_set_shape`;
   - Word: `word_describe`, `word_read`, `word_set_text`, `word_format`.
-- **Groups** (every tool is in exactly one; each has fewer than 10, as OpenAI recommends for namespaces):
+- **Groups.** Every tool is in exactly one group, and each has fewer than 10 tools, as OpenAI recommends for namespaces:
 
   | Group | Tools |
   |---|---|
-  | `shared_misc` | S4, S10–S13, S15 |
-  | `ppt_text` | P3, P5, P6 |
-  | `ppt_graphics` | P7, P10, P11, P25 |
-  | `ppt_layout` | P12, P13, P24, P26, P27 |
-  | `ppt_experimental` (opt-in, not in the defaults) | P14 |
-  | `ppt_objects` | P9, P15–P19 |
-  | `ppt_slides` | P20–P23 |
-  | `word_text` | W3, W6, W7, W8 |
-  | `word_review` | W4, W13–W15 |
-  | `word_structure` | W11, W12, W16–W20 |
-  | `word_objects` | W22–W28 |
-  | `word_style` | W10, W21, W29 |
+  | `shared_misc` (7) | `list_documents`, `close_document`, `read_blob`, `set_properties`, `edit_chart`, `read_chart`, `edit_smartart` |
+  | `ppt_text` (3) | `ppt_measure_text`, `ppt_format_text`, `ppt_set_notes` |
+  | `ppt_graphics` (4) | `ppt_add_shape`, `ppt_add_connector`, `ppt_arrange`, `ppt_copy` |
+  | `ppt_objects` (4) | `ppt_add_picture`, `ppt_add_table`, `ppt_edit_table`, `ppt_format_table` |
+  | `ppt_slides` (4) | `ppt_add_slide`, `ppt_draft_slides`, `ppt_manage_slides`, `ppt_set_theme` |
+  | `ppt_layout` (5) | `ppt_align`, `ppt_distribute`, `ppt_layout`, `ppt_scale`, `ppt_design_facts` |
+  | `ppt_experimental` (opt-in, not in the defaults) | `ppt_draw` |
+  | `word_text` (4) | `word_inspect`, `word_insert_text`, `word_delete`, `word_insert_markdown` |
+  | `word_review` (4) | `word_set_tracking`, `word_changes`, `word_review_changes`, `word_comments` |
+  | `word_structure` (7) | `word_move`, `word_copy_from`, `word_sections`, `word_headers_footers`, `word_fields`, `word_notes`, `word_links` |
+  | `word_objects` (6) | `word_insert_table`, `word_edit_table`, `word_format_table`, `word_insert_picture`, `word_drawings`, `word_controls` |
+  | `word_style` (3) | `word_lists`, `word_styles`, `word_template` |
 
-- **Anthropic:** non-core tools get `defer_loading: true` and the BM25 tool search is added; `cache_control` goes on the last core tool.
-- **OpenAI Responses (adapter):** each group is a `namespace` with `defer_loading`, plus `{type:"tool_search"}`.
-- **Without tool search** (the Chat Completions fallback, or older models), the app picks groups up front with `toolbox.definitions(groups=[…])`. `allowed_tools` (OpenAI) narrows calls without changing the cached `tools`.
+- **How an application picks (the defaults since ooxml-edit 0.6.0):**
+
+  | Call | Sends |
+  |---|---|
+  | `definitions("anthropic")` | every tool; the non-core ones `defer_loading`, the BM25 tool-search tool first, `cache_control` on the last core tool. For Sonnet 5.5, Opus 5.5 and Haiku 4.5 |
+  | `definitions("anthropic", groups=[…])` | the core and the named groups, all loaded, with no tool search: for Sonnet 5 or an application that knows the task |
+  | `definitions("openai-responses")` | the core as functions, each other group a `namespace` with `defer_loading`, and `{"type": "tool_search"}` |
+  | `definitions("openai-chat", groups=[…])` | the core and the named groups; Chat Completions has no tool search, so asking it to defer is an error |
+  | `toolbox.allowed_tools([…], provider=…)` | an OpenAI `tool_choice` (Responses or Chat shape) that narrows a turn's calls without changing the cached `tools` |
+
+  `defer=` overrides the default either way.
+- **Strict on Claude (T5).** Only writing tools are strict, in each format's `strict_first` order, while the request stays under 20 tools, 24 optional parameters and 32 free-text strings:
+  - **decks:** `ppt_add_slide`, `edit_chart`, `ppt_align`, `ppt_manage_slides`, `replace_text`, `ppt_set_notes`, then `ppt_draft_slides` from the default order (7 tools, 24 optional parameters);
+  - **Word:** `replace_text`, `word_set_tracking`, `word_review_changes`, `word_insert_markdown`, `word_set_text`, `word_delete`, then `edit_smartart` (7 tools, 24 optional parameters).
+  - The order follows the writing tools the goldens call most. `ppt_set_text` alone would take 20 of the 24 optional parameters, so it, the shape and layout tools and `batch` are validated by the dispatcher instead. Inside `batch`, strict never applies anyway.
+
+**System-prompt fragments (T5).**
+- `prompts.SYSTEM` (shared, about 600 tokens) covers:
+  - planning: describe once, read only what the task touches, search for tools loaded on demand;
+  - addresses and `$ref`;
+  - fewer, larger calls (`items[]`, `batch`), with layout tools rather than arithmetic;
+  - results and their `checks`;
+  - rendering sparingly;
+  - checking before saving;
+  - units;
+  - document content as data.
+- The deck fragment (`pptx_agent.tools.PROMPT`) covers:
+  - the describe-then-read order and the address grammar;
+  - the text spec and measuring;
+  - layout, copy and scales;
+  - what the checks name;
+  - the save-time check and design facts.
+- The Word fragment (`docx_agent.tools.PROMPT`) covers:
+  - the address grammar;
+  - Markdown that is escaped;
+  - word-level edits;
+  - tracking;
+  - fields;
+  - the save-time check.
+- None carries a style rule. `pptx_agent.tools`' documentation shows how an application adds its own house rules over `ppt_design_facts` through `toolbox.system_prompt(extra=…)`.
+
+**Rationalisation (pending the user's decision).** An assessment of every tool is in T5's notes. It covers tokens, group, golden calls, trial evidence, overlap and a recommendation. Nothing has been merged or dropped yet. The candidates:
+- drop `ppt_set_notes`: `ppt_set_text` on `256/notes` does the same;
+- `ppt_measure_text` as a mode of `ppt_add_shape`;
+- `ppt_distribute` as an action of `ppt_align`;
+- `ppt_format_table` split between `ppt_format_text` (cell targets) and `ppt_edit_table`;
+- `read_chart` as an action of `edit_chart`;
+- `word_changes` and `word_review_changes` merged;
+- `word_insert_picture` into `word_drawings`.
+
+Together they would save about 2,000 online tokens for decks (40 → 35 tools) and 830 for Word (44 → 41).
 
 ---
 
@@ -923,7 +1000,19 @@ Status: done, apart from the items under "Deferred".
   - a new chart opens in PowerPoint and Word with Edit Data matching (oracle);
   - `check` on Word reports stale fields and an empty TOC.
 
-### T5 — guidance and loading (M)
+### T5 — guidance and loading (M) — done in ooxml-edit 0.6.0
+
+Status: done; the rationalisation is a follow-up the user decides (see "Model guidance").
+- **Descriptions:** decks 16,394 → 13,882 offline (23,974 → 20,622 online); Word 12,592 → 11,444 (17,581 → 16,123).
+- **Loading:** deferred by default when every tool is sent.
+- **Strict:** writing tools only, under a new free-text-string cap.
+- **Prompts:** `prompts.SYSTEM` and the two format fragments rewritten.
+- **Online checks** (Sonnet 5.5 and Opus 5.5):
+  - count-tokens for core and all;
+  - a tiny request per format with the definitions as sent: strict, `defer_loading`, the tool-search tool and the system prompt, no 400 on either model;
+  - a tool-search session per format that found and called `ppt_align` and `word_set_tracking`.
+  - The whole of T5 spent about USD 0.35.
+- Found on the way: Claude's undocumented "Schema is too complex" limit (see "Provider facts").
 
 - **Scope:** the system-prompt fragments (mechanics only), the description pass, tool groups, deferred loading, token budgets in CI, `allowed_tools`, and the thinking-layer docs with one example app guidance.
 - **Exit:**
@@ -944,7 +1033,7 @@ T0 ─┬─▶ T1 ─┬─▶ T3 (layout, copy, design facts) ──┐
 LR3, LR4, LR5 (pptx2svg; any time) ───────────────────────▶ T6
 ```
 
-- T0, T1, T2 and T3 are done. T4 and T5 are next; T6 runs last.
+- T0, T1, T2, T3 and T5 are done. T4 is next, with T5's rationalisation; T6 runs last.
 - T3 needs T1 (the text spec and `content_area` come first).
 - T5 can start once T1 lands, but its budgets are only final after T3 and T4.
 - Trial 3 runs last, but a smoke run of the graphics tasks after T3 is cheap and worth doing.
