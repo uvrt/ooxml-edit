@@ -363,3 +363,53 @@ def test_undo_takes_back_the_refs_of_what_it_undoes(toolbox, session):
     assert entry.refs == {"x": "item:1"}
     stale = call(toolbox, session, "t_set", doc="d1", target="$y", text="B")
     assert stale.error.code == "not_found"
+
+
+# -- reading an input's text ---------------------------------------------------------------------
+
+
+def test_read_blob_reads_a_csv_a_page_at_a_time(toolbox):
+    session = toolbox.session(clock=CLOCK, limits=Limits(max_result_chars=3000))
+    rows = "\n".join(f"{i},Category {i},{i * 1.5}" for i in range(400))
+    handle = session.add_blob(("﻿id,name,value\r\n" + rows).encode("utf-8"), "spend.csv")
+    first = toolbox.dispatch(session, "read_blob", {"blob": handle})
+    assert first.ok, first.to_json()
+    assert first.data["mime"] == "text/csv" and first.data["text"].startswith("id,name,value\n")
+    assert first.data["lines"] == 401 and first.next_cursor
+    assert "\r" not in first.data["text"] and len(first.data["text"]) <= 1000
+    text, cursor = first.data["text"], first.next_cursor
+    while cursor:
+        page = toolbox.dispatch(session, "read_blob", {"blob": handle, "cursor": cursor})
+        assert page.ok and page.data["from"] == len(text)
+        text, cursor = text + page.data["text"], page.next_cursor
+    assert text == "id,name,value\n" + rows
+    assert json.loads(first.to_text())["data"]["chars"] == len(text)
+
+
+def test_read_blob_refuses_images_packages_and_binary(toolbox, session):
+    png = session.add_blob(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+                           b"\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDAT\x08\xd7c\xf8"
+                           b"\xcf\xc0\x00\x00\x03\x01\x01\x00\x18\xdd\x8d\xb0\x00\x00\x00\x00"
+                           b"IEND\xaeB`\x82", "dot.png")
+    image = call(toolbox, session, "read_blob", blob=png)
+    assert image.error.code == "invalid_arguments" and "image" in image.error.message
+    package = call(toolbox, session, "read_blob",
+                   blob=session.add_blob(synthetic.outer_package(), "more.docx"))
+    assert package.error.code == "invalid_arguments" and "open_document" in package.error.message
+    blob = session.add_blob(b"\xff\xfe\x00binary", "data.bin")
+    binary = call(toolbox, session, "read_blob", blob=blob)
+    assert binary.error.code == "invalid_arguments"
+    assert call(toolbox, session, "read_blob", blob="b99").error.code == "not_found"
+    markdown = session.add_blob(b"# Notes\n\nPlain *text*.\n", "notes.md")
+    read = call(toolbox, session, "read_blob", blob=markdown)
+    assert read.ok and read.data["text"] == "# Notes\n\nPlain *text*.\n" and read.data["lines"] == 3
+
+
+def test_read_blob_is_a_session_tool_outside_batch(toolbox, session):
+    handle = session.add_blob(b"a,b\n1,2\n", "t.csv")
+    tool = toolbox.tools["read_blob"]
+    assert tool.group == shared.MISC and not tool.batchable and not tool.mutates
+    assert tool.strict and tool.handlers == shared.SESSION_TOOLS[-1].handlers
+    refused = call(toolbox, session, "batch",
+                   ops=[{"tool": "read_blob", "arguments": {"blob": handle}}])
+    assert refused.error.code == "invalid_arguments"

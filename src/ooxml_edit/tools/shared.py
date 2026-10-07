@@ -24,9 +24,10 @@ How a call finds its handler:
 
 * a tool that names a document (``doc``) runs the handler for that document's kind;
 * ``new_document`` names no document yet: its ``kind`` argument picks the handler;
-* ``open_document``, ``list_documents``, ``close_document`` and ``undo`` work the same for
-  every kind, and their handlers are here, in :data:`SESSION_TOOLS`.  Both libraries list
-  the same objects; the toolbox keeps one.
+* ``open_document``, ``list_documents``, ``close_document``, ``undo`` and ``read_blob``
+  (an input's text, a page at a time) work the same for every kind, and their handlers
+  are here, in :data:`SESSION_TOOLS`.  Both libraries list the same objects; the toolbox
+  keeps one.
 
 A parameter that applies to one format says so in its description (``slides`` for decks,
 ``pages`` and ``range`` for documents); the handler of the other kind answers
@@ -40,7 +41,7 @@ from typing import Any, Callable, Mapping
 
 from .registry import (CORE, Param, Tool, ToolGroup, array, boolean, build_schema,
                        free_object, integer, number, obj, string)
-from .results import Result, ToolError
+from .results import Result, ToolError, page_text
 
 #: The group of the shared tools that are not core: loaded on demand.
 MISC = "shared_misc"
@@ -249,6 +250,13 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
           "language": string("Default editing language, e.g. en-US.", optional=True),
           "subject": string("Subject.", optional=True)},
          group=MISC, mutates=True),
+    # S15
+    Spec("read_blob",
+         "Read an input the user supplied as text (CSV, Markdown, plain text, JSON), a page "
+         "at a time. Not for images or documents: open those with their tools.",
+         {"blob": string("Blob handle of the input, e.g. b2."),
+          "cursor": string("next_cursor from the previous page.", optional=True)},
+         group=MISC, documents=_no_documents, batchable=False),
     # the generic batch
     Spec("batch",
          "Run several tool calls as one: in order, all or none, one undo step, checks once "
@@ -333,6 +341,38 @@ def _undo(call: Any, doc: str, steps: int = 1, redo: bool = False) -> Result:
                   data={"steps": done, "version": entry.version})
 
 
+#: Text a blob may hold, by type; anything else that decodes as UTF-8 is read too.
+_TEXT_TYPES = ("text/", "application/json", "application/csv", "application/xml")
+
+
+def _read_blob(call: Any, blob: str, cursor: str | None = None) -> Result:
+    found = call.blob(blob)
+    mime = found.mime or "application/octet-stream"
+    if mime.startswith("image/"):
+        raise ToolError("invalid_arguments", f"{blob} is an image ({mime}); read_blob reads "
+                        "text. Use a picture tool to place it.", field="blob")
+    if found.data.startswith(b"PK"):
+        raise ToolError("invalid_arguments", f"{blob} is a package ({found.name}); open it "
+                        "with open_document.", field="blob")
+    try:
+        text = found.data.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise ToolError("invalid_arguments", f"{blob} ({mime}) is not UTF-8 text",
+                        field="blob") from None
+    if not mime.startswith(_TEXT_TYPES) and "\x00" in text:
+        raise ToolError("invalid_arguments", f"{blob} ({mime}) is binary, not text",
+                        field="blob")
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    page, next_cursor = page_text(text, cursor=cursor,
+                                  limit=max(1000, call.limits.max_result_chars - 2000))
+    start = int(cursor[1:]) if cursor else 0
+    data = {"blob": blob, "name": found.name, "mime": mime, "chars": len(text),
+            "lines": text.count("\n") + (0 if text.endswith("\n") or not text else 1),
+            "from": start, "text": page}
+    return Result(summary=f"Read {len(page):,} of {len(text):,} characters of {found.name}",
+                  data=data, next_cursor=next_cursor)
+
+
 #: The shared tools whose handlers serve every kind.  Each format library lists these same
 #: objects in its tools; the toolbox keeps one of each.
 SESSION_TOOLS: list[Tool] = [
@@ -341,6 +381,7 @@ SESSION_TOOLS: list[Tool] = [
     SPECS["close_document"].make({None: _close_document}),
     SPECS["undo"].make({None: _undo}),
     SPECS["batch"].make({None: _composite}),
+    SPECS["read_blob"].make({None: _read_blob}),
 ]
 
 __all__ = ["CORE_NAMES", "GROUPS", "KINDS", "MISC", "SESSION_TOOLS", "SPECS", "Spec",
