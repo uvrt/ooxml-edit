@@ -218,6 +218,94 @@ def canonical(schema: Mapping[str, Any]) -> dict[str, Any]:
     return strip(copy.deepcopy(dict(schema)))
 
 
+def required_first(schema: Mapping[str, Any]) -> dict[str, Any]:
+    """``schema`` with every object's required properties before its optional ones, each
+    part in its given order, at any depth.
+
+    Strict decoding writes an object's keys in the schema's order: once the model has
+    written a property, it can no longer write one listed before it.  A model writes the
+    arguments it must give first (``doc``, then where), so an optional property listed
+    before a later required one is lost -- Claude's strict grammar dropped
+    ``word_insert_markdown``'s ``markdown`` when the model wrote ``at`` (listed after it)
+    first.  With the required ones first, every optional property can still follow.
+    """
+
+    def order(node: Any) -> Any:
+        if not isinstance(node, Mapping):
+            return node
+        node = dict(node)
+        properties = node.get("properties")
+        if isinstance(properties, Mapping):
+            required = set(node.get("required", ()))
+            names = ([name for name in properties if name in required]
+                     + [name for name in properties if name not in required])
+            node["properties"] = {name: order(properties[name]) for name in names}
+        if isinstance(node.get("items"), Mapping):
+            node["items"] = order(node["items"])
+        return node
+
+    return order(copy.deepcopy(dict(schema)))
+
+
+def required_after_optional(schema: Mapping[str, Any]) -> list[str]:
+    """The dotted names of required properties listed after an optional one, at any depth:
+    what :func:`required_first` puts right."""
+    found: list[str] = []
+
+    def visit(node: Any, where: str) -> None:
+        if not isinstance(node, Mapping):
+            return
+        properties = node.get("properties")
+        if isinstance(properties, Mapping):
+            required = set(node.get("required", ()))
+            seen_optional = False
+            for name, child in properties.items():
+                if name not in required:
+                    seen_optional = True
+                elif seen_optional:
+                    found.append(f"{where}.{name}" if where else name)
+                visit(child, f"{where}.{name}" if where else name)
+        if isinstance(node.get("items"), Mapping):
+            visit(node["items"], where + "[]")
+
+    visit(schema, "")
+    return found
+
+
+def example_arguments(schema: Mapping[str, Any]) -> dict[str, Any]:
+    """Arguments that give every property, optional ones included, at any depth: a string
+    named after its property, the first enum value, ``2``, ``2.5``, ``true``, one array item.
+
+    For checking a provider's strict decoding online: ask for a call with these and see
+    that every property arrives.  The values satisfy the canonical schema, not a tool's
+    own rules (its bounds, either/or groups or addresses)."""
+
+    def value(node: Mapping[str, Any], name: str) -> Any:
+        kind = node.get("type")
+        if kind == "object":
+            return {key: value(child, key)
+                    for key, child in (node.get("properties") or {}).items()}
+        if kind == "array":
+            return [value(node.get("items") or {"type": "string"}, name)]
+        if kind == "string":
+            if node.get("enum"):
+                return node["enum"][0]
+            if node.get("format") == "date":
+                return "2026-10-07"
+            if node.get("format") == "date-time":
+                return "2026-10-07T09:00:00Z"
+            return f"{name} 1"
+        if kind == "integer":
+            return 2
+        if kind == "number":
+            return 2.5
+        if kind == "boolean":
+            return True
+        return None
+
+    return value(schema, "")
+
+
 def walk_properties(schema: Mapping[str, Any]) -> Iterable[tuple[str, Mapping[str, Any], bool]]:
     """Every property at any depth: ``(dotted name, schema, required)``."""
 

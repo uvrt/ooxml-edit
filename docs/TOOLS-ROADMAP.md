@@ -4,7 +4,7 @@ This is the working plan for the **tool layer** over pptx-agent and docx-agent. 
 
 **Effort key:** S ≈ half a day · M ≈ 1–3 days · L ≈ 1–2 weeks · XL ≈ 3+ weeks.
 
-**Next step: T4** (charts and the remaining gaps), then trial 3 (T6). T0, the plumbing, is in ooxml-edit 0.3.0 (0.4.0: shared definitions, refs, batch; 0.6.0: T5's loading and strict rules; 0.7.0: T5's rationalisation, with the shared `describe`, `edit_chart`'s read action and `Tool.reads`); T1 (PowerPoint core), T2 (Word core), T3 (layout and complex diagrams) and T5 (guidance, loading and the rationalisation) are done.
+**Next step: T4** (charts and the remaining gaps). Trial 3 (T6) has run on Sonnet 5.5, and its fixes (T6b) are in ooxml-edit 0.8.0. T0, the plumbing, is in ooxml-edit 0.3.0 (0.4.0: shared definitions, refs, batch; 0.6.0: T5's loading and strict rules; 0.7.0: T5's rationalisation, with the shared `describe`, `edit_chart`'s read action and `Tool.reads`; 0.8.0: trial 3's fixes, among them required properties first in every schema); T1 (PowerPoint core), T2 (Word core), T3 (layout and complex diagrams), T5 (guidance, loading and the rationalisation) and T6 (trial 3) are done.
 
 ---
 
@@ -133,6 +133,7 @@ These come from the earlier research against the official docs, re-checked onlin
   - Beyond those, an undocumented grammar-size limit returns a 400 ("Schema is too complex for compilation"), and schema compilation times out after 180 s.
   - **[measured T5, Sonnet 5.5, 2026-10-07]** The grammar limit bites well inside 20/24/16. Twelve strict deck tools with 24 optional parameters and 33 free-text strings compiled. Adding `save_document` (2 more strings) or three plain strings returned "Schema is too complex." Adding three integers or one enum did not. Free-text strings (no enum) are the dimension that counts, but not the only one: one 32-string set also failed. The adapter therefore caps strict tools at 32 free-text strings and sends only **writing** tools strict by default.
   - `additionalProperties: false` is required on every object; `oneOf` is in neither the supported nor the unsupported list, so it is treated as unsupported. Numeric bounds are still unsupported.
+  - **[measured trial 3, Sonnet 5.5]** Strict decoding writes an object's keys **in schema order**: once a key is written, no key listed before it can follow. `word_insert_markdown` listed `doc, markdown, blob, at`; the model writes `doc` and `at` first, so `markdown` could no longer be written and the call arrived as `{doc, at, key}`. Three runs looped 17–40 times on it. A probe of three requests each: strict in that order dropped `markdown` 3/3, `strict: false` kept it 3/3, and strict with the required properties first kept it 3/3. The adapters therefore send every object's required properties first (T6b), and `anthropic_problems` flags a strict tool that does not.
 - **`tool_result` content** is a string or a list of `text`, `image`, `document` and `search_result` blocks, with `is_error` (https://platform.claude.com/docs/en/agents-and-tools/tool-use/handle-tool-calls).
   - Results must come first in the user message, and all parallel results go in one message (https://platform.claude.com/docs/en/agents-and-tools/tool-use/parallel-tool-use).
 - **Images [verified T0]:**
@@ -191,7 +192,7 @@ Every tool's **canonical schema** is written in this subset, and a test enforces
 The canonical form marks each property *required* or *optional*; it does not use type unions. Where a tool takes one of two shapes (plain `text` or a `paragraphs` spec), they are two optional properties, and the dispatcher requires exactly one. Each adapter then handles its own provider's rules.
 
 **Anthropic adapter (used now)**
-- Optional properties are left out of `required`.
+- Optional properties are left out of `required` and listed after the required ones, at every level (trial 3: strict decoding writes keys in schema order).
 - `strict: true` is set on a tool **only while the request stays under the strict limits [verified T0: 20 tools, 24 optional parameters, 16 unions, summed over the strict tools; T5: at most 32 free-text strings]** (D4):
   - Only writing tools are strict (T5: reading tools take an id and a few options, and spending grammar on them pushed a deck request over "Schema is too complex"). They go in each format's `DocumentFormat.strict_first` order, then in registration order.
   - The rest are sent `strict: false`, and the dispatcher validates them; it validates every call anyway. Option-heavy tools (`ppt_layout`, `ppt_copy`, `ppt_set_shape`, `word_format`) will usually fall in this group.
@@ -214,6 +215,7 @@ The canonical form marks each property *required* or *optional*; it does not use
 
 **Dispatcher (all providers)**
 - Validates each call against the canonical schema, including the bounds and either/or rules the subset cannot express, before running it.
+- An array or object argument written as a JSON string (a long `items`, `batch`'s `ops`) is parsed first; inside it, a `\v` line break, which JSON has no escape for, is read as U+000B (trial 3 and its fix round).
 - A schema miss returns an `invalid_arguments` error naming the field and the allowed values.
 
 **Design consequence: few optional parameters.** Tools keep most parameters required, and put variety in an `action` enum. That is the main reason the tool list below is "about 40 coarse tools", not 120 fine ones.
@@ -1031,13 +1033,63 @@ Status: done; the rationalisation the user then decided is T5b, below.
 - **Trial 3 adds small Word tasks** so that tools no golden calls are exercised: a landscape section for a wide table (`word_sections`), a footer with "page X of Y" (`word_headers_footers`), and a footnote citing a source (`word_notes`).
 
 
-### T6 — trial 3 (M; Sonnet 5.5 only)
+### T6 — trial 3 (M; Sonnet 5.5 only) — done
 
 - **Scope:** the harness, 40 runs (including the read-view comparison), grading, and a report in the trial-2 format, written by the main session.
 - **Small Word tasks for unproven tools** (from T5b): a landscape section for a wide table, a footer with "page X of Y", and a footnote citing a source; and w3 (a table and chart from a CSV, through `read_blob`) restored.
 - **Exit:**
   - the report is written, and G2 is decided by its pre-registered rule;
   - every gap it finds is filed against T1–T4 or the libraries.
+
+Status: done. Claude Sonnet 5.5 ran every task through the tools only (the Messages API, the definitions as the adapter sends them: core loaded, the rest deferred behind tool search, prompt caching on).
+- **Success** (every required check, Office opens the file unprompted, a blind visual grade of at least 8/10): **36 of 38** main runs. Both misses were m1, on label placement. On the 12 tasks trial 2 also ran: 24/24, against trial 2's 20/24.
+- **Effort:** 13.7 tool calls, USD 0.156 and 1.0 minute per main run on average (the Python black-box route of the spike: 39 calls, 15.6 minutes on the graphics tasks; here 11.4 calls, 2.0 minutes). All 46 runs cost USD 8.54.
+- **Office:** 28/28 decks and 18/18 documents opened with no prompt.
+- **G2 decided:** the SVG read view scored 8.50 against geometry's 9.13 and cost more (306k against 275k processed tokens), so **`geometry` stays the default**.
+- **`ppt_draw`** scored 9.50 against 9.13 (within grader noise) with 5% fewer calls but 21% more tokens: **it stays experimental**.
+- **Findings,** fixed in T6b:
+  1. (S1) strict decoding dropped `word_insert_markdown`'s `markdown`, listed before the required `at`; three runs looped 17–40 times;
+  2. `ppt_layout`, `ppt_scale`, `ppt_copy` and `ppt_align` went unused in 16 graphics runs although search loaded them 23 times;
+  3. a run saved with collisions its own checks had reported;
+  4. `render` on a document lost the first call to `slides` in 10 of 18 Word runs;
+  5. `open_document` was tried on text inputs six times;
+  6. `word_headers_footers` wrote "Confidential1 of 5" for `page_x_of_y`, and refused `\n` with code `unit`;
+  7. `batch` ops sent as a JSON string;
+  8. "text or paragraphs, not both" refusals inside `batch`;
+  9. docx-agent's layout stopped at w7's auto-fit table.
+
+### T6b — trial 3's fixes (S) — done in ooxml-edit 0.8.0
+
+- **Required properties first (finding 1).** `build_schema` lists an object's required properties before its optional ones, every adapter sends schemas that way, and `anthropic_problems` flags a strict tool that does not. Every strict tool was audited in both formats: of the tools sent strict, only `word_insert_markdown` had a required property (`at`) after an optional one. Several non-strict tools had one too (`ppt_read_slides`, `ppt_add_connector`, `word_copy_from`, `word_insert_table` and others). Now no tool has one, at any depth. The OpenAI adapters send every property required anyway, so nothing could be dropped there; they get the same order.
+  - **The probe again,** three requests each: strict as now sent (`doc, at, markdown, blob, …`) kept `markdown` 3/3; strict in trial 3's order still dropped it 3/3.
+  - **A provider-marked online check** in each library sends every strict tool one scripted request (`tool_choice` auto) asking for a call with every argument, the optional ones listed first, and asserts each arrives. All 11 strict tools passed (decks: `ppt_add_slide`, `ppt_draft_slides`, `ppt_manage_slides`, `edit_chart`, `ppt_align`; Word: `replace_text`, `edit_chart`, `word_insert_markdown`, `word_set_tracking`, `word_changes`, `word_template`). The free-text-string cap of 32 still holds.
+  - **`word_insert_markdown` keeps `markdown` and `blob` as optional alternatives.** With the order fixed, nothing is lost, and the blob form is what lets a long draft go in without the model writing it out (w1 used it in both runs). Requiring `markdown` would force an empty string beside every `blob` call, the same either/or rule in a worse form.
+- **The layout tools (finding 2).** The deck prompt now names the cases: labels beside points or bubbles go to `ppt_layout` `place_labels` with `max_center`; positions from dates or scores to a `ppt_scale` and `place`; a repeated element is built once and copied with `ppt_copy`. The four tools' descriptions say the same.
+  - **The core:** `ppt_layout` in the deck core would count **6,935** tokens against the 5,500 budget (5,097 without it). It stays deferred (O3).
+  - **Measured, and not solved:** the sharper prompt changed nothing in the re-runs (0 layout calls in m1 ×2 and p8, with `ppt_layout` loaded every time). A small A/B with `ppt_layout` in the core gave 0 calls in m1 ×2 too, and both missed the label check by 0.01 in. So neither more prompting nor loading gets the tool used; what would is open (see "Open decisions", O4).
+- **Facts at save (finding 3).** A deck's `save_document` result lists the overflows, collisions and off-slide shapes still in the deck (`unresolved`, at most 20 of each) and says so in its summary. These are facts, not a refusal. The deck prompt names collisions beside overflows before saving.
+- **`render` and `check` on a document (finding 4)** read `slides` as `pages`, with a warning; given both, `pages` is used. Accepting it was the less surprising of the two fixes.
+- **Text inputs (finding 5).** `open_document` on a text blob answers "read it with read_blob" (`valid_options: ["read_blob"]`), and the shared prompt says text inputs are read with `read_blob`.
+- **Footers (finding 6).** `page_x_of_y` writes "Page X of Y", after " | " when the text does not end in a space. A `\n` in `text` makes paragraphs. That refusal, and `word_read`'s range-with-every-story one, now use `invalid_arguments`, not `unit`.
+- **JSON strings (finding 7).** An array or object argument written as a JSON string is parsed; a `\v` inside it is read as a line break (the re-run's p8 lost two turns to that).
+- **`ppt_add_shape` (finding 8)** says "give text or paragraphs, not both".
+- **Auto-fit tables (finding 9), in docx2svg.** Word keeps an auto-fit table narrower than its content to the room, sharing it among the columns in proportion to their widest words. Measured on a probe of 11 tables in three compatibility modes and modelled; w7's input now lays out to 2 complete pages, as in Word. The trial's own w7 outputs had already moved the table into a landscape section, where it fits.
+- **Re-runs** (the trial-3 harness, unchanged apart from the fixes; success as in T6):
+
+| Task | Success | Checks | Visual | Calls | Errors | Cost (USD) | Trial 3 |
+|---|---|---|---|---|---|---|---|
+| m1 ×2 | 1/2 | 22/22, 21/22 | 9, 9 | 13, 16 | 1, 0 | 0.30, 0.33 | 0/2; 22/22, 21/22; 7, 10; 10, 16 calls; 1, 2 errors; 0.34, 0.27 |
+| w1 ×2 | 2/2 | 25/25 both | 9, 9 | 17, 14 | 1, 1 | 0.15, 0.13 | 2/2; 10, 10; 13, 34 calls; 2, 19 errors; 0.10, 0.24 |
+| w5 ×2 | 2/2 | 20/20 both | 10, 10 | 10, 10 | 0, 0 | 0.08, 0.07 | 2/2; 10, 10; 39, 50 calls; 28, 40 errors; 0.21, 0.29 |
+| w8 ×1 | 1/1 | 13/13 | 10 | 6 | 0 | 0.04 | 2/2; 10, 10; 13, 11 calls; 3, 2 errors; 0.08, 0.08 |
+| p8 ×1 | 1/1 | 37/37 | 9 | 18 | 2 | 0.60 | 2/2; 9, 8; 11, 13 calls; 1, 1 errors; 0.41, 0.34 |
+| m1 A/B, `ppt_layout` in the core, ×2 | 0/2 | 21/22 both | 10, 9 | 13, 13 | 3, 1 | 0.34, 0.32 | — |
+
+  - **w5 and w1:** the `word_insert_markdown` loops are gone. w5 went from 34 and 48 turns to 7 and 9, at about a third of the cost.
+  - **w8:** the footer came out "Confidential | Page N of 5" on pages 2–5 at the first call, in 6 calls, with no repair.
+  - **p8:** it lost two turns to `items` sent as a JSON string with `\v` line breaks, fixed since.
+  - **Two calls arrived without their large argument** because the response hit the harness's 8,000-token output limit mid-call. The application should raise `max_tokens` or retry such a call; the tool layer cannot tell a cut-off call from a short one.
+  - **Office:** every output opened unprompted, 5/5 documents and 5/5 decks. The fix round spent USD 2.49 of API calls in all: runs, probe and online checks.
 
 ```
 T0 ─┬─▶ T1 ─┬─▶ T3 (layout, copy, design facts) ──┐
@@ -1060,7 +1112,8 @@ LR3, LR4, LR5 (pptx2svg; any time) ───────────────
 |---|---|---|---|
 | G1 | SVG authoring (`ppt_draw`) as an optional route | parked · add beside shape calls | **Decided by arm C:** not as a route (8.00 vs 8.375, −2.6% tokens, 4 structural failures vs 1). `ppt_draw` stays experimental, outside the defaults, with the same scales, for trial 3's comparison. |
 | G2 | The model's geometry view | `detail="geometry"` (JSON dump) · `detail="svg"` (LR3 read view) | **Decide in trial 3** by its pre-registered rule; `geometry` is the default until then. |
-| O3 | Graphics tools in the core set | core stays 12 · add `ppt_add_shape`/`ppt_layout`/`ppt_copy` to the pptx core | **Keep 12** and load the graphics groups by tool search; revisit after the T3 smoke run if graphics tasks always load them. |
+| O3 | Graphics tools in the core set | core stays 12 · add `ppt_add_shape`/`ppt_layout`/`ppt_copy` to the pptx core | **Keep the core as it is.** T6b measured it: `ppt_layout` in the core counts 6,935 tokens against the 5,500 budget, and an m1 A/B with it loaded gave no more calls to it than deferred (0 in 2 runs each). |
+| O4 | Getting `place_labels` used | an `input_examples` entry · a label option on `ppt_add_shape` items (place this text box beside that shape) · leave it | **Open.** Trial 3 and T6b: 0 calls in 21 graphics runs, with the tool loaded each time and the prompt naming the case. The misses it would prevent are labels 1.01–1.04 in from their bubbles. |
 
 ---
 

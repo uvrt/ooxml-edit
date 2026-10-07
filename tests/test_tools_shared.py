@@ -214,6 +214,18 @@ def test_open_document_opens_a_blob_with_the_formats_summary(toolbox, session):
     assert unknown.error.code == "not_found"
 
 
+@pytest.mark.parametrize("name, data, mime", [
+    ("figures.csv", b"region,q1\nNorth,12\n", "text/csv"),
+    ("draft.md", "# Draft \u2014 notes\n".encode(), "text/markdown"),
+    ("outline.txt", b"Title\n- point\n", None)])
+def test_open_document_on_a_text_blob_points_to_read_blob(toolbox, session, name, data, mime):
+    handle = session.add_blob(data, name, mime=mime)
+    result = call(toolbox, session, "open_document", blob=handle)
+    assert result.error.code == "invalid_arguments" and result.error.field == "blob"
+    assert result.error.valid_options == ["read_blob"] and "read_blob" in result.error.message
+    assert "read_blob" in toolbox.system_prompt()
+
+
 def test_list_close_and_undo(toolbox, session):
     listed = call(toolbox, session, "list_documents")
     assert [d["doc"] for d in listed.data["documents"]] == ["d1", "d2"]
@@ -295,6 +307,27 @@ def test_a_failing_op_rolls_the_whole_batch_back_and_names_itself(toolbox, sessi
     assert "ops[1] (t_fail)" in result.error.message
     assert entry.document.items() == [] and entry.refs == {} and entry.version == 0
     assert CHECKS == []
+
+
+def test_ops_written_as_a_json_string_are_parsed(toolbox, session):
+    # Trial 3: the model sometimes sent batch's ops as a string holding the JSON array.
+    ops = _ops(("t_add", {"doc": "d1", "items": [{"text": "a", "ref": "x"}]}),
+               ("t_set", {"doc": "d1", "target": "$x", "text": "A"}))
+    result = call(toolbox, session, "batch", ops="\n" + json.dumps(ops, indent=1))
+    assert result.ok, result.to_json()
+    assert session.entry("d1").document.items() == ["A"]
+    # A line break written \v inside the string (no JSON escape) is read as U+000B; an
+    # escaped backslash before a v is left alone.  (The fix round's p8 lost two turns to it.)
+    items = '[{"text": "SteerCo 1:\\vsavings"}, {"text": "a\\\\v"}]'
+    from ooxml_edit.tools.dispatch import _json_strings
+
+    schema = toolbox.tool("t_add").schema
+    assert _json_strings(schema, {"doc": "d1", "items": items})["items"] == [
+        {"text": "SteerCo 1:\vsavings"}, {"text": "a\\v"}]
+    # A string that is not a JSON array is still refused, naming the field.
+    for wrong in ("t_add", '{"tool": "t_add"}', "[1, 2"):
+        refused = call(toolbox, session, "batch", ops=wrong)
+        assert refused.error.code == "invalid_arguments" and refused.error.field == "ops"
 
 
 def test_an_ops_arguments_are_validated_before_anything_runs(toolbox, session):

@@ -109,12 +109,19 @@ def obj(properties: Mapping[str, Param], description: str | None = None, *,
 
 
 def build_schema(properties: Mapping[str, Param], *, description: str | None = None) -> dict[str, Any]:
-    """An object schema from named parameters: every key named, the required ones listed."""
+    """An object schema from named parameters: every key named, the required ones listed.
+
+    The required properties come first, then the optional ones, each in the order given:
+    strict decoding writes keys in schema order, so an optional property listed before a
+    required one is lost once the model writes the required one
+    (:func:`~.schema.required_first`)."""
     schema: dict[str, Any] = {"type": "object"}
     if description:
         schema["description"] = description
-    schema["properties"] = {name: copy.deepcopy(dict(param.schema))
-                            for name, param in properties.items()}
+    names = ([name for name, param in properties.items() if not param.optional]
+             + [name for name, param in properties.items() if param.optional])
+    schema["properties"] = {name: copy.deepcopy(dict(properties[name].schema))
+                            for name in names}
     required = [name for name, param in properties.items() if not param.optional]
     if required:  # an empty list says nothing and is sent with every request
         schema["required"] = required

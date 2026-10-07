@@ -154,7 +154,7 @@ def test_optional_parameters_are_counted_at_every_depth():
     item = tool("toy_x", "X.", {
         "a": string("A.", optional=True),
         "b": obj({"c": string("C.", optional=True), "d": string("D.")}, "B.")})(lambda c, **k: 0)
-    assert item.optional_parameters() == ["a", "b.c"]
+    assert item.optional_parameters() == ["b.c", "a"]      # required b is listed first
     assert isinstance(item, Tool)
 
 
@@ -207,3 +207,17 @@ def test_an_invalid_call_names_the_field_and_the_options(arguments, field, optio
 def test_the_arguments_must_be_an_object():
     with pytest.raises(CallError):
         validate_call(SCHEMA, ["d1"])
+
+
+def test_example_arguments_give_every_property_and_pass_the_canonical_schema():
+    from ooxml_edit.tools.schema import example_arguments
+
+    item = tool("toy_example", "X.", {
+        "doc": string("Doc."), "mode": string("M.", enum=["a", "b"], optional=True),
+        "day": string("D.", format="date", optional=True),
+        "rows": array(obj({"n": integer(optional=True), "w": number()}), "R.", optional=True),
+        "on": boolean("On.", optional=True)})(lambda c, **k: 0)
+    arguments = example_arguments(item.canonical)
+    assert arguments == {"doc": "doc 1", "mode": "a", "day": "2026-10-07",
+                         "rows": [{"w": 2.5, "n": 2}], "on": True}
+    assert validate_call(item.canonical, arguments) == arguments
