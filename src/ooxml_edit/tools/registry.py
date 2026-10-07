@@ -43,6 +43,15 @@ class Param:
     optional: bool = False
 
 
+def _described(kind: str, description: str | None) -> dict[str, Any]:
+    """``{"type": kind}`` with the description, if there is one (nested properties whose
+    name says it all go without)."""
+    schema: dict[str, Any] = {"type": kind}
+    if description:
+        schema["description"] = description
+    return schema
+
+
 def _param(schema: dict[str, Any], optional: bool, **bounds: Any) -> Param:
     for key, value in bounds.items():
         if value is not None:
@@ -50,10 +59,10 @@ def _param(schema: dict[str, Any], optional: bool, **bounds: Any) -> Param:
     return Param(schema, optional)
 
 
-def string(description: str, *, enum: Sequence[str] | None = None, format: str | None = None,
-           min_length: int | None = None, max_length: int | None = None,
-           optional: bool = False) -> Param:
-    schema: dict[str, Any] = {"type": "string", "description": description}
+def string(description: str | None = None, *, enum: Sequence[str] | None = None,
+           format: str | None = None, min_length: int | None = None,
+           max_length: int | None = None, optional: bool = False) -> Param:
+    schema = _described("string", description)
     if enum is not None:
         schema["enum"] = list(enum)
     if format is not None:
@@ -61,26 +70,27 @@ def string(description: str, *, enum: Sequence[str] | None = None, format: str |
     return _param(schema, optional, minLength=min_length, maxLength=max_length)
 
 
-def integer(description: str, *, minimum: int | None = None, maximum: int | None = None,
-            optional: bool = False) -> Param:
-    return _param({"type": "integer", "description": description}, optional,
+def integer(description: str | None = None, *, minimum: int | None = None,
+            maximum: int | None = None, optional: bool = False) -> Param:
+    return _param(_described("integer", description), optional,
                   minimum=minimum, maximum=maximum)
 
 
-def number(description: str, *, minimum: float | None = None, maximum: float | None = None,
-           optional: bool = False) -> Param:
-    return _param({"type": "number", "description": description}, optional,
+def number(description: str | None = None, *, minimum: float | None = None,
+           maximum: float | None = None, optional: bool = False) -> Param:
+    return _param(_described("number", description), optional,
                   minimum=minimum, maximum=maximum)
 
 
-def boolean(description: str, *, optional: bool = False) -> Param:
-    return Param({"type": "boolean", "description": description}, optional)
+def boolean(description: str | None = None, *, optional: bool = False) -> Param:
+    return Param(_described("boolean", description), optional)
 
 
-def array(items: Param, description: str, *, min_items: int | None = None,
+def array(items: Param, description: str | None = None, *, min_items: int | None = None,
           max_items: int | None = None, optional: bool = False) -> Param:
     item_schema = dict(items.schema)
-    schema: dict[str, Any] = {"type": "array", "description": description, "items": item_schema}
+    schema = _described("array", description)
+    schema["items"] = item_schema
     if min_items is not None:
         schema["minItems"] = min_items
     return _param(schema, optional, maxItems=max_items)
@@ -93,18 +103,21 @@ def free_object(description: str, *, optional: bool = False) -> Param:
                  optional)
 
 
-def obj(properties: Mapping[str, Param], description: str, *, optional: bool = False) -> Param:
+def obj(properties: Mapping[str, Param], description: str | None = None, *,
+        optional: bool = False) -> Param:
     return Param(build_schema(properties, description=description), optional)
 
 
 def build_schema(properties: Mapping[str, Param], *, description: str | None = None) -> dict[str, Any]:
     """An object schema from named parameters: every key named, the required ones listed."""
     schema: dict[str, Any] = {"type": "object"}
-    if description is not None:
+    if description:
         schema["description"] = description
     schema["properties"] = {name: copy.deepcopy(dict(param.schema))
                             for name, param in properties.items()}
-    schema["required"] = [name for name, param in properties.items() if not param.optional]
+    required = [name for name, param in properties.items() if not param.optional]
+    if required:  # an empty list says nothing and is sent with every request
+        schema["required"] = required
     schema["additionalProperties"] = False
     return schema
 

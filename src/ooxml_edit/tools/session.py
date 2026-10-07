@@ -69,6 +69,10 @@ class DocumentFormat:
     #: :meth:`~.dispatch.Call.touch` (pages, blocks), in order.  Run once per call, and once
     #: per document at the end of a ``batch``.
     checks: Callable[[Any, Sequence[Any]], dict[str, Any]] | None = None
+    #: The format's tools in the order they should get ``strict: true`` on Claude, whose
+    #: per-request limits (20 tools, 24 optional parameters) allow only some: its most-used
+    #: writing tools first.  Tools not named follow, writing tools first.
+    strict_first: tuple[str, ...] = ()
 
 
 class LRU:

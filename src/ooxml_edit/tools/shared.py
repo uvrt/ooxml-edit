@@ -51,23 +51,22 @@ GROUPS = [ToolGroup(MISC, "Session housekeeping, charts, SmartArt and document p
 #: Every document kind a shared tool may serve.
 KINDS = ("pptx", "docx")
 
-_DOC = string("Document id, e.g. d1.")
-_TARGET = string("Address of the object, exactly as a read tool printed it.")
+_DOC = string("Document id.")
+_TARGET = string("Address as a read tool printed it, or $ref.")
 
 
 def _slides(what: str) -> Param:
-    return array(integer("Slide number.", minimum=1),
-                 f"Decks only: slide numbers from 1, {what}.", optional=True)
+    return array(integer(minimum=1), f"Decks: slide numbers from 1{what}.", optional=True)
 
 
 def _pages(what: str) -> Param:
-    return array(integer("Page number.", minimum=1),
-                 f"Documents only: page numbers from 1, {what}.", optional=True)
+    return array(integer(minimum=1), f"Documents: page numbers from 1{what}.", optional=True)
 
 
-_RANGE = string("Documents only: a block or span (p:A..t:B) to search in.", optional=True)
-_STORIES = string("Documents only: body (default) or all stories.", enum=["body", "all"],
+_RANGE = string("Documents: only within this block or span (p:A..t:B).", optional=True)
+_STORIES = string("Documents: body (default) or all stories.", enum=["body", "all"],
                   optional=True)
+_CURSOR = string("next_cursor of the previous page.", optional=True)
 
 
 class Spec:
@@ -110,118 +109,110 @@ def _no_documents(arguments: Mapping[str, Any]) -> list[str]:
 SPECS: dict[str, Spec] = {spec.name: spec for spec in [
     # S1
     Spec("open_document",
-         "Open an input the user supplied (a blob) as a deck or document. Returns its doc id, "
-         "kind and a short summary; then use the format's describe tool.",
-         {"blob": string("Blob handle of the input, e.g. b1.")},
+         "Open an input blob as a deck or document. Returns its doc id and a summary; "
+         "describe it next.",
+         {"blob": string("Blob handle, e.g. b1.")},
          documents=_no_documents, batchable=False),
     # S2
     Spec("new_document",
-         "Make a new, empty deck or document, optionally from a template blob (its masters, "
-         "layouts, styles and theme, without its content). Returns its doc id.",
-         {"kind": string("pptx for a deck, docx for a document.", enum=list(KINDS)),
-          "template_blob": string("Blob handle of a template (.potx/.pptx or .dotx/.docx) "
-                                  "to start from.", optional=True),
-          "size": string("Decks: slide size 16:9 (default) or 4:3. Documents: page size A4 "
-                         "or Letter.", optional=True),
-          "title": string("Document title property.", optional=True),
+         "Make a new deck or document, optionally from a template blob (its layouts, styles "
+         "and theme, not its content). Returns its doc id.",
+         {"kind": string("pptx: a deck; docx: a document.", enum=list(KINDS)),
+          "template_blob": string("Template blob handle (.potx, .dotx...).", optional=True),
+          "size": string("Decks 16:9 (default) or 4:3; documents A4, Letter...",
+                         optional=True),
+          "title": string("Title property.", optional=True),
           "author": string("Author property.", optional=True),
-          "name": string("Name for the document, e.g. plan.pptx. Default: new.<kind>.",
-                         optional=True)},
+          "name": string("Name, e.g. plan.pptx. Default new.<kind>.", optional=True)},
          documents=_no_documents, route="kind", batchable=False),
     # S3
     Spec("save_document",
-         "Hand the document to the application as a file. Refuses new validation problems. "
+         "Give the document to the application as a file. Refuses new validation problems. "
          "Returns the name, format, size and validation report, never the content.",
          {"doc": _DOC,
-          "name": string("File name for the application, e.g. q3-review.pptx."),
-          "format": string("pptx or potx (template) for decks, docx or dotx for documents; "
-                           "markdown (documents) or outline (decks) for a text copy.",
+          "name": string("File name, e.g. q3-review.pptx."),
+          "format": string("potx/dotx: a template; outline (decks) or markdown (documents): "
+                           "a text copy.",
                            enum=["pptx", "potx", "docx", "dotx", "markdown", "outline"])},
          batchable=False),
     # S4
-    Spec("list_documents",
-         "List the open documents (ids, kinds, names, versions) and the user's inputs "
-         "(blob handles, names, types).",
+    Spec("list_documents", "List the open documents and the user's input blobs.",
          {}, group=MISC, documents=_no_documents, batchable=False),
-    Spec("close_document",
-         "Close an open document, discarding unsaved changes. Save first to keep them.",
+    Spec("close_document", "Close a document, discarding unsaved changes.",
          {"doc": _DOC}, group=MISC, batchable=False),
     # S5
     Spec("undo",
-         "Undo the last calls that changed a document, one step per call; redo=true steps "
-         "forward again. Returns the version and how many steps were taken.",
+         "Undo the last changing calls, one call per step; redo=true steps forward again. "
+         "Returns the version.",
          {"doc": _DOC,
-          "steps": integer("How many calls to undo or redo, 1 to 50. Default 1.", minimum=1,
-                           maximum=50, optional=True),
-          "redo": boolean("True to redo instead of undo. Default false.", optional=True)},
+          "steps": integer("Steps, 1-50. Default 1.", minimum=1, maximum=50, optional=True),
+          "redo": boolean("Redo instead. Default false.", optional=True)},
          batchable=False),
     # S6
     Spec("find_text",
-         "Find text: every match's address, kind and context, in order (slides, notes, "
-         "tables, SmartArt; a document's stories).",
+         "Find text: each match's address, kind and context, in order, across slides, notes, "
+         "tables, SmartArt and a document's stories.",
          {"doc": _DOC,
           "text": string("Text to find."),
-          "regex": boolean("text is a Python regular expression. Default false.",
-                           optional=True),
-          "slides": _slides("to search. Default: all"),
+          "regex": boolean("text is a Python regex. Default false.", optional=True),
+          "slides": _slides(". Default all"),
           "range": _RANGE,
           "stories": _STORIES,
-          "cursor": string("next_cursor from the previous page of matches.", optional=True)}),
+          "cursor": _CURSOR}),
     # S7
     Spec("replace_text",
-         "Replace text, keeping its formatting. expect=one: exactly one match must exist "
-         "(else an error lists them); all: every match. Returns the count and addresses.",
+         "Replace text, keeping its formatting. expect=one needs exactly one match (else the "
+         "error lists them); all replaces every match. Returns the count and addresses.",
          {"doc": _DOC,
           "find": string("Text to replace."),
           "replace": string("Replacement; with regex, \\1 is a group."),
-          "expect": string("one or all.", enum=["one", "all"]),
-          "regex": boolean("find is a Python regular expression. Default false.",
-                           optional=True),
-          "slides": _slides("to search. Default: all"),
+          "expect": string("Matches expected.", enum=["one", "all"]),
+          "regex": boolean("find is a Python regex. Default false.", optional=True),
+          "slides": _slides(". Default all"),
           "range": _RANGE,
           "stories": _STORIES},
          mutates=True),
     # S8
     Spec("render",
-         "Render slides or pages to PNG images, to look at the result. Costs image tokens "
-         "(stated in the result); at most 4 images per call.",
+         "Render slides or pages to PNG to look at them, at most 4 per call. Images cost "
+         "tokens; the result states how many.",
          {"doc": _DOC,
-          "slides": _slides("to render, at most 4"),
-          "pages": _pages("to render, at most 4"),
-          "width": integer("Image width in pixels, 200 to 2576. Default 1280 for slides, 1000 "
-                           "for pages.", minimum=200, maximum=2576, optional=True)},
+          "slides": _slides(", at most 4"),
+          "pages": _pages(", at most 4"),
+          "width": integer("Pixels, 200-2576. Default 1280 (slides), 1000 (pages).",
+                           minimum=200, maximum=2576, optional=True)},
          batchable=False),
     # S9
     Spec("check",
          "Facts as the document will show: text that does not fit, collisions, validation "
-         "problems. Facts, not verdicts.",
+         "problems, and on request design facts. Facts, not verdicts.",
          {"doc": _DOC,
-          "slides": _slides("to check. Default: all"),
-          "pages": _pages("to check. Default: all"),
-          "include": array(string("A kind of fact.", enum=[
+          "slides": _slides(". Default all"),
+          "pages": _pages(". Default all"),
+          "include": array(string(enum=[
               "fit", "collisions", "facts", "design", "validate", "reflow", "fields", "app"]),
-              "What to report. Default: decks fit, collisions, validate; documents "
-              "validate, reflow, fields.", optional=True),
+              "Default: fit, collisions, validate (decks); validate, reflow, fields "
+              "(documents).", optional=True),
           "boxes": boolean("Decks: also text boxes that overlap where their text does not. "
                            "Default false.", optional=True)}),
     # S10
     Spec("edit_chart",
-         "Change a chart's data or labels; the drawn values and the embedded workbook change "
-         "together. Returns the chart's state after the edit.",
+         "Change a chart's data, labels, title or legend; the drawn values and the embedded "
+         "workbook change together. Returns the chart after.",
          {"doc": _DOC, "target": _TARGET,
           "action": string("What to do.", enum=[
               "set_values", "set_value", "add_category", "remove_category", "rename_category",
               "add_series", "remove_series", "rename_series", "set_title", "set_axis_title",
               "set_legend"]),
-          "series": string("Series name, or its number from 0.", optional=True),
-          "category": string("Category label, or its number from 0.", optional=True),
-          "values": array(number("A value."), "Values, one per category (set_values, "
-                          "add_series) or per series (add_category).", optional=True),
-          "value": number("The value (set_value).", optional=True),
-          "text": string("New name, label or title text.", optional=True),
-          "axis": string("Which axis (set_axis_title).", enum=["category", "value"],
+          "series": string("Series name, or number from 0.", optional=True),
+          "category": string("Category label, or number from 0.", optional=True),
+          "values": array(number(), "One per category (set_values, add_series) or per "
+                          "series (add_category).", optional=True),
+          "value": number("set_value: the value.", optional=True),
+          "text": string("New name, label or title.", optional=True),
+          "axis": string("set_axis_title: which axis.", enum=["category", "value"],
                          optional=True),
-          "position": string("Legend position (set_legend); none hides it.",
+          "position": string("set_legend: where; none hides it.",
                              enum=["right", "left", "top", "bottom", "none"],
                              optional=True)},
          group=MISC, mutates=True, refs=("target",)),
@@ -232,39 +223,37 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
          {"doc": _DOC, "target": _TARGET}, group=MISC, refs=("target",)),
     # S12
     Spec("edit_smartart",
-         "Change a SmartArt diagram's node text, or add and remove nodes. Returns the nodes "
-         "with their text and levels.",
+         "Change a SmartArt diagram's node text, or add and remove nodes. Returns the nodes.",
          {"doc": _DOC, "target": _TARGET,
           "action": string("What to do.", enum=["set_text", "add_node", "remove_node",
                                                 "add_child"]),
-          "node": integer("Node number, from 0 (set_text, remove_node, add_child: the "
-                          "parent).", minimum=0, optional=True),
+          "node": integer("Node number from 0 (add_child: the parent).", minimum=0,
+                          optional=True),
           "text": string("The node's text.", optional=True)},
          group=MISC, mutates=True, refs=("target",)),
     # S13
     Spec("set_properties",
-         "Set document properties: title, author, language, subject. Returns them all.",
+         "Set the title, author, language or subject property. Returns them all.",
          {"doc": _DOC,
           "title": string("Title.", optional=True),
           "author": string("Author.", optional=True),
-          "language": string("Default editing language, e.g. en-US.", optional=True),
+          "language": string("Editing language, e.g. en-US.", optional=True),
           "subject": string("Subject.", optional=True)},
          group=MISC, mutates=True),
     # S15
     Spec("read_blob",
-         "Read an input the user supplied as text (CSV, Markdown, plain text, JSON), a page "
-         "at a time. Not for images or documents: open those with their tools.",
-         {"blob": string("Blob handle of the input, e.g. b2."),
-          "cursor": string("next_cursor from the previous page.", optional=True)},
+         "Read a text input blob (CSV, Markdown, plain text, JSON) a page at a time. Open "
+         "documents with open_document; place images with a picture tool.",
+         {"blob": string("Blob handle, e.g. b2."),
+          "cursor": _CURSOR},
          group=MISC, documents=_no_documents, batchable=False),
     # the generic batch
     Spec("batch",
-         "Run several tool calls as one: in order, all or none, one undo step, checks once "
-         "at the end. Not for render, save_document or session tools.",
-         {"ops": array(obj({"tool": string("Tool name."),
-                            "arguments": free_object("Its arguments, as that tool takes them.")},
-                           "One call."),
-                       "The calls, in order; at most 200. Later ops may use earlier ops' refs.",
+         "Run calls to several tools as one: in order, all or none, one undo step, checks "
+         "once at the end. Not for render, save_document or session tools.",
+         {"ops": array(obj({"tool": string(),
+                            "arguments": free_object("That tool's arguments.")}),
+                       "The calls in order, at most 200; later ops may use earlier refs.",
                        min_items=1)},
          documents=_no_documents, mutates=True, strict=False, batchable=False,
          composite=True),

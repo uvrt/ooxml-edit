@@ -198,6 +198,24 @@ and its valid options when one fails. Its ops' arguments are free-form objects, 
 is the one tool never sent strict: each op is validated by the dispatcher against its own
 tool's schema instead of by constrained decoding.
 
+**Loading tools and the prompt.** Every tool is in one group; the `core` group is always
+loaded, the others on demand. What `definitions()` sends by default:
+
+| Call | Sends |
+| --- | --- |
+| `definitions("anthropic")` | every tool; the non-core ones `defer_loading`, with the BM25 tool-search tool, and `cache_control` on the last core tool. For models with tool search (Sonnet 5.5, Opus 5.5, Haiku 4.5) |
+| `definitions("anthropic", groups=["…"])` | the core and the named groups, all loaded: for a model without tool search, or an application that knows the task |
+| `definitions("openai-responses")` | the core as functions, each other group a `namespace` with `defer_loading`, and `{"type": "tool_search"}` |
+| `definitions("openai-chat", groups=["…"])` | the core and the named groups (Chat Completions has no tool search); `toolbox.allowed_tools([...], provider=...)` narrows a turn's calls without changing the cached `tools` |
+
+`defer=` overrides the default either way. On Claude, `strict: true` goes to as many tools
+as the per-request limits allow (20 tools, 24 optional parameters), in the order each
+format lists in `DocumentFormat.strict_first` (or `Toolbox(strict_first=...)`), then
+writing tools before reading ones. `toolbox.system_prompt(extra=...)` gives the shared
+fragment (`tools.prompts.SYSTEM`: planning, addresses and refs, batching, results and
+checks, rendering, saving, units), each format's fragment, then the application's own
+guidance: house style and design rules belong there, never in the shipped fragments.
+
 ## Install
 
 Not on PyPI yet. From a checkout:
@@ -211,7 +229,8 @@ pip install -e '.[dev]'     # + pytest
 
 ```sh
 python -m pytest -q
-python -m pytest -m provider     # online checks; need ANTHROPIC_API_KEY, skipped without
+python -m pytest -m provider     # online checks; need ANTHROPIC_API_KEY (and
+                                 # ANTHROPIC_WORKSPACE_ID for a key without a workspace)
 ```
 
 The tests build the small packages they need (`tests/synthetic.py`, and

@@ -57,6 +57,17 @@ def test_what_leaves_the_subset_is_named(change, message):
     assert any(message in problem for problem in problems), problems
 
 
+def test_only_top_level_properties_need_a_description():
+    nested = obj({"bold": boolean(optional=True), "x": number()}, optional=True)
+    schema = _schema(a=string("A."), box=nested,
+                     sizes=array(number(), "Sizes, pt.", optional=True))
+    assert "description" not in schema["properties"]["box"]
+    assert subset_problems(schema) == ["$.box: no description"]
+    schema["properties"]["box"]["description"] = "A box."
+    assert subset_problems(schema) == []
+    assert "description" not in schema["properties"]["sizes"]["items"]
+
+
 def test_nesting_is_limited_to_six_levels():
     inner = string("Leaf.")
     for level in range(6):
