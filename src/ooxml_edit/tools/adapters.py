@@ -92,7 +92,8 @@ def anthropic_strict_plan(tools: Iterable[Tool],
     Priority is the tool's ``priority`` (lower first), else writing tools before reading
     ones, then registration order.  A tool that would break a limit is sent non-strict and
     the next one is still tried, so a small tool after an option-heavy one keeps strict.
-    The canonical subset has no unions, so the union limit is never reached.
+    The canonical subset has no unions, so the union limit is never reached.  A tool made
+    with ``strict=False`` (``batch``) is never strict.
     """
     tools = list(tools)
     order = sorted(range(len(tools)), key=lambda i: (
@@ -102,6 +103,8 @@ def anthropic_strict_plan(tools: Iterable[Tool],
     count = optional = 0
     for index in order:
         tool = tools[index]
+        if not tool.strict:
+            continue
         cost = len(tool.optional_parameters())
         if count + 1 <= limits.tools and optional + cost <= limits.optional_parameters:
             plan[tool.name] = True
@@ -252,6 +255,11 @@ def _nullable(node: dict[str, Any]) -> dict[str, Any]:
 
 
 def _function(tool: Tool) -> dict[str, Any]:
+    if not tool.strict:
+        # Sent as written, ``strict: false`` stated: omitted, the Responses API would
+        # normalise it into strict mode, which a free-form object cannot take.
+        return {"type": "function", "name": tool.name, "description": tool.description,
+                "parameters": tool.canonical, "strict": False}
     return {"type": "function", "name": tool.name, "description": tool.description,
             "parameters": openai_strict_schema(tool.canonical), "strict": True}
 
@@ -294,7 +302,7 @@ def to_openai_chat(tools: Iterable[Tool]) -> list[dict[str, Any]]:
         function = _function(tool)
         definitions.append({"type": "function", "function": {
             "name": function["name"], "description": function["description"],
-            "parameters": function["parameters"], "strict": True}})
+            "parameters": function["parameters"], "strict": function["strict"]}})
     return definitions
 
 
@@ -348,7 +356,11 @@ def _data_url(image: Any) -> str:
 
 
 def openai_problems(definitions: Sequence[Mapping[str, Any]], *, chat: bool = False) -> list[str]:
-    """Where an OpenAI ``tools`` list breaks the documented strict-mode rules."""
+    """Where an OpenAI ``tools`` list breaks the documented strict-mode rules.
+
+    A function sent ``strict: false`` (``batch``) is held to the general rules only: its
+    name, an object root, and ``strict`` stated rather than left to the API's default.
+    """
     problems: list[str] = []
     functions: list[Mapping[str, Any]] = []
     for definition in definitions:
@@ -374,11 +386,13 @@ def openai_problems(definitions: Sequence[Mapping[str, Any]], *, chat: bool = Fa
         name = function.get("name", "")
         if not OPENAI_NAME.match(name):
             problems.append(f"{name!r}: the name does not match {OPENAI_NAME.pattern}")
-        if function.get("strict") is not True:
-            problems.append(f"{name}: strict is not true")
         schema = function.get("parameters") or {}
         if schema.get("type") != "object" or "anyOf" in schema:
             problems.append(f"{name}: the root must be an object, not anyOf")
+        if function.get("strict") is False:
+            continue
+        if function.get("strict") is not True:
+            problems.append(f"{name}: strict is not true")
         properties = depth_max = enum_values = 0
         for where, node in _nodes(schema):
             depth_max = max(depth_max, where.count(".") + where.count("[]"))

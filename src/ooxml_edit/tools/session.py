@@ -61,6 +61,14 @@ class DocumentFormat:
     #: Exceptions the library raises, mapped to error codes: ``{type: code}`` or
     #: ``{type: (code, options)}`` where ``options(exception)`` lists the valid options.
     errors: dict[type[BaseException], Any] = field(default_factory=dict)
+    #: A short summary of an open document (its page count and title), returned by the
+    #: shared ``open_document`` tool.
+    summary: Callable[[Any], Any] | None = None
+    #: The facts every changing call returns: ``checks(entry, touched)`` -> the result's
+    #: ``checks``, where ``touched`` lists what the call's handlers named with
+    #: :meth:`~.dispatch.Call.touch` (pages, blocks), in order.  Run once per call, and once
+    #: per document at the end of a ``batch``.
+    checks: Callable[[Any, Sequence[Any]], dict[str, Any]] | None = None
 
 
 class LRU:
@@ -142,6 +150,12 @@ class DocumentEntry:
     log: list[CallRecord] = field(default_factory=list, repr=False)
     #: Idempotence keys of creating calls: ``(tool, key) -> result data``.
     keys: dict[tuple[str, str], Any] = field(default_factory=dict, repr=False)
+    #: Refs: names a creating call gave its objects, ``{name: address}``.  ``$name`` in a
+    #: target argument of a later call is replaced by the address.
+    refs: dict[str, str] = field(default_factory=dict, repr=False)
+    #: The refs as they were at each version: undo and redo bring them back with the
+    #: content, so a ref never outlives what it names (ids are reused once freed).
+    ref_states: dict[int, dict[str, str]] = field(default_factory=dict, repr=False)
     _own_version: int = field(default=0, repr=False)
 
     @property
@@ -172,6 +186,15 @@ class DocumentEntry:
             return
         with batch():
             yield
+
+    def keep_refs(self, defined: dict[str, str]) -> None:
+        """Add refs a call defined, and remember the set as this version's."""
+        self.refs.update(defined)
+        self.ref_states[self.version] = dict(self.refs)
+
+    def restore_refs(self) -> None:
+        """The refs of the version the document is at now (after an undo or redo)."""
+        self.refs = dict(self.ref_states.get(self.version, {}))
 
     def cached(self, cache: LRU, key: Hashable, compute: Callable[[], Any]) -> Any:
         """``compute()`` cached under ``(version, key)``: a later edit makes a new entry."""
@@ -244,6 +267,8 @@ class Session:
                 size=size, baseline_problems=baseline,
                 render_cache=LRU(self.limits.render_cache_size),
                 check_cache=LRU(self.limits.check_cache_size))
+            entry = self.documents[doc_id]
+            entry.ref_states[entry.version] = {}
         return doc_id
 
     def entry(self, doc_id: str) -> DocumentEntry:

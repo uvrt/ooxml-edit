@@ -172,7 +172,14 @@ def test_the_tools_subpackage_has_its_modules():
         "logs", "prompts", "dispatch"}
 
 
-@pytest.mark.parametrize("module", _tool_modules(), ids=lambda path: path.stem)
+#: The one module that names formats: the shared tools' definitions, which a model reads
+#: ("slides, for decks"), as data.  It still imports no format library (the test below).
+FORMAT_FACING = {"shared"}
+
+
+@pytest.mark.parametrize("module", [path for path in _tool_modules()
+                                    if path.stem not in FORMAT_FACING],
+                         ids=lambda path: path.stem)
 def test_the_tools_have_no_format_vocabulary(module):
     source = module.read_text(encoding="utf-8").lower()
     found = [token for token in TOOLS_FORBIDDEN if token in source]

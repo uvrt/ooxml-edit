@@ -16,6 +16,21 @@ describe, makes sessions, emits provider definitions, and runs calls.  A call go
 :meth:`Toolbox.dispatch_many` runs one assistant turn's parallel calls: calls on the same
 document serially in the order the model emitted them, calls on different documents at
 the same time, results in call order.
+
+**Refs.**  A creating call may name what it makes (``call.define_ref("box1", "256.7")``);
+the name is kept per document for the session, listed in the result's ``refs``, and a later
+call may write ``$box1`` (or ``$box1/p0``) wherever its tool declares a target
+(``Tool.refs``).  The dispatcher replaces it with the address before the handler runs.
+
+**Checks.**  Handlers say what they touched (``call.touch(page)``); after a changing call
+the dispatcher asks the document's format for the facts (``DocumentFormat.checks``) once.
+
+**Batch.**  The shared ``batch`` tool runs other calls (*ops*) in order under every lock they
+need, inside one undo step per document: all of them or none.  Each op is validated against
+its own tool's schema -- ``batch`` itself is never sent strict, since its ``arguments`` are
+free-form objects -- so a model's malformed op is caught by the dispatcher, not by
+constrained decoding.  That is the trade-off: one round trip instead of forty, at the price
+of strict decoding for the ops.  Checks run once, at the end.
 """
 
 from __future__ import annotations
@@ -23,11 +38,12 @@ from __future__ import annotations
 import difflib
 import json
 import logging
+import re
 import threading
 import time
 import warnings
 from concurrent.futures import Future, ThreadPoolExecutor
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 
 from . import adapters, prompts
@@ -36,8 +52,25 @@ from .logs import CallRecord, digest, log_call, logger, shape
 from .registry import CORE, Tool, ToolGroup, merge_tools
 from .results import Image, Result, ToolError
 from .schema import CallError, validate_call
-from .session import Clock, DocumentEntry, DocumentFormat, Output, Session
+from .session import Clock, DocumentEntry, DocumentFormat, Output, Session, doc_order
 from .worker import WorkerPool
+
+
+#: A ref's name: what ``$name`` may say.
+REF = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
+_REF_USE = re.compile(r"^\$([a-z][a-z0-9_]{0,31})(/.*)?$")
+
+
+class CallContext:
+    """What the calls of one dispatch share: a single call's, or every op of a batch's."""
+
+    def __init__(self) -> None:
+        #: ``doc_id -> what the handlers touched``, in order, without repeats.
+        self.touched: dict[str, list[Any]] = {}
+        #: ``doc_id -> {name: address}``: refs defined, not yet kept (a failure drops them).
+        self.refs: dict[str, dict[str, str]] = {}
+        #: True inside a batch.
+        self.batch = False
 
 
 class Call:
@@ -45,7 +78,7 @@ class Call:
 
     def __init__(self, toolbox: "Toolbox", session: Session, tool: Tool,
                  arguments: Mapping[str, Any], entries: dict[str, DocumentEntry],
-                 primary: DocumentEntry | None) -> None:
+                 primary: DocumentEntry | None, context: CallContext | None = None) -> None:
         self.toolbox = toolbox
         self.session = session
         self.tool = tool
@@ -54,6 +87,52 @@ class Call:
         #: The document the call edits or reads first (the first document argument).
         self.entry = primary
         self.result = Result()
+        self.context = context or CallContext()
+
+    @property
+    def in_batch(self) -> bool:
+        return self.context.batch
+
+    def touch(self, *scopes: Any, doc: str | None = None) -> None:
+        """Say what this call changed (pages, blocks): the checks after it cover them."""
+        doc = doc or (self.entry.doc_id if self.entry else None)
+        if doc is None:
+            return
+        seen = self.context.touched.setdefault(doc, [])
+        for scope in scopes:
+            if scope not in seen:
+                seen.append(scope)
+
+    def define_ref(self, name: str, address: str, *, doc: str | None = None) -> None:
+        """Name ``address`` ``name``, so later calls on the document may write ``$name``."""
+        if not REF.match(name):
+            raise ToolError("invalid_arguments", f"ref {name!r} must match {REF.pattern}",
+                            field="ref")
+        doc = doc or (self.entry.doc_id if self.entry else None)
+        if doc is None:
+            raise ToolError("invalid_arguments", "a ref needs a document")
+        self.context.refs.setdefault(doc, {})[name] = address
+        self.result.refs[name] = address
+
+    def refs(self, doc: str | None = None) -> dict[str, str]:
+        """Every ref of a document this call can use: kept ones, then this call's own."""
+        doc = doc or (self.entry.doc_id if self.entry else None)
+        entry = self.entries.get(doc) if doc else None
+        known = dict(entry.refs) if entry is not None else {}
+        known.update(self.context.refs.get(doc, {}))
+        return known
+
+    def resolve_ref(self, value: str, *, doc: str | None = None, field: str | None = None) -> str:
+        """``value`` with a leading ``$name`` replaced by its address; other values as given."""
+        match = _REF_USE.match(value) if isinstance(value, str) else None
+        if match is None:
+            return value
+        known = self.refs(doc)
+        name, rest = match.group(1), match.group(2) or ""
+        if name not in known:
+            raise ToolError("not_found", f"no ref ${name} in {doc or self.entry.doc_id}",
+                            field=field, valid_options=[f"${key}" for key in sorted(known)])
+        return known[name] + rest
 
     @property
     def document(self) -> Any:
@@ -123,6 +202,16 @@ class Call:
                         doc=entry.doc_id if entry else None, validate=report)
         self.session.add_output(output)
         return output.describe()
+
+
+class _OpFailed(Exception):
+    """An op of a batch failed: which one, and its error."""
+
+    def __init__(self, index: int, tool: str, error: ToolError) -> None:
+        super().__init__(error.message)
+        self.index = index
+        self.tool = tool
+        self.error = error
 
 
 class Toolbox:
@@ -237,7 +326,8 @@ class Toolbox:
         try:
             tool = self.tool(name)
             clean = self._arguments(tool, arguments)
-            doc_ids = tool.doc_ids(clean)
+            doc_ids = (self._batch_documents(clean) if tool.composite
+                       else tool.doc_ids(clean))
             with session.lock(doc_ids) as locked:
                 entries = {entry.doc_id: entry for entry in locked}
                 primary = entries[doc_ids[0]] if doc_ids else None
@@ -279,7 +369,11 @@ class Toolbox:
         try:
             tool = self.tools[name]
             parsed = json.loads(arguments) if isinstance(arguments, str) else arguments
-            return frozenset(tool.doc_ids(parsed)) if isinstance(parsed, Mapping) else frozenset()
+            if not isinstance(parsed, Mapping):
+                return frozenset()
+            if tool.composite:
+                return frozenset(self._batch_documents(parsed))
+            return frozenset(tool.doc_ids(parsed))
         except Exception:  # noqa: BLE001 -- the call will fail on its own, in order
             return frozenset()
 
@@ -308,33 +402,241 @@ class Toolbox:
 
     def _run(self, session: Session, tool: Tool, arguments: dict[str, Any],
              entries: dict[str, DocumentEntry], primary: DocumentEntry | None) -> Result:
-        kind = primary.kind if primary else None
-        handler = tool.handler_for(kind)
-        if handler is None:
-            raise ToolError("invalid_arguments", f"{tool.name} does not work on a {kind} document",
-                            field=tool.documents[0] if not callable(tool.documents) else None,
-                            valid_options=[f"{e.doc_id} ({e.kind})" for e in
-                                           session.documents.values()
-                                           if tool.handler_for(e.kind) is not None])
+        if tool.composite:
+            return self._run_batch(session, arguments, entries, primary)
+        handler = self._handler(session, tool, arguments, primary)
         key = arguments.get("key") if tool.mutates and isinstance(arguments.get("key"), str) else None
         if key is not None and primary is not None and (tool.name, key) in primary.keys:
             replay = primary.keys[(tool.name, key)]
             return Result(summary=f"already done with key {key!r}: nothing new was made",
                           created=list(replay.created), changed=list(replay.changed),
-                          data=replay.data)
-        call = Call(self, session, tool, arguments, entries, primary)
+                          refs=dict(replay.refs), data=replay.data)
+        context = CallContext()
         with collect_warnings() as caught:
+            arguments = self._with_refs(tool, arguments, entries, primary, context)
+            call = Call(self, session, tool, arguments, entries, primary, context)
             if tool.mutates and primary is not None:
                 with primary.batch():
                     returned = handler(call, **arguments)
                 primary.bump()
             else:
                 returned = handler(call, **arguments)
-        result = _as_result(returned, call.result)
+            result = _as_result(returned, call.result)
+            if tool.mutates and result.ok:
+                self._keep_refs(entries, context, [primary.doc_id] if primary else [])
+                if primary is not None:
+                    result.checks = {**self._checks(session, primary, context), **result.checks}
         result.warnings.extend(caught)
         if key is not None and primary is not None and result.ok:
             primary.keys[(tool.name, key)] = result
         return result
+
+    def _handler(self, session: Session, tool: Tool, arguments: Mapping[str, Any],
+                 primary: DocumentEntry | None) -> Callable[..., Any]:
+        kind = primary.kind if primary else None
+        if primary is None and tool.route is not None:
+            kind = arguments.get(tool.route)
+        handler = tool.handler_for(kind)
+        if handler is None:
+            if primary is None and tool.route is not None:
+                raise ToolError("invalid_arguments", f"{tool.name} cannot make a {kind} "
+                                "document here: no library for it is loaded", field=tool.route,
+                                valid_options=sorted(k for k in tool.handlers if k))
+            raise ToolError("invalid_arguments", f"{tool.name} does not work on a {kind} document",
+                            field=tool.documents[0] if not callable(tool.documents) else None,
+                            valid_options=[f"{e.doc_id} ({e.kind})" for e in
+                                           session.documents.values()
+                                           if tool.handler_for(e.kind) is not None])
+        return handler
+
+    # -- refs and checks ---------------------------------------------------------------------
+
+    def _with_refs(self, tool: Tool, arguments: dict[str, Any],
+                   entries: dict[str, DocumentEntry], primary: DocumentEntry | None,
+                   context: CallContext) -> dict[str, Any]:
+        """``arguments`` with every ``$name`` in a declared target replaced by its address."""
+        if not tool.refs or primary is None:
+            return arguments
+        doc = primary.doc_id
+        known = dict(primary.refs)
+        known.update(context.refs.get(doc, {}))
+
+        def resolve(value: Any, where: str) -> Any:
+            match = _REF_USE.match(value) if isinstance(value, str) else None
+            if match is None:
+                return value
+            name, rest = match.group(1), match.group(2) or ""
+            if name not in known:
+                raise ToolError("not_found", f"no ref ${name} in {doc}", field=where,
+                                valid_options=[f"${key}" for key in sorted(known)])
+            return known[name] + rest
+
+        def walk(node: Any, parts: list[str], where: str) -> Any:
+            if not parts:
+                if isinstance(node, list):
+                    return [resolve(item, f"{where}[{i}]") for i, item in enumerate(node)]
+                return resolve(node, where)
+            part, rest = parts[0], parts[1:]
+            many = part.endswith("[]")
+            name = part[:-2] if many else part
+            if not isinstance(node, Mapping) or name not in node:
+                return node
+            node = dict(node)
+            path = f"{where}.{name}" if where else name
+            if many and isinstance(node[name], list):
+                if rest:
+                    node[name] = [walk(item, rest, f"{path}[{i}]")
+                                  for i, item in enumerate(node[name])]
+                else:
+                    node[name] = [resolve(item, f"{path}[{i}]")
+                                  for i, item in enumerate(node[name])]
+            else:
+                node[name] = walk(node[name], rest, path)
+            return node
+
+        for path in tool.refs:
+            arguments = walk(arguments, path.split("."), "")
+        return arguments
+
+    @staticmethod
+    def _keep_refs(entries: dict[str, DocumentEntry], context: CallContext,
+                   changed: Iterable[str] = ()) -> None:
+        """Keep the refs a call defined, and record every changed document's refs under
+        its new version (so undo can bring back the refs of the state it returns to)."""
+        for doc in set(context.refs) | set(changed):
+            if doc in entries:
+                entries[doc].keep_refs(context.refs.get(doc, {}))
+
+    def _checks(self, session: Session, entry: DocumentEntry,
+                context: CallContext) -> dict[str, Any]:
+        fmt = session.formats.get(entry.kind)
+        if fmt is None or fmt.checks is None:
+            return {}
+        return dict(fmt.checks(entry, list(context.touched.get(entry.doc_id, []))))
+
+    # -- batch -------------------------------------------------------------------------------
+
+    def _ops(self, arguments: Mapping[str, Any]) -> list[tuple[int, Tool, dict[str, Any]]]:
+        """A batch's ops, each validated against its own tool: before anything runs."""
+        prepared = []
+        for index, op in enumerate(arguments.get("ops") or []):
+            name = op.get("tool", "")
+            where = f"ops[{index}]"
+            if name not in self.tools:
+                raise ToolError("invalid_arguments", f"{where}: no tool {name!r}",
+                                field=f"{where}.tool",
+                                valid_options=difflib.get_close_matches(name, self.tools, 5, 0.5)
+                                or sorted(t.name for t in self.tools.values() if t.batchable))
+            tool = self.tools[name]
+            if not tool.batchable or tool.composite:
+                raise ToolError("invalid_arguments", f"{where}: {name} cannot run inside a "
+                                "batch; call it on its own", field=f"{where}.tool")
+            try:
+                clean = self._arguments(tool, op.get("arguments") or {})
+            except ToolError as error:
+                inner = f"{where}.arguments" + (f".{error.field}" if error.field else "")
+                raise ToolError(error.code, f"{where} ({name}): {error.message}", field=inner,
+                                valid_options=error.valid_options) from None
+            prepared.append((index, tool, clean))
+        return prepared
+
+    def _batch_documents(self, arguments: Mapping[str, Any]) -> list[str]:
+        """Every document a batch's ops name, before they are validated (for the locks)."""
+        found: list[str] = []
+        for op in arguments.get("ops") or []:
+            tool = self.tools.get(op.get("tool", "")) if isinstance(op, Mapping) else None
+            args = op.get("arguments") if isinstance(op, Mapping) else None
+            if tool is None or tool.composite or not isinstance(args, Mapping):
+                continue
+            for doc in tool.doc_ids(args):
+                if doc not in found:
+                    found.append(doc)
+        return found
+
+    def _run_batch(self, session: Session, arguments: dict[str, Any],
+                   entries: dict[str, DocumentEntry], primary: DocumentEntry | None) -> Result:
+        ops = arguments.get("ops") or []
+        limits = session.limits
+        if len(ops) > limits.max_batch_ops:
+            raise ToolError("limit", f"{len(ops)} ops; at most {limits.max_batch_ops} per batch",
+                            field="ops")
+        prepared = self._ops(arguments)
+        context = CallContext()
+        context.batch = True
+        started = time.perf_counter()
+        done: list[dict[str, Any]] = []
+        combined = Result()
+        with collect_warnings() as caught:
+            try:
+                with ExitStack() as stack:
+                    for doc in sorted(entries, key=doc_order):
+                        stack.enter_context(entries[doc].batch())
+                    for index, tool, clean in prepared:
+                        if time.perf_counter() - started > limits.batch_timeout:
+                            raise _OpFailed(index, tool.name, ToolError(
+                                "timeout", f"the batch passed its {limits.batch_timeout:g} s "
+                                "deadline"))
+                        done.append(self._run_op(session, index, tool, clean, entries, context,
+                                                 combined))
+            except _OpFailed as failed:
+                error = failed.error
+                raise ToolError(
+                    error.code, f"ops[{failed.index}] ({failed.tool}) failed, so nothing in the "
+                    f"batch was applied: {error.message}",
+                    valid_options=error.valid_options,
+                    field=f"ops[{failed.index}]" + (f".arguments.{error.field}"
+                                                    if error.field else ""),
+                    details={"op": failed.index, "tool": failed.tool, "error": error.to_json(),
+                             "completed_before": failed.index}) from None
+            for doc in sorted(entries, key=doc_order):
+                entries[doc].bump()
+            self._keep_refs(entries, context, list(entries))
+            changing = any(tool.mutates for _, tool, _ in prepared)
+            checks = {doc: self._checks(session, entries[doc], context)
+                      for doc in sorted(entries, key=doc_order)} if changing else {}
+        combined.warnings.extend(caught)
+        if len(checks) == 1:
+            combined.checks = next(iter(checks.values()))
+        elif checks:
+            combined.checks = checks
+        combined.summary = f"Ran {len(done)} op(s) as one step: " + "; ".join(
+            op["summary"] for op in done[:5] if op.get("summary")) + (
+            f"; and {len(done) - 5} more" if len(done) > 5 else "")
+        combined.data = {"ops": done}
+        return combined
+
+    def _run_op(self, session: Session, index: int, tool: Tool, arguments: dict[str, Any],
+                entries: dict[str, DocumentEntry], context: CallContext,
+                combined: Result) -> dict[str, Any]:
+        doc_ids = tool.doc_ids(arguments)
+        primary = entries.get(doc_ids[0]) if doc_ids else None
+        try:
+            handler = self._handler(session, tool, arguments, primary)
+            arguments = self._with_refs(tool, arguments, entries, primary, context)
+            call = Call(self, session, tool, arguments,
+                        {doc: entries[doc] for doc in doc_ids if doc in entries}, primary,
+                        context)
+            result = _as_result(handler(call, **arguments), call.result)
+        except _OpFailed:
+            raise
+        except ToolError as error:
+            raise _OpFailed(index, tool.name, error) from None
+        except Exception as exc:  # noqa: BLE001 -- reported as the op's error
+            raise _OpFailed(index, tool.name, self.map_exception(exc)) from None
+        if not result.ok:
+            raise _OpFailed(index, tool.name, result.error or ToolError("internal", "failed"))
+        combined.changed += [a for a in result.changed if a not in combined.changed]
+        combined.created += result.created
+        combined.removed += result.removed
+        combined.renamed.update(result.renamed)
+        combined.refs.update(result.refs)
+        combined.warnings += [f"ops[{index}]: {w}" for w in result.warnings]
+        entry: dict[str, Any] = {"op": index, "tool": tool.name, "summary": result.summary}
+        if result.created:
+            entry["created"] = result.created
+        if result.data not in (None, {}, []):
+            entry["data"] = result.data
+        return entry
 
     def map_exception(self, exc: BaseException) -> ToolError:
         """A library exception as an error code, with its valid options when known."""
@@ -380,6 +682,7 @@ def _as_result(returned: Any, built: Result) -> Result:
     if isinstance(returned, Result):
         returned.images = built.images + returned.images
         returned.warnings = built.warnings + returned.warnings
+        returned.refs = {**built.refs, **returned.refs}
         return returned
     if returned is not None:
         built.data = returned

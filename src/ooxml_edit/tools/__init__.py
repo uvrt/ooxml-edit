@@ -32,18 +32,23 @@ What is here:
 * :mod:`.limits` -- size limits, magic-byte checks and the zip-bomb guard;
 * :mod:`.worker` -- a process pool whose deadlines are kept by killing the worker;
 * :mod:`.logs` -- call records with argument digests, not content;
-* :mod:`.prompts` -- the shared system-prompt fragment: mechanics, no house style.
+* :mod:`.prompts` -- the shared system-prompt fragment: mechanics, no house style;
+* :mod:`.shared` -- the definitions of the tools every format shares (open, save, undo,
+  find, replace, render, check, charts, SmartArt, properties, and the generic ``batch``),
+  one each; libraries add a handler for their kind.
 
 Nothing here reads or writes a file: documents and inputs come in as bytes, saved files go
 out as bytes to the application, and no tool may take a path.  Like :mod:`ooxml_edit.charts`
 this subpackage is optional, and the core never imports it.
 """
 
-from .dispatch import Call, Toolbox, collect_warnings
+from . import shared
+from .dispatch import REF, Call, CallContext, Toolbox, collect_warnings
 from .limits import LimitError, Limits
 from .logs import CallRecord
 from .prompts import SYSTEM, system_prompt
-from .registry import (CORE, Param, Tool, ToolGroup, array, boolean, build_schema, integer,
+from .registry import (CORE, Param, Tool, ToolGroup, array, boolean, build_schema,
+                       free_object, integer,
                        number, obj, string, tool)
 from .results import (ERROR_CODES, Image, Result, ToolError, anthropic_image_tokens,
                       openai_image_tokens, page_list, page_text, truncate)
@@ -52,10 +57,10 @@ from .session import Blob, DocumentEntry, DocumentFormat, Output, Session, doc_o
 from .worker import WorkerPool
 
 __all__ = [
-    "Blob", "CORE", "Call", "CallError", "CallRecord", "DocumentEntry", "DocumentFormat",
-    "ERROR_CODES", "Image", "LimitError", "Limits", "Output", "Param", "Result", "SYSTEM",
+    "Blob", "CORE", "Call", "CallContext", "CallError", "CallRecord", "DocumentEntry", "DocumentFormat",
+    "ERROR_CODES", "REF", "Image", "LimitError", "Limits", "Output", "Param", "Result", "SYSTEM",
     "Session", "SubsetError", "Tool", "ToolError", "ToolGroup", "Toolbox", "WorkerPool",
     "anthropic_image_tokens", "array", "boolean", "build_schema", "canonical", "check_subset",
-    "collect_warnings", "doc_order", "integer", "number", "obj", "openai_image_tokens",
-    "page_list", "page_text", "string", "system_prompt", "tool", "truncate", "validate_call",
+    "collect_warnings", "doc_order", "free_object", "integer", "number", "obj", "openai_image_tokens",
+    "page_list", "page_text", "shared", "string", "system_prompt", "tool", "truncate", "validate_call",
 ]

@@ -167,6 +167,7 @@ standard library only, and no provider SDK. The plan it implements is
 | `tools.limits` | size limits, magic-byte checks, image sizes read from headers, and a zip-bomb guard |
 | `tools.worker` | a process pool for rendering and layout whose deadlines are kept: a worker past its deadline is killed and the call reports `timeout` |
 | `tools.logs`, `tools.prompts` | call records with argument digests, not content; the shared system-prompt fragment (mechanics only, no house style) |
+| `tools.shared` | the one definition of each tool every format shares (open, new, save, list and close, undo, find, replace, render, check, charts, SmartArt, properties) and the generic `batch`; a library adds its handler with `@shared.handler("render", kind=...)`, and lists `shared.SESSION_TOOLS`, whose handlers serve every kind. The one module that names formats, in its descriptions only |
 
 ```python
 from ooxml_edit.tools import Toolbox
@@ -188,6 +189,14 @@ Calls on one document run one at a time in the order the model emitted them; cal
 different documents run concurrently. A mutating call is one undo step, and a failed one
 changes nothing. Saving refuses new validation problems unless the application (never the
 model) passes `allow_new_problems=True`.
+
+**Refs and batches.** A creating call may name what it makes (`"ref": "step1"`); a later
+call writes `$step1` wherever its tool takes a target, and the dispatcher puts the address
+in. The `batch` tool runs many calls in one round trip -- in order, all or none, one undo
+step per document, the facts (`checks`) computed once at the end -- and names the failing op
+and its valid options when one fails. Its ops' arguments are free-form objects, so `batch`
+is the one tool never sent strict: each op is validated by the dispatcher against its own
+tool's schema instead of by constrained decoding.
 
 ## Install
 

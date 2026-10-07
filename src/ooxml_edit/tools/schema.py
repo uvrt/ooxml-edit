@@ -12,6 +12,10 @@ mode, so one definition serves Claude and the OpenAI APIs alike:
 * a ``description`` on every property, and property names that match :data:`NAME`;
 * nesting at most :data:`MAX_DEPTH` levels below the root, no ``$ref``, no recursion.
 
+One exception: a tool that is never sent strict (``Tool(strict=False)``, the generic
+``batch`` tool) may hold a *free-form* object, ``{"type": "object", "additionalProperties":
+true}`` with no properties, whose content the dispatcher checks against another schema.
+
 What the subset cannot say -- numeric bounds, string and array lengths, "exactly one of" --
 the dispatcher enforces.  A tool keeps those in its *validation* schema, which is the
 canonical schema plus the bound keywords in :data:`BOUND_KEYWORDS`; :func:`canonical` strips
@@ -34,7 +38,12 @@ TYPES = ("string", "integer", "number", "boolean", "array", "object")
 FORMATS = ("date", "date-time")
 MAX_ENUM = 50
 MAX_ENUM_TOTAL = 1000
-MAX_DEPTH = 4
+#: How deep an object may sit below the root (an array's items count as a level).  Six
+#: lets a plural tool hold a text spec: ``items[] -> paragraphs[] -> runs[]``, the runs at
+#: depth 6.  OpenAI strict mode allows 10 levels; Anthropic documents no depth limit, only
+#: an overall complexity limit (a 400, "Schema is too complex for compilation"), which the
+#: online test checks with every definition sent at once.
+MAX_DEPTH = 6
 
 #: The keywords a canonical schema node may carry.
 SUBSET_KEYWORDS = frozenset({
@@ -62,11 +71,14 @@ class SubsetError(ValueError):
 # -- the subset checker ------------------------------------------------------------------------
 
 
-def subset_problems(schema: Mapping[str, Any], *, allow_bounds: bool = False) -> list[str]:
+def subset_problems(schema: Mapping[str, Any], *, allow_bounds: bool = False,
+                    allow_free: bool = False) -> list[str]:
     """Every way ``schema`` leaves the common strict subset; empty when it is inside.
 
     With ``allow_bounds`` the dispatcher's bound keywords are accepted too (a validation
-    schema); without, the schema must be exactly what a provider is sent.
+    schema); without, the schema must be exactly what a provider is sent.  With
+    ``allow_free`` a free-form object (:func:`is_free`) is accepted: only for a tool that is
+    never sent strict.
     """
     problems: list[str] = []
     if not isinstance(schema, Mapping):
@@ -74,23 +86,36 @@ def subset_problems(schema: Mapping[str, Any], *, allow_bounds: bool = False) ->
     if schema.get("type") != "object":
         problems.append("the root must be type object")
     enum_total = [0]
-    _check_node(schema, "$", 0, problems, enum_total, allow_bounds, is_root=True)
+    _check_node(schema, "$", 0, problems, enum_total, allow_bounds, is_root=True,
+                allow_free=allow_free)
     if enum_total[0] > MAX_ENUM_TOTAL:
         problems.append(f"{enum_total[0]} enum values in total; at most {MAX_ENUM_TOTAL}")
     return problems
 
 
-def check_subset(schema: Mapping[str, Any], *, allow_bounds: bool = False) -> None:
+def check_subset(schema: Mapping[str, Any], *, allow_bounds: bool = False,
+                 allow_free: bool = False) -> None:
     """Raise :class:`SubsetError` unless ``schema`` is inside the common strict subset."""
-    problems = subset_problems(schema, allow_bounds=allow_bounds)
+    problems = subset_problems(schema, allow_bounds=allow_bounds, allow_free=allow_free)
     if problems:
         raise SubsetError(problems)
 
 
+def is_free(node: Mapping[str, Any]) -> bool:
+    """A free-form object: any keys, checked by the dispatcher against another schema."""
+    return node.get("type") == "object" and node.get("additionalProperties") is True
+
+
 def _check_node(node: Any, where: str, depth: int, problems: list[str], enum_total: list[int],
-                allow_bounds: bool, *, is_root: bool = False) -> None:
+                allow_bounds: bool, *, is_root: bool = False, allow_free: bool = False) -> None:
     if not isinstance(node, Mapping):
         problems.append(f"{where}: not a schema object")
+        return
+    if allow_free and not is_root and is_free(node):
+        if set(node) - {"type", "description", "additionalProperties"}:
+            problems.append(f"{where}: a free-form object takes no other keywords")
+        if not str(node.get("description") or "").strip():
+            problems.append(f"{where}: no description")
         return
     allowed = SUBSET_KEYWORDS | (BOUND_KEYWORDS if allow_bounds else frozenset())
     for key in node:
@@ -153,7 +178,8 @@ def _check_node(node: Any, where: str, depth: int, problems: list[str], enum_tot
                 problems.append(f"{where}.{name}: the name does not match {NAME.pattern}")
             if is_path_name(name):
                 problems.append(f"{where}.{name}: a path parameter; take a blob handle instead")
-            _check_node(child, f"{where}.{name}", depth + 1, problems, enum_total, allow_bounds)
+            _check_node(child, f"{where}.{name}", depth + 1, problems, enum_total, allow_bounds,
+                        allow_free=allow_free)
     elif "properties" in node or "required" in node or "additionalProperties" in node:
         problems.append(f"{where}: object keywords on a {kind}")
     if kind == "array":
@@ -164,7 +190,8 @@ def _check_node(node: Any, where: str, depth: int, problems: list[str], enum_tot
             if isinstance(items, dict) and "description" not in items:
                 # Items take their meaning from the array's own description.
                 items["description"] = "item"
-            _check_node(items, f"{where}[]", depth + 1, problems, enum_total, allow_bounds)
+            _check_node(items, f"{where}[]", depth + 1, problems, enum_total, allow_bounds,
+                        allow_free=allow_free)
     elif "items" in node:
         problems.append(f"{where}: items on a {kind}")
 
@@ -241,6 +268,8 @@ def _validate(node: Mapping[str, Any], value: Any, where: str) -> Any:
     if kind == "object":
         if not isinstance(value, Mapping):
             raise CallError(f"{label} must be an object", where or None)
+        if is_free(node):
+            return dict(value)
         properties = node.get("properties") or {}
         required = set(node.get("required", ()))
         unknown = [key for key in value if key not in properties]
