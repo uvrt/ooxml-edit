@@ -139,10 +139,19 @@ def test_every_shared_definition_is_in_the_subset_and_batch_alone_is_not_strict(
             check_subset(definition.canonical)
     assert set(shared.SPECS) >= {
         "open_document", "new_document", "save_document", "list_documents", "close_document",
-        "undo", "find_text", "replace_text", "render", "check", "edit_chart", "read_chart",
+        "undo", "describe", "find_text", "replace_text", "render", "check", "edit_chart",
         "edit_smartart", "set_properties", "batch"}
+    assert "read_chart" not in shared.SPECS          # edit_chart's read action (T5b)
     assert shared.CORE_NAMES == ["open_document", "new_document", "save_document", "undo",
-                                 "find_text", "replace_text", "render", "check", "batch"]
+                                 "describe", "find_text", "replace_text", "render", "check",
+                                 "batch"]
+
+
+def test_edit_chart_reads_without_changing():
+    chart = shared.definition("edit_chart")
+    assert chart.canonical["properties"]["action"]["enum"][0] == "read"
+    assert chart.mutates and not chart.changes({"action": "read"})
+    assert chart.changes({"action": "set_title"})
 
 
 def test_a_free_form_object_is_refused_in_a_strict_tool():

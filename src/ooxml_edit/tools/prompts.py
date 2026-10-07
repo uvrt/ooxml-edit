@@ -6,8 +6,8 @@ judgement belongs to the application, which appends its own guidance after these
 (``Toolbox.system_prompt(extra=...)``).  Each format library adds a fragment of its own for
 its address grammar and its describe and read tools.
 
-The shared fragment covers, in order: planning (describe once, then read only what the task
-touches; tools loaded on demand), addresses and refs, fewer and larger calls (``items[]``
+The shared fragment covers, in order: planning (``describe`` once, then read only what the
+task touches; tools loaded on demand), addresses and refs, fewer and larger calls (``items[]``
 and ``batch``; layout tools rather than arithmetic), results and their ``checks``, rendering
 sparingly, checking before saving, units, and document content as data.
 
@@ -30,7 +30,7 @@ document and input is already open or registered under a handle (documents d1, d
 the user's inputs, blobs b1, b2...).
 
 Plan
-- Describe a document once, first. Then read only what the task touches.
+- describe a document once, first. Then read only what the task touches.
 - Some tools are loaded on demand: search for a tool by what it does when you need one \
 you do not see.
 

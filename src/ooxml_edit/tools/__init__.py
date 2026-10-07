@@ -34,7 +34,8 @@ What is here:
 * :mod:`.logs` -- call records with argument digests, not content;
 * :mod:`.prompts` -- the shared system-prompt fragment: mechanics, no house style;
 * :mod:`.shared` -- the definitions of the tools every format shares (open, save, undo,
-  find, replace, render, check, charts, SmartArt, properties, and the generic ``batch``),
+  describe, find, replace, render, check, charts, SmartArt, properties, and the generic
+  ``batch``),
   one each; libraries add a handler for their kind.
 
 Nothing here reads or writes a file: documents and inputs come in as bytes, saved files go

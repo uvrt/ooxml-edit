@@ -158,6 +158,10 @@ class Tool:
     #: Argument paths (``target``, ``items[].target``, ``targets[]``) whose string values may
     #: be a ref, ``$name`` or ``$name/rest``: an address a creating call named.
     refs: Sequence[str] = ()
+    #: For a changing tool with a reading mode (``edit_chart`` with ``action: "read"``, a
+    #: measure-only call): a function of the arguments, true when the call changes nothing.
+    #: Such a call runs as a reading one: no undo step, no version, no checks, no retry key.
+    reads: Callable[[Mapping[str, Any]], bool] | None = None
 
     def __post_init__(self) -> None:
         problems = definition_problems(self)
@@ -176,6 +180,11 @@ class Tool:
     @property
     def kinds(self) -> list[str | None]:
         return list(self.handlers)
+
+    def changes(self, arguments: Mapping[str, Any]) -> bool:
+        """Whether a call with ``arguments`` changes its document: a changing tool, unless
+        ``reads`` says this call only reads."""
+        return self.mutates and not (self.reads is not None and bool(self.reads(arguments)))
 
     def optional_parameters(self) -> list[str]:
         """Every optional property at any depth (Claude's strict limit counts these)."""
@@ -201,9 +210,11 @@ class Tool:
 
     def same_definition(self, other: "Tool") -> bool:
         return (self.name, self.description, self.schema, self.group, self.mutates,
-                self.route, self.strict, self.batchable, self.composite, tuple(self.refs)) == (
+                self.route, self.strict, self.batchable, self.composite, tuple(self.refs),
+            self.reads) == (
             other.name, other.description, other.schema, other.group, other.mutates,
-            other.route, other.strict, other.batchable, other.composite, tuple(other.refs))
+            other.route, other.strict, other.batchable, other.composite, tuple(other.refs),
+            other.reads)
 
     def merged(self, other: "Tool") -> "Tool":
         """One definition serving both tools' kinds: a shared tool two libraries implement."""
@@ -268,14 +279,16 @@ def tool(name: str, description: str, params: Mapping[str, Param] | None = None,
          documents: Sequence[str] | Callable[[Mapping[str, Any]], list[str]] = ("doc",),
          exactly_one: Sequence[Sequence[str]] = (),
          priority: int | None = None, strict: bool = True, batchable: bool = True,
-         refs: Sequence[str] = ()) -> Callable[[Handler], Tool]:
-    """Make a :class:`Tool` of a handler.  ``kind`` restricts it to one document kind."""
+         refs: Sequence[str] = (),
+         reads: Callable[[Mapping[str, Any]], bool] | None = None) -> Callable[[Handler], Tool]:
+    """Make a :class:`Tool` of a handler.  ``kind`` restricts it to one document kind;
+    ``reads`` marks the calls of a changing tool that only read (:attr:`Tool.reads`)."""
 
     def make(handler: Handler) -> Tool:
         return Tool(name=name, description=description, schema=build_schema(params or {}),
                     handlers={kind: handler}, group=group, mutates=mutates,
                     documents=documents, exactly_one=exactly_one, priority=priority,
-                    strict=strict, batchable=batchable, refs=tuple(refs))
+                    strict=strict, batchable=batchable, refs=tuple(refs), reads=reads)
 
     return make
 

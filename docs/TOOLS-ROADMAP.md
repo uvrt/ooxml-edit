@@ -4,7 +4,7 @@ This is the working plan for the **tool layer** over pptx-agent and docx-agent. 
 
 **Effort key:** S ≈ half a day · M ≈ 1–3 days · L ≈ 1–2 weeks · XL ≈ 3+ weeks.
 
-**Next step: T4** (charts and the remaining gaps) and T5's follow-up (the tool rationalisation the user decides), then trial 3 (T6). T0, the plumbing, is in ooxml-edit 0.3.0 (0.4.0: shared definitions, refs, batch; 0.6.0: T5's loading and strict rules); T1 (PowerPoint core), T2 (Word core), T3 (layout and complex diagrams) and T5 (guidance and loading) are done.
+**Next step: T4** (charts and the remaining gaps), then trial 3 (T6). T0, the plumbing, is in ooxml-edit 0.3.0 (0.4.0: shared definitions, refs, batch; 0.6.0: T5's loading and strict rules; 0.7.0: T5's rationalisation, with the shared `describe`, `edit_chart`'s read action and `Tool.reads`); T1 (PowerPoint core), T2 (Word core), T3 (layout and complex diagrams) and T5 (guidance, loading and the rationalisation) are done.
 
 ---
 
@@ -323,9 +323,9 @@ DocumentEntry
 
 ## Tool design principles (from the trials and the spike)
 
-1. **One describe tool per document,** listing everything editable with ids.
-   - `ppt_describe`: slides with their titles, layouts and their placeholders, each slide's content area (pt), theme colours, fonts, roles and tints, slide size, sections, and the baseline problems.
-   - `word_describe`: the heading tree with ids, sections, stories, styles in use, comments, revision and field counts, tables, drawings, charts, page count, and the baseline problems.
+1. **One describe tool,** `describe` (shared since T5b: one schema, a handler per kind), listing everything editable with ids.
+   - On a deck: slides with their titles, layouts and their placeholders, each slide's content area (pt), theme colours, fonts, roles and tints, slide size, sections, and the baseline problems.
+   - On a document: the heading tree with ids, sections, stories, styles in use, comments, revision and field counts, tables, drawings, charts, page count, and the baseline problems.
    - Reading the content itself is a second tool with paging (`ppt_read_slides`, `word_read`).
 2. **One address grammar,** written once in the system prompt and accepted by every tool.
    - **PowerPoint:** `s:256` (slide), `256.5` (shape; `256.5#2` when the deck numbered a shape twice), `256.5/p1/r0`, `256.5/cell2,1`, `256/notes`, `layout:Title and Content`. Another open deck's shapes are qualified by its doc id: `d2:256.5`.
@@ -341,7 +341,7 @@ DocumentEntry
    - Every length in every tool is points, as a number (2 decimals), for both formats. pptx EMU is converted at the boundary (12,700 per pt). The SVG read view's user units are points too.
    - Font sizes are points, colours are theme strings (`accent1 lumMod=75%`) or `#RRGGBB`, and dates are `YYYY-MM-DD`.
    - This removes trial 2's N5 class of error (EMU versus points) by construction.
-5. **One measuring model.** `ppt_measure_text` takes the same text spec as `ppt_add_shape`/`ppt_set_text`, and the target shape's (or the new shape's preset's) default insets, font and wrap. What is measured is what is built; the spike's two drift bugs (missing default insets, an unnoticed `bold`) cannot recur.
+5. **One measuring model.** Measuring is `ppt_add_shape` itself with `measure: true` (since T5b; before, `ppt_measure_text`): the same text spec as `ppt_add_shape`/`ppt_set_text`, and the target shape's (or the new shape's preset's) default insets, font and wrap. What is measured is what is built; the spike's two drift bugs (missing default insets, an unnoticed `bold`) cannot recur.
 6. **Facts in every result.** Each mutating call returns `checks`, which hold facts only:
    - **pptx:** `overflows()` for the slides touched (text, overlap/collisions including box overlap, off_slide), and `near_wrap` lines. `check` adds the full slide facts (LP15); `ppt_design_facts` adds the design facts (LP24).
    - **docx:** `EditResult.warnings`/`unknown`, and stale fields (gap **LW2**).
@@ -397,7 +397,7 @@ Shape calls are the main route. What the spike showed is missing is not a differ
 
 ### The text spec (used by building and measuring)
 
-One shape, in `ppt_add_shape`, `ppt_set_text` and `ppt_measure_text` alike:
+One shape, in `ppt_add_shape` (building or, with `measure: true`, measuring) and `ppt_set_text` alike:
 
 ```json
 {"paragraphs": [
@@ -413,7 +413,7 @@ One shape, in `ppt_add_shape`, `ppt_set_text` and `ppt_measure_text` alike:
 - Plain `text` (`\n` paragraphs, `\v` line breaks) remains for the simple case.
 - Library: **LP18** (a `TextSpec` type shared by `set_text` and `measure_text`).
 
-### Layout (`ppt_layout`, `ppt_align`, `ppt_distribute`) -- built in T3
+### Layout (`ppt_layout`, `ppt_align`) -- built in T3
 
 | Action | What it does | Parameters |
 |---|---|---|
@@ -427,7 +427,7 @@ One shape, in `ppt_add_shape`, `ppt_set_text` and `ppt_measure_text` alike:
 - `place_labels` tries each side in order of preference -- its base spot `distance` from the anchor's edge, centred on it, then slid along that side and pushed further out -- before the next side, within the distance rule. A spot is taken when it stays in the box, overlaps no other shape or placed label, and crosses no line; a filled shape without text that the label lies wholly on (a quadrant panel) is allowed, as `collisions()` allows it. Labels it cannot place are returned with the reason and the shapes most in the way (a fact, not an error); the slide's `collisions(boxes=True)` that involve a label are returned too. New labels align their text toward the anchor.
 - A layout that cannot fit its box is `refused`, with `needed` and `available`.
 - One call is one undo step.
-- `ppt_align` (edge: left/center/right/top/middle/bottom; `to`: selection, slide, content area, or the first shape, which stays) and `ppt_distribute` (`axis`; `to`: selection, slide, content; or a fixed `gap`) are PowerPoint's commands; distribute orders shapes by where they stand, as PowerPoint does.
+- `ppt_align` is PowerPoint's Align and Distribute (one tool since T5b): `edge` (left/center/right/top/middle/bottom; `to`: selection, slide, content area, or the first shape, which stays) or `distribute` (horizontal/vertical; `to`: selection, slide, content; or a fixed `gap`), exactly one; distribute orders shapes by where they stand, as PowerPoint does.
 - Library: **LP1** `pptx_agent.edit.arrange` (`align`, `distribute`, `place`), **LP21** and **LP22** `pptx_agent.edit.layout` (`stack`, `column`, `grid`, `place_labels`), **LP17** `content_area`.
 
 ### Data positions: scales (`ppt_scale`, `place`) -- new in T3, from arm C
@@ -523,32 +523,30 @@ The ids of removed items (LP2–LP6, LW4) are retired, not reused; P14 and LP16 
 | S7 | `replace_text` | replace everywhere, or exactly once | `doc`, `find`, `replace`, `scope`, `expect` (`one`/`all`), `regex` | count, addresses | docx `replace`/`anchor().replace`; pptx `find_text` + `resolve().text` | pptx: TL now, **LP11** `deck.replace()` later |
 | S8 | `render` | PNG of slides or pages | `doc`, `slides`/`pages`, `width` (≤2576) | images + sizes + token estimate | `render_png` | worker deadline; **LR4**, **LR5** |
 | S9 | `check` | facts "as Office shows it" | `doc`, `scope`, `include` (fit, collisions, facts, design, validate, reflow, fields), `boxes?` (box-overlap mode) | a report with addresses; no verdicts | `overflows`, `collisions(boxes=)`, slide facts, design facts, `validate`, `layout().compare` | LP15, LP19, LP24, LW1 |
-| S10 | `edit_chart` | data, titles, legend | `target`, `action` (set_values, set_value, add_category, remove_category, rename_category, add_series, remove_series, rename_series, set_title, set_axis_title, set_legend), `series?`, `category?`, `values?`, `text?`, `position?` | the chart's state after the edit | `ooxml_edit.charts.Chart` (both libraries adapt it) | — |
-| S11 | `read_chart` | what is drawn and what Edit Data holds | `target` | type, categories, series, number formats, workbook values | `Chart.data`, `workbook_values`, `number_formats` | — |
+| S10 | `edit_chart` | read a chart; data, titles, legend | `target`, `action` (read, set_values, set_value, add_category, remove_category, rename_category, add_series, remove_series, rename_series, set_title, set_axis_title, set_legend), `series?`, `category?`, `values?`, `text?`, `position?` | read: type, categories, series, number formats, workbook values; otherwise the chart's state after the edit | `ooxml_edit.charts.Chart` (both libraries adapt it); `read` runs as a read (`Tool.reads`) | S11 `read_chart` folded in (T5b) |
 | S12 | `edit_smartart` | node text, add or remove nodes | `target`, `action`, `node`, `text`, `parent?` | nodes | `Diagram.set_text/add_node/remove_node/add_child` | — |
 | S13 | `set_properties` | metadata | `title?`, `author?`, `language?`, `subject?` | properties | pptx `title`/`author`/`language`; docx `set_properties` | — |
 | S14 | `batch` | several calls as one: in order, all or none, one undo step | `ops[]` {tool, arguments} | each op's summary and data; checks once at the end | the dispatcher | core; non-strict (D14) |
 | S15 | `read_blob` | an input's text (CSV, Markdown, plain text, JSON), a page at a time | `blob`, `cursor?` | the text page, name, type, size, lines | session blobs | ooxml-edit 0.5.0; images and packages refused |
+| S16 | `describe` | the document at a glance; call once, first | `doc` | decks: P1's facts; documents: W1's | each library's handler | T5b: `ppt_describe` and `word_describe` had one schema |
 
 ### PowerPoint-specific (prefix `ppt_`)
 
 | # | Tool | Purpose | Key parameters | Returns | Wraps | Gap |
 |---|---|---|---|---|---|---|
-| P1 | `ppt_describe` | the deck at a glance | `doc` | slides (id, n, title, layout, shape count, content area in pt), size, sections, theme colours, fonts, roles, tint ramps, layouts with placeholders (type, idx, bounds in pt), baseline problems | `slides`, `slide.title`, `layouts`, `Layout.placeholders`, `theme.colors/fonts/roles/ramps`, `validate` | LP17 (content area) |
+| P1 | `describe` (S16; was `ppt_describe`) | the deck at a glance | `doc` | slides (id, n, title, layout, shape count, content area in pt), size, sections, theme colours, fonts, roles, tint ramps, layouts with placeholders (type, idx, bounds in pt), baseline problems | `slides`, `slide.title`, `layouts`, `Layout.placeholders`, `theme.colors/fonts/roles/ramps`, `validate` | LP17 (content area) |
 | P2 | `ppt_read_slides` | slide content with ids | `doc`, `slides`, `detail` (outline/geometry/svg) | outline Markdown with ids; a per-shape geometry dump; or the per-slide SVG read view | `to_outline`; shape properties; pptx2svg agent view | `geometry`: TL; `svg`: **LR3** |
-| P3 | `ppt_measure_text` | size text before building, with the same spec | `paragraphs` (text spec) or `text` + `size` + `bold?`; `width`; `height?`; `like?` (a shape address: its font, insets, wrap) or `preset?` (a new shape's defaults; `textbox` included) | lines, text height, **box height** (insets included: `fit_box`), widest line, `margin_to_wrap`, `near_wrap` | `measure_text`, `fit_height` | **LP18** |
+| P3 | (folded into P7, T5b) `ppt_add_shape` with `measure: true` | size text before building, with the same spec | `paragraphs` (text spec) or `text` + `size` + `bold?`; `width`; `height?`; `like?` (a shape address: its font, insets, wrap) or `preset?` (a new shape's defaults; `textbox` included) | lines, text height, **box height** (insets included: `fit_box`), widest line, `margin_to_wrap`, `near_wrap` | `measure_text`, `fit_height` | **LP18** |
 | P4 | `ppt_set_text` | replace a shape's, cell's or notes' text | `items[]`: `target`, `text` (`\n` paragraphs, `\v` line breaks; keeps formatting) or `paragraphs` (text spec) | text_fit | `resolve(addr).text`, `set_text` | LP18 (spec) |
 | P5 | `ppt_format_text` | run, paragraph and frame formatting | `items[]`: `target`; run: bold, italic, underline, strike, size, font, color, hyperlink; paragraph: alignment, level, bullet (none/bullet/number), space_before/after (pt), line_spacing; frame: autofit, font_scale, insets, anchor, wrap | text_fit | `Run.format`, `Paragraph.*`, `set_bullet`, `TextFrame.*` | — |
-| P6 | `ppt_set_notes` | speaker notes | `slide`, `text` | notes | `slide.notes` | — |
-| P7 | `ppt_add_shape` | autoshapes or text boxes | `slide`, `items[]`: `preset` (enum of common presets + `other` with `preset_name`), `box` {x,y,w,h pt} and/or `place` (data units, D15), `text?` or `paragraphs?` (text spec), `fit_height?`, `fill?`, `line?`, `adjustments?`, `name?`, `ref?`; `key?` | address, text_fit, collisions | `add_shape`, `add_textbox(autofit="none")` | LP18 (spec), LP20 (preset list) |
+| P6 | (dropped, T5b) `ppt_set_text` on `256/notes` | speaker notes | `items[]`: `target` `256/notes`, `text` | text_fit | `notes_frame.set_text` | — |
+| P7 | `ppt_add_shape` | autoshapes or text boxes; with `measure: true`, measures their text and adds nothing (P3) | `slide`, `items[]`: `preset` (enum of common presets + `other` with `preset_name`), `box` {x,y,w,h pt} and/or `place` (data units, D15), `text?` or `paragraphs?` (text spec), `fit_height?`, `fill?`, `line?`, `adjustments?`, `like?` (measuring: as this shape), `name?`, `ref?`; `measure?`; `key?` | address, text_fit, collisions; measuring: per item lines, text height, **box height**, widest line, insets, `margin_to_wrap`, `fits` (against `box.h` when over 0) | `add_shape`, `add_textbox(autofit="none")` | LP18 (spec), LP20 (preset list) |
 | P8 | `ppt_set_shape` | **general setter** | `items[]`: `target`, any of: x, y, w, h, rotation, flip_h, flip_v, fill, gradient, line{color, width, dash, start, end}, preset, adjustments, name (frame fields stay in P5) | the shape after the edit | Shape properties, `LineFormat`, `Adjustments` | — |
 | P9 | `ppt_add_picture` | insert or replace an image | `slide` or `target`, `image` (blob handle), `box?`, `keep` (frame/height/width/none), `anchor?` | address, native size | `add_picture(bytes)`, `replace_image`, `image_size` | — |
 | P10 | `ppt_add_connector` | lines that stay attached | `items[]`: `kind` (straight/elbow/curved), `from`/`to` {shape, side} or a point {x, y} or `place` (data units), `line` {color, width, dash, start, end}, `ref?` | address, route, collisions | `add_connector`, `connection_site` | — |
 | P11 | `ppt_arrange` | z-order, group, duplicate, delete | `targets` (addresses or `$ref`), `action` (front, back, forward, backward, group, ungroup, duplicate, delete), `dx?`, `dy?` | new addresses, collisions | `bring_to_front`…`send_to_back`, `group`, `ungroup`, `duplicate`, `delete` | — |
-| P12 | `ppt_align` | PowerPoint's Align | `targets`, `edge` (left, center, right, top, middle, bottom), `to` (selection/slide) | moved shapes | — | **LP1** |
-| P13 | `ppt_distribute` | PowerPoint's Distribute | `targets`, `axis` (horizontal/vertical), `to` (selection/slide), `gap?` (pt; omitted = equal spread) | moved shapes | — | **LP1** |
-| P15 | `ppt_edit_table` | cells, rows, columns, merges | `target`, `action` (set_cells, insert_row, delete_row, insert_column, delete_column, merge, split, set_widths, set_heights), `cells[]` {row/col or row_label/col_label, text}, `like?` | the table after the edit, by labels | `Table.*`, `cell_by_label` | — |
-| P16 | `ppt_format_table` | fills, borders, cell text formatting | `target`, `region`, `fill?`, `borders?` {side, width, color}, `text?` (as P5) | — | `TableCell.fill`, `set_border`, text API | — |
+| P12 | `ppt_align` | PowerPoint's Align and Distribute | `targets`, `edge` (left, center, right, top, middle, bottom) or `distribute` (horizontal/vertical), `to` (selection/slide/content/first), `gap?` (distribute; pt; omitted = equal spread) | moved shapes | — | **LP1**; P13 `ppt_distribute` folded in (T5b) |
+| P15 | `ppt_edit_table` | cells, rows, columns, merges, cell fill and borders | `target`, `action` (set_cells, insert_row, delete_row, insert_column, delete_column, merge, split, set_widths, set_heights, format_cells), `cells[]` {row/col or row_label/col_label, text}, `like?`, `rows?`/`columns?`, `fill?`, `borders?` {side, width, color} | the table after the edit, by labels | `Table.*`, `cell_by_label`, `TableCell.fill`, `set_border` | P16 `ppt_format_table` split (T5b): fill and borders here, cell text through P5 on `256.7/cell1,2` |
 | P17 | `ppt_add_table` | a new table | `slide`, `box`, `rows`, `columns`, `data[][]`, `header_row` | address | `add_table` + cells | — |
 | P18 | `ppt_add_chart` | a new chart from data | `slide`, `box`, `type`, `categories`, `series[]` | address | — | **LE3 + LP7** |
 | P19 | `ppt_format_chart` | series colours, data labels, number format, axis bounds | `target`, … | — | — | **LP8** (in `ooxml_edit.charts`) |
@@ -562,7 +560,7 @@ The ids of removed items (LP2–LP6, LW4) are retired, not reused; P14 and LP16 
 | P27 | `ppt_scale` | declare a data scale once, as `$name`; its ticks | `name`, `kind?` (linear/date/band; omitted: read an existing scale), `from`, `to` (pt), `min`/`max`, `start`/`end`/`exclude[]`, `bands[]`/`gap`/`padding`, `ticks?` {every, step, format} | the scale, its ticks (positions and labels) | `edit.scales` | D15 |
 | P14 | `ppt_draw` (experimental, not in the defaults) | draw a graphic from SVG in the authoring profile as native shapes | `slide`, `svg`, `box?`, `replace?`, `measure?` | SVG id → address, text fits, warnings | `edit.svgprofile` | **LP16** |
 
-With the shared tools, that is **40 definitions** reachable for a deck after T3 (26 PowerPoint tools and 14 shared ones; 41 with the experimental `ppt_draw`; P18 and P19 come in T4). Thirteen of them are "core" (see Model guidance), and the rest load through tool search.
+With the shared tools, that is **35 definitions** reachable for a deck after T5b's rationalisation (20 PowerPoint tools and 15 shared ones; 36 with the experimental `ppt_draw`; P18 and P19 come in T4), down from 40. Thirteen of them are "core" (see Model guidance), and the rest load through tool search.
 
 **PowerPoint library gaps (work items):**
 - **LP1 `pptx_agent.edit.arrange`: `align(shapes, edge, to)` and `distribute(shapes, axis, to, gap=None)`** (M). Done in T3.
@@ -601,7 +599,7 @@ With the shared tools, that is **40 definitions** reachable for a deck after T3 
 
 | # | Tool | Purpose | Key parameters | Returns | Wraps | Gap |
 |---|---|---|---|---|---|---|
-| W1 | `word_describe` | the document at a glance | `doc` | headings tree (id, level, numbered list/text, block count), sections (id, page setup, header/footer stories), styles in use, comment and revision counts by author, fields by type, tables, drawings, charts, pages, compatibility mode, baseline problems | `paragraphs`, `sections()`, `styles`/`usage`, `comments()`, `changes()`, `fields()`, `charts()`, `layout().page_count` | TL (heading tree); `doc.outline()` **LW6** later |
+| W1 | `describe` (S16; was `word_describe`) | the document at a glance | `doc` | headings tree (id, level, numbered list/text, block count), sections (id, page setup, header/footer stories), styles in use, comment and revision counts by author, fields by type, tables, drawings, charts, pages, compatibility mode, baseline problems | `paragraphs`, `sections()`, `styles`/`usage`, `comments()`, `changes()`, `fields()`, `charts()`, `layout().page_count` | TL (heading tree); `doc.outline()` **LW6** later |
 | W2 | `word_read` | Markdown with ids | `range?`, `view` (final/markup/original), `stories` (body/all), `cursor?` | Markdown page, `next_cursor` | `to_markdown` | paging TL |
 | W3 | `word_inspect` | exact formatting of a block | `target`, `layout` (bool) | runs, effective properties, style, list, placements | `state(range, layout=True)` | — |
 | W4 | `word_set_tracking` | write edits as tracked changes or not | `on`, `author`, `word_switch?` | the mode | session + `tracking()`, `word_tracks_changes` | — |
@@ -613,8 +611,7 @@ With the shared tools, that is **40 definitions** reachable for a deck after T3 
 | W10 | `word_lists` | list membership | `targets`, `action` (add, remove, level, restart, continue, format), `kind` (bullet/number), `level?`, `start?` | list ids | `ListOps` | — |
 | W11 | `word_move` | move a section or blocks | `section_heading` or `range`, `before`/`after` | moved ids | `section_blocks`, `move_blocks` | — |
 | W12 | `word_copy_from` | copy blocks from another open document | `source_doc`, `range` or `section_heading`, `at`, `styles` (use_destination/keep_source/merge), `style_map?`, `unmapped` (import/body) | copied map, warnings | `copy_blocks` | — |
-| W13 | `word_changes` | list grouped changes | `author?`, `kind?`, `within?`, `detail` (grouped/records) | changes with ids and old/new text | `changes()`, `revisions()` | — |
-| W14 | `word_review_changes` | accept or reject | `action`, `ids?`, `within?`, `author?`, `all?` | count; what remains | `accept`/`reject`/`accept_all`/`reject_all`, `Change.accept/reject` | — |
+| W13 | `word_changes` | list, accept or reject tracked changes | `action` (list, accept, reject), `author?`, `kind?`, `within?`; list: `detail` (grouped/records), `cursor?`; accept, reject: `ids?`, `all?` | list: changes with ids and old/new text (a read: `Tool.reads`); accept, reject: count, what remains | `changes()`, `revisions()`, `accept`/`reject`/`accept_all`/`reject_all`, `Change.accept/reject` | W14 `word_review_changes` merged in (T5b) |
 | W15 | `word_comments` | comment threads | `action` (list, add, reply, resolve, reopen, edit, delete), `target`/`find`, `comment?`, `text?` | thread(s) | `CommentOps`, `comments()` | — |
 | W16 | `word_sections` | breaks and page setup | `action` (insert_break, remove_break, set), `after?`, `kind?`, `section`, orientation, margins (pt), columns, page size | sections | `insert_section_break`, `remove_section_break`, `set_section` | — |
 | W17 | `word_headers_footers` | header and footer content | `section`, `which` (header/footer), `type` (default/first/even), `action` (set, remove, link, unlink), `text?`, `page_number` (none/after_text/`Page X of Y`) | story ids | `add_header`/`add_footer`, `remove_*`, `link_to_previous`, `insert_page_number`, `set_even_and_odd_headers` | — |
@@ -625,13 +622,12 @@ With the shared tools, that is **40 definitions** reachable for a deck after T3 
 | W22 | `word_insert_table` | a new table | `at` (after/before id), `rows`, `columns`, `data[][]`, `header_rows`, `style?`, `widths?` (pt or %) | table id | `insert_table` | — |
 | W23 | `word_edit_table` | structure and cell text | `table`, `action` (set_cells, insert_row, delete_row, insert_column, delete_column, merge, split), `cells[]` {row, col, text}, `at?`, `span?` | table as GFM + ids | `TableOps`, cell paragraphs `set_text` | cells by label: TL (from header row/column) |
 | W24 | `word_format_table` | table, row and cell formatting | `table`, `scope` (table/row/cell/column), `index?`, width, alignment, look, shading, borders, vertical_alignment, height, height_rule, repeat_header | — | `set_table`, `set_row`, `format_cell`, `set_column_width` | — |
-| W25 | `word_insert_picture` | inline or floating picture | `at`, `image` (blob handle), `width` (pt), `alt_text`, `float?` {wrap, x, y, from} | drawing id | `insert_picture(bytes)`, `float_drawing`, `set_drawing` | — |
-| W26 | `word_drawings` | move, resize, wrap, z-order, text boxes | `target`, `action` (move, resize, float, inline, set, insert_text_box, insert_shape), … | — | `DrawingOps` | — |
+| W26 | `word_drawings` | pictures, text boxes and shapes: insert, move, resize, wrap, z-order | `action` (list, insert_picture, insert_text_box, insert_shape, move, resize, float, inline, set), `target?`, `image?` (blob handle), `at?`/`find?`, `width?` (pt; a picture keeps its ratio), `alt_text?` (needed for a picture), `wrap?` (an insert floats with it), `x?`, `y?`, `align?`, `against?` (column/margin/page), `ref?`, `key?`, … | drawing id | `insert_picture(bytes)`, `float_drawing`, `set_drawing`, `DrawingOps` | W25 `word_insert_picture` folded in (T5b) |
 | W27 | `word_controls` | content controls | `action` (list, insert, fill, remove), `at`, `type`, `items?`, `value?` | ids | `ControlOps`, `content_controls()` | — |
 | W28 | `word_insert_chart` | a new chart from data | `at`, `type`, `categories`, `series[]`, `width?` | drawing id | — | **LE3 + LW3** |
-| W29 | `word_template` | template work | `action` (apply_styles_from, save_as_template, upgrade_to_modern), `template_blob?` | reflow pages | `Document.new(template=)` (S2), `save_as_template`, `upgrade_to_modern` | "apply a template's styles to an open document": **LW5** |
+| W29 | `word_template` | template work | `action` (upgrade_to_modern; apply_styles_from in T4) | reflow pages | `upgrade_to_modern`; a template is saved by S3 `save_document(format="dotx")` (its `save_as_template` action dropped in T5b) | "apply a template's styles to an open document": **LW5** |
 
-That is 29 + 13 = **42 definitions** reachable for a document.
+That is 25 Word tools and 16 shared ones: **41 definitions** reachable for a document after T5b, down from 44.
 
 **Word library gaps:**
 - **LW1 `doc.problems()`: layout facts** (M–L), from `layout()`:
@@ -662,19 +658,19 @@ LR1 and LR2 do not block the tools. LR4 and LR5 should land before T6, since age
 
 ### Tools shared in shape across both formats
 
-S1–S13 are single definitions that dispatch by the document's kind. Each library declares the same definition with its own handler; `Toolbox` merges same-named tools whose definitions are identical into one tool with a handler per kind, and refuses two different definitions under one name.
+S1–S16 are single definitions that dispatch by the document's kind. Each library declares the same definition with its own handler; `Toolbox` merges same-named tools whose definitions are identical into one tool with a handler per kind, and refuses two different definitions under one name.
 - Their parameters are the union, and each says which format it applies to (`slides` for pptx, `pages`/`range` for docx). The dispatcher returns `invalid_arguments` naming the right field.
-- `edit_chart`, `read_chart` and `edit_smartart` wrap the same `ooxml_edit.charts` classes in both formats.
+- `edit_chart` (reading too) and `edit_smartart` wrap the same `ooxml_edit.charts` classes in both formats.
+- `describe` (S16) is shared because the two describe tools had one schema, `{doc}`; one description says what each kind returns. It saves about 140 tokens when both formats are loaded and costs nothing when one is.
 
 These pairs stay format-specific, because their parameters differ too much:
 
 | Purpose | PowerPoint | Word |
 |---|---|---|
-| describe | `ppt_describe` | `word_describe` |
 | read | `ppt_read_slides` | `word_read` |
 | set text | `ppt_set_text` | `word_set_text` |
 | general setter | `ppt_set_shape`/`ppt_format_text` | `word_format` |
-| add a picture | `ppt_add_picture` | `word_insert_picture` |
+| add a picture | `ppt_add_picture` | `word_drawings` (`insert_picture`) |
 | new table | `ppt_add_table` | `word_insert_table` |
 | new chart | `ppt_add_chart` | `word_insert_chart` |
 
@@ -685,15 +681,15 @@ These pairs stay format-specific, because their parameters differ too much:
 **A system-prompt fragment of about 600 tokens, shipped as `prompts.SYSTEM`**, plus one fragment per format of about 300–400 tokens (T5: 1,163 and 1,111 counted online, shared plus format). The app concatenates them, followed by its own guidance (see "The thinking layer"). The shipped fragments are mechanics only, with no style rules.
 
 1. **Plan before editing:**
-   - Call `*_describe` once, then read only what the task touches.
-   - Before building a graphic, read the theme, the content area and the layout placeholders, and size text with `ppt_measure_text` using the same text spec you will build with.
+   - Call `describe` once, then read only what the task touches.
+   - Before building a graphic, read the theme, the content area and the layout placeholders, and size text by measuring with `ppt_add_shape` (`measure: true`), using the same text spec you will build with.
 2. **Address by id:**
    - Copy addresses exactly from read results, including `data-id`s in the SVG view.
    - Never paste Markdown from `ppt_read_slides`/`word_read` into a set-text tool; outline text is escaped.
    - Use `find_text` when you know the words but not the id.
 3. **Prefer coarse tools:**
    - for a repeated element, build one exemplar, group it, and `ppt_copy` it with `repeat` or `cells` and per-copy `texts`;
-   - `ppt_layout` to place shapes in a row, column or grid, and to place labels; `ppt_align`/`ppt_distribute` instead of computing coordinates; for data (dates, scores, categories) a `ppt_scale` and `place` in data units;
+   - `ppt_layout` to place shapes in a row, column or grid, and to place labels; `ppt_align` (align or distribute) instead of computing coordinates; for data (dates, scores, categories) a `ppt_scale` and `place` in data units;
    - `word_move` for sections; `ppt_draft_slides`/`word_insert_markdown` for bulk text.
    - Use the general setter for adjustments.
 4. **Read every result's `checks`:**
@@ -717,52 +713,45 @@ These pairs stay format-specific, because their parameters differ too much:
 - The text spec is described once (in `ppt_add_shape`) and referred to by the others.
 - No `input_examples` at first. Trial 3 checks whether one `ppt_copy` example earns its tokens on Claude.
 
-**Budgets after T5's description pass.** Offline is compact JSON ÷ 3.5. Online is Anthropic's count-tokens on `claude-sonnet-5-5` and `claude-opus-5-5`, which count the same; the online figures include the 286-token hidden tool prompt.
+**Budgets after T5's rationalisation (T5b).** Offline is compact JSON ÷ 3.5. Online is Anthropic's count-tokens on `claude-sonnet-5-5` (Opus 5.5 counts the same, T5), less the empty request; it includes the 286-token hidden tool prompt.
 
-| | Offline before | Offline after | Online before | Online after |
-|---|---|---|---|---|
-| Deck core (13) | 3,907 | 3,313 | 5,821 | 5,051 |
-| All deck tools (40) | 16,394 | 13,882 | 23,974 | 20,622 |
-| Word core (13) | 3,199 | 2,878 | 4,664 | 4,250 |
-| All Word tools (44) | 12,592 | 11,444 | 17,581 | 16,123 |
-| Shared prompt + deck fragment | 882 | 986 | 1,055 | 1,163 |
-| Shared prompt + Word fragment | 832 | 968 | 977 | 1,111 |
+| | Tools | Offline T5 | Offline T5b | Online T5 | Online T5b |
+|---|---|---|---|---|---|
+| Deck core | 13 | 3,313 | 3,352 | 5,051 | 5,097 |
+| All deck tools | 40 → 35 | 13,882 | 12,747 | 20,622 | 18,848 |
+| Word core | 13 → 12 | 2,878 | 2,384 | 4,250 | 3,539 |
+| All Word tools | 44 → 41 | 11,444 | 11,046 | 16,123 | 15,544 |
+| Shared prompt + deck fragment | | 986 | 1,005 | 1,163 | 1,170 |
+| Shared prompt + Word fragment | | 968 | 996 | 1,111 | 1,142 |
 
-- **What the budget tests check:**
-  - the core at most 4,000 offline for each format;
-  - all definitions at most 12,000 offline for Word (restored);
-  - all definitions at most **14,000 offline for decks**.
-- **Why decks are not at 12,000:**
-  - What remains is structure, not prose:
-    - the text spec in three tools;
-    - data positions (`place`) in three places;
-    - the outline in three.
-  - Without any description at all, the 40 deck tools still count 13,400 online.
-  - Only merging tools brings it down further. That is the rationalisation below, which the user decides.
-- **The online truth is about 1.48 times the offline estimate.** A 12,000 budget in real tokens would be about 8,100 offline. Neither format reaches that without dropping groups.
-- What a request pays is the **loaded** set: the core plus the tool-search tool, about 5k for decks and 4.2k for Word, cached. The deferred tools cost nothing until tool search loads them.
+- The deck core grew by 46 tokens: `describe`'s one description says what both kinds return. `word_format` leaving the Word core took 711 off every Word request.
+- **The budget policy (T5b):**
+  - **What binds is what a request loads:** the core, at most **5,500 tokens per format as count-tokens counts them**. Each library's `tests/test_tools_online.py` (marked `provider`, run with a key) counts it and sends one request with the definitions as the adapter sends them. Today: decks 5,097, Word 3,539.
+  - **An offline proxy in CI:** the core's compact JSON ÷ 3.5, times the measured ratio **1.48**, at most 5,500 (an offline core of at most 3,716).
+  - **A regression guard on every definition, offline:** at most 13,000 for decks and 11,300 for Word, the T5b figures plus about 2%. It is a guard, not a budget: deferred definitions cost nothing until tool search loads them.
+  - The earlier budgets (core 4,000 and all 12,000 offline; decks 14,000) are retired. 12,000 real tokens for every definition would be about 8,100 offline, out of reach for either format without dropping groups, and it measured what no request pays.
 
-**Tool groups and deferred loading (final in T5):**
-- **Core, never deferred (12 per format, plus the shared `batch`):**
-  - shared: `open_document`, `new_document`, `save_document`, `undo`, `find_text`, `replace_text`, `render`, `check`;
-  - pptx: `ppt_describe`, `ppt_read_slides`, `ppt_set_text`, `ppt_set_shape`;
-  - Word: `word_describe`, `word_read`, `word_set_text`, `word_format`.
+**Tool groups and deferred loading (T5, regrouped in T5b):**
+- **Core, never deferred (13 for decks, 12 for Word):**
+  - shared: `open_document`, `new_document`, `save_document`, `undo`, `describe`, `find_text`, `replace_text`, `render`, `check`, `batch`;
+  - pptx: `ppt_read_slides`, `ppt_set_text`, `ppt_set_shape`;
+  - Word: `word_read`, `word_set_text`. `word_format` loads with the style tools.
 - **Groups.** Every tool is in exactly one group, and each has fewer than 10 tools, as OpenAI recommends for namespaces:
 
   | Group | Tools |
   |---|---|
-  | `shared_misc` (7) | `list_documents`, `close_document`, `read_blob`, `set_properties`, `edit_chart`, `read_chart`, `edit_smartart` |
-  | `ppt_text` (3) | `ppt_measure_text`, `ppt_format_text`, `ppt_set_notes` |
-  | `ppt_graphics` (4) | `ppt_add_shape`, `ppt_add_connector`, `ppt_arrange`, `ppt_copy` |
-  | `ppt_objects` (4) | `ppt_add_picture`, `ppt_add_table`, `ppt_edit_table`, `ppt_format_table` |
+  | `shared_misc` (6) | `list_documents`, `close_document`, `read_blob`, `set_properties`, `edit_chart` (reads too), `edit_smartart` |
+  | `ppt_text` (1) | `ppt_format_text` (table cells too) |
+  | `ppt_graphics` (4) | `ppt_add_shape` (measures too), `ppt_add_connector`, `ppt_arrange`, `ppt_copy` |
+  | `ppt_objects` (3) | `ppt_add_picture`, `ppt_add_table`, `ppt_edit_table` (fill and borders too) |
   | `ppt_slides` (4) | `ppt_add_slide`, `ppt_draft_slides`, `ppt_manage_slides`, `ppt_set_theme` |
-  | `ppt_layout` (5) | `ppt_align`, `ppt_distribute`, `ppt_layout`, `ppt_scale`, `ppt_design_facts` |
+  | `ppt_layout` (4) | `ppt_align` (distributes too), `ppt_layout`, `ppt_scale`, `ppt_design_facts` |
   | `ppt_experimental` (opt-in, not in the defaults) | `ppt_draw` |
   | `word_text` (4) | `word_inspect`, `word_insert_text`, `word_delete`, `word_insert_markdown` |
-  | `word_review` (4) | `word_set_tracking`, `word_changes`, `word_review_changes`, `word_comments` |
+  | `word_review` (3) | `word_set_tracking`, `word_changes` (list, accept, reject), `word_comments` |
   | `word_structure` (7) | `word_move`, `word_copy_from`, `word_sections`, `word_headers_footers`, `word_fields`, `word_notes`, `word_links` |
-  | `word_objects` (6) | `word_insert_table`, `word_edit_table`, `word_format_table`, `word_insert_picture`, `word_drawings`, `word_controls` |
-  | `word_style` (3) | `word_lists`, `word_styles`, `word_template` |
+  | `word_objects` (5) | `word_insert_table`, `word_edit_table`, `word_format_table`, `word_drawings` (inserts pictures too), `word_controls` |
+  | `word_style` (4) | `word_format`, `word_lists`, `word_styles`, `word_template` |
 
 - **How an application picks (the defaults since ooxml-edit 0.6.0):**
 
@@ -775,10 +764,12 @@ These pairs stay format-specific, because their parameters differ too much:
   | `toolbox.allowed_tools([…], provider=…)` | an OpenAI `tool_choice` (Responses or Chat shape) that narrows a turn's calls without changing the cached `tools` |
 
   `defer=` overrides the default either way.
-- **Strict on Claude (T5).** Only writing tools are strict, in each format's `strict_first` order, while the request stays under 20 tools, 24 optional parameters and 32 free-text strings:
-  - **decks:** `ppt_add_slide`, `edit_chart`, `ppt_align`, `ppt_manage_slides`, `replace_text`, `ppt_set_notes`, then `ppt_draft_slides` from the default order (7 tools, 24 optional parameters);
-  - **Word:** `replace_text`, `word_set_tracking`, `word_review_changes`, `word_insert_markdown`, `word_set_text`, `word_delete`, then `edit_smartart` (7 tools, 24 optional parameters).
+- **Strict on Claude (T5; re-tuned in T5b).** Only writing tools are strict, in each format's `strict_first` order, while the request stays under 20 tools, 24 optional parameters and 32 free-text strings:
+  - **decks:** `ppt_add_slide`, `edit_chart`, `ppt_align`, `ppt_manage_slides`, `ppt_draft_slides` (5 tools, 23 optional parameters, 21 strings; 28 golden calls). `ppt_align`'s distribute options cost three optional parameters, which `replace_text` (one golden call) gave up; `ppt_set_notes` is gone.
+  - **Word:** `replace_text`, `word_changes`, `word_set_tracking`, `edit_chart`, `word_insert_markdown`, `word_template` (6 tools, 24 optional parameters, 23 strings; 23 golden calls, `word_changes`' lists and `edit_chart`'s reads included). `word_set_text` and `word_delete` (one call each) gave way to `edit_chart` (four).
   - The order follows the writing tools the goldens call most. `ppt_set_text` alone would take 20 of the 24 optional parameters, so it, the shape and layout tools and `batch` are validated by the dispatcher instead. Inside `batch`, strict never applies anyway.
+  - Both plans were sent in one request per format on Sonnet 5.5 (T5b): 200, no "Schema is too complex".
+
 
 **System-prompt fragments (T5).**
 - `prompts.SYSTEM` (shared, about 600 tokens) covers:
@@ -805,16 +796,27 @@ These pairs stay format-specific, because their parameters differ too much:
   - the save-time check.
 - None carries a style rule. `pptx_agent.tools`' documentation shows how an application adds its own house rules over `ppt_design_facts` through `toolbox.system_prompt(extra=…)`.
 
-**Rationalisation (pending the user's decision).** An assessment of every tool is in T5's notes. It covers tokens, group, golden calls, trial evidence, overlap and a recommendation. Nothing has been merged or dropped yet. The candidates:
-- drop `ppt_set_notes`: `ppt_set_text` on `256/notes` does the same;
-- `ppt_measure_text` as a mode of `ppt_add_shape`;
-- `ppt_distribute` as an action of `ppt_align`;
-- `ppt_format_table` split between `ppt_format_text` (cell targets) and `ppt_edit_table`;
-- `read_chart` as an action of `edit_chart`;
-- `word_changes` and `word_review_changes` merged;
-- `word_insert_picture` into `word_drawings`.
+**The rationalisation (decided by the user; done in T5b, ooxml-edit 0.7.0).** T5 assessed every tool: tokens, group, golden calls, trial evidence and overlap. The user approved these changes:
 
-Together they would save about 2,000 online tokens for decks (40 → 35 tools) and 830 for Word (44 → 41).
+| Change | Before | After |
+|---|---|---|
+| Drop a duplicate | `ppt_set_notes` | `ppt_set_text` on `256/notes` |
+| Fold a measuring tool into the building one | `ppt_measure_text` | `ppt_add_shape` with `measure: true`: adds nothing, returns each item's lines, text height, `box_height`, insets and, against `box.h`, `fits`; `like` measures as an existing shape. The description and the prompt keep the word "measure" for tool search |
+| An action, not a tool | `ppt_distribute` | `ppt_align` with `distribute` (exactly one of `edge`, `distribute`) |
+| Split by what it changes | `ppt_format_table` | cell text: `ppt_format_text` on cell addresses; fill and borders: `ppt_edit_table`'s `format_cells` |
+| An action, not a tool (both formats) | `read_chart` | `edit_chart` with `action: "read"` |
+| Merge | `word_changes`, `word_review_changes` | `word_changes` with `action` list, accept or reject |
+| An action, not a tool | `word_insert_picture` | `word_drawings` with `action: "insert_picture"` (`wrap` floats it; `align`, `against`, `x`, `y` place it) |
+| Drop an action | `word_template`'s `save_as_template` | `save_document(format="dotx")`; `upgrade_to_modern` stays |
+| Out of the core | `word_format` (core) | the `word_style` group, loaded by tool search |
+| Share one definition | `ppt_describe`, `word_describe` (one schema, `{doc}`) | `describe` (S16), a handler per kind |
+
+- **Reading modes of changing tools.** `edit_chart`'s read, `ppt_add_shape`'s measure and `word_changes`' list are calls of a changing tool that change nothing. `Tool.reads` (ooxml-edit 0.7.0), a function of the arguments, marks them: such a call runs as a read, with no undo step, no version, no checks and no retry key, alone or in `batch`. `Call.changing` tells a handler; docx-agent's wrapper skips the layout-before and tracking for them.
+- **Not approved, so left as is:** merging every per-format pair into shared tools (only `describe`, whose schemas were identical, is shared; the others differ in shape and would carry both formats' options into every request), and collapsing the setters into one `ppt_set` (a 2,500-token tool that is never strict, with properties that apply to some targets and not others).
+- **The tool lists after T5b:**
+  - **decks (35):** shared `open_document`, `list_documents`, `close_document`, `undo`, `read_blob`, `new_document`, `save_document`, `find_text`, `replace_text`, `render`, `check`, `set_properties`, `describe`, `batch`, `edit_chart`, `edit_smartart`; `ppt_read_slides`, `ppt_set_text`, `ppt_set_shape`, `ppt_format_text`, `ppt_add_shape`, `ppt_add_connector`, `ppt_arrange`, `ppt_add_picture`, `ppt_add_table`, `ppt_edit_table`, `ppt_copy`, `ppt_add_slide`, `ppt_draft_slides`, `ppt_manage_slides`, `ppt_set_theme`, `ppt_align`, `ppt_layout`, `ppt_scale`, `ppt_design_facts`;
+  - **Word (41):** the same 16 shared tools; `word_read`, `word_inspect`, `word_set_text`, `word_insert_text`, `word_delete`, `word_insert_markdown`, `word_format`, `word_set_tracking`, `word_changes`, `word_comments`, `word_move`, `word_copy_from`, `word_sections`, `word_headers_footers`, `word_fields`, `word_notes`, `word_links`, `word_insert_table`, `word_edit_table`, `word_format_table`, `word_drawings`, `word_controls`, `word_lists`, `word_styles`, `word_template`.
+
 
 ---
 
@@ -882,7 +884,7 @@ The trial harness acts as an app. It supplies each task's brief and nothing more
    - undo after the call gives back the original bytes;
    - the result fits under its size cap.
 4. **Layout, copy and measuring tests:**
-   - **one measuring model:** for a set of text specs and presets, `ppt_measure_text`'s box height equals the `text_fit` height after `ppt_add_shape` with the same spec;
+   - **one measuring model:** for a set of text specs and presets, the measured box height (`ppt_add_shape` with `measure: true`) equals the `text_fit` height after `ppt_add_shape` with the same spec;
    - `stack`/`column`/`grid` place shapes exactly (to 0.01 pt), with groups and rotated shapes;
    - `place_labels` leaves no collisions on the p8 milestone, o1 and m1 label sets, or reports the unplaced ones;
    - scales: dates inclusive with excluded ranges, bands, reversed ranges, ticks; `place` on shapes and connector ends, inside `batch` and with `$ref`;
@@ -1002,7 +1004,7 @@ Status: done, apart from the items under "Deferred".
 
 ### T5 — guidance and loading (M) — done in ooxml-edit 0.6.0
 
-Status: done; the rationalisation is a follow-up the user decides (see "Model guidance").
+Status: done; the rationalisation the user then decided is T5b, below.
 - **Descriptions:** decks 16,394 → 13,882 offline (23,974 → 20,622 online); Word 12,592 → 11,444 (17,581 → 16,123).
 - **Loading:** deferred by default when every tool is sent.
 - **Strict:** writing tools only, under a new free-text-string cap.
@@ -1019,9 +1021,20 @@ Status: done; the rationalisation is a follow-up the user decides (see "Model gu
   - a scripted Anthropic session discovers a deferred tool through tool search and calls it, and the OpenAI namespace and `tool_search` shapes pass offline;
   - the budgets hold.
 
+### T5b — the rationalisation (S–M) — done in ooxml-edit 0.7.0
+
+- **Scope:** the changes the user approved from T5's assessment (see "Model guidance", "The rationalisation"), the goldens rewritten for them, the prompt fragments, the strict orders and the budget policy.
+- **Tools:** decks 40 → 35, Word 44 → 41. Every definition: decks 20,622 → 18,848 counted (13,882 → 12,747 offline), Word 16,123 → 15,544 (11,444 → 11,046). The loaded core: decks 5,051 → 5,097, Word 4,250 → 3,539.
+- **Goldens:** p1–p8, o1, m1, w1–w6 and batch-30 call the new tools and replay to passing checks with **byte-identical outputs**: each rewritten call is the same library edit. Two changes in the calls themselves: p4's two measuring calls are one `ppt_add_shape` measure call with two items (7 calls to 6), and the Word goldens' recorded results (summaries, data digests) are unchanged.
+- **Online checks** (Sonnet 5.5): count-tokens for core and all per format; one request per format with the definitions as sent (strict plan, `defer_loading`, tool search, system prompt): 200; one tool-search session per format that found a deferred tool and called it with valid arguments: `ppt_align` with `distribute` for decks, `word_format` (now deferred) for Word, and one deck session that found `ppt_add_shape` by "measure" and called it with `measure: true`.
+- **Exit:** the suites pass; the provider-marked checks pass; the budgets hold.
+- **Trial 3 adds small Word tasks** so that tools no golden calls are exercised: a landscape section for a wide table (`word_sections`), a footer with "page X of Y" (`word_headers_footers`), and a footnote citing a source (`word_notes`).
+
+
 ### T6 — trial 3 (M; Sonnet 5.5 only)
 
 - **Scope:** the harness, 40 runs (including the read-view comparison), grading, and a report in the trial-2 format, written by the main session.
+- **Small Word tasks for unproven tools** (from T5b): a landscape section for a wide table, a footer with "page X of Y", and a footnote citing a source; and w3 (a table and chart from a CSV, through `read_blob`) restored.
 - **Exit:**
   - the report is written, and G2 is decided by its pre-registered rule;
   - every gap it finds is filed against T1–T4 or the libraries.
@@ -1033,7 +1046,7 @@ T0 ─┬─▶ T1 ─┬─▶ T3 (layout, copy, design facts) ──┐
 LR3, LR4, LR5 (pptx2svg; any time) ───────────────────────▶ T6
 ```
 
-- T0, T1, T2, T3 and T5 are done. T4 is next, with T5's rationalisation; T6 runs last.
+- T0, T1, T2, T3, T5 and T5b (the rationalisation) are done. T4 is next; T6 runs last.
 - T3 needs T1 (the text spec and `content_area` come first).
 - T5 can start once T1 lands, but its budgets are only final after T3 and T4.
 - Trial 3 runs last, but a smoke run of the graphics tasks after T3 is cheap and worth doing.
