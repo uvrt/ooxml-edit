@@ -186,3 +186,32 @@ def test_version_survives_the_depth_bound_and_clear():
     assert history.version == 3
     _step(history, counter, 9)
     assert history.version == 6
+
+
+def test_a_batch_that_changes_nothing_is_no_step_and_keeps_the_version():
+    counter = Counter()
+    history = History(counter)
+    _step(history, counter, 1)
+    with history.batch():
+        pass
+    with history.batch():
+        _step(history, counter, 2)
+        _step(history, counter, 1)          # back where it began
+    assert history.version == 1 and history.undo() and counter.value == 0
+    assert not history.can_undo()
+
+
+def test_an_empty_batch_on_a_package_records_nothing(tmp_path):
+    from ooxml_edit.opc import OpcPackage
+    import synthetic
+
+    package = OpcPackage.open(synthetic.outer_package())
+    history = History(package)
+    with history.batch():
+        package.tree(MAIN)                  # read, not changed
+    assert history.version == 0 and not history.can_undo()
+    with history.batch():
+        history.checkpoint()
+        package.tree(MAIN).set("seen", "1")
+        package.mark_dirty(MAIN)
+    assert history.version == 1 and history.can_undo()
