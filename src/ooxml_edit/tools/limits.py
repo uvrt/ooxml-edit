@@ -39,10 +39,14 @@ class Limits:
     max_images_per_call: int = 4
     max_image_edge: int = 2576
     image_budget: int = 40
+    # batches
+    max_batch_ops: int = 200
     # deadlines, in seconds
     render_timeout: float = 20.0
     layout_timeout: float = 30.0
     soft_deadline: float = 10.0
+    #: The whole of one ``batch`` call: its ops and the checks after them.
+    batch_timeout: float = 120.0
     # caches, in entries per document
     render_cache_size: int = 16
     check_cache_size: int = 16

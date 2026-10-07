@@ -86,6 +86,13 @@ def array(items: Param, description: str, *, min_items: int | None = None,
     return _param(schema, optional, maxItems=max_items)
 
 
+def free_object(description: str, *, optional: bool = False) -> Param:
+    """An object with any keys, for a tool that is never sent strict (``Tool(strict=False)``):
+    the dispatcher checks its content against another schema (``batch``'s arguments)."""
+    return Param({"type": "object", "description": description, "additionalProperties": True},
+                 optional)
+
+
 def obj(properties: Mapping[str, Param], description: str, *, optional: bool = False) -> Param:
     return Param(build_schema(properties, description=description), optional)
 
@@ -125,6 +132,19 @@ class Tool:
     exactly_one: Sequence[Sequence[str]] = ()
     #: Order for strict mode on Claude: lower first.  ``None``: writing tools first.
     priority: int | None = None
+    #: For a tool that names no document (``new_document``): the argument whose value is the
+    #: document kind whose handler runs.
+    route: str | None = None
+    #: False: never sent in strict mode (a schema with a free-form object, :func:`free_object`).
+    strict: bool = True
+    #: Whether the tool may run inside ``batch``: not batch itself, nor saving, rendering or
+    #: the session's housekeeping.
+    batchable: bool = True
+    #: A tool whose arguments are other calls (``batch``): the dispatcher runs it itself.
+    composite: bool = False
+    #: Argument paths (``target``, ``items[].target``, ``targets[]``) whose string values may
+    #: be a ref, ``$name`` or ``$name/rest``: an address a creating call named.
+    refs: Sequence[str] = ()
 
     def __post_init__(self) -> None:
         problems = definition_problems(self)
@@ -167,14 +187,19 @@ class Tool:
         return register
 
     def same_definition(self, other: "Tool") -> bool:
-        return (self.name, self.description, self.schema, self.group, self.mutates) == (
-            other.name, other.description, other.schema, other.group, other.mutates)
+        return (self.name, self.description, self.schema, self.group, self.mutates,
+                self.route, self.strict, self.batchable, self.composite, tuple(self.refs)) == (
+            other.name, other.description, other.schema, other.group, other.mutates,
+            other.route, other.strict, other.batchable, other.composite, tuple(other.refs))
 
     def merged(self, other: "Tool") -> "Tool":
         """One definition serving both tools' kinds: a shared tool two libraries implement."""
         if not self.same_definition(other):
             raise ValueError(f"two different tools are named {self.name!r}")
-        clash = set(self.handlers) & set(other.handlers)
+        # The same handler listed twice (a shared session tool both libraries include) is
+        # one handler, not a clash.
+        clash = {kind for kind in set(self.handlers) & set(other.handlers)
+                 if self.handlers[kind] is not other.handlers[kind]}
         if clash:
             raise ValueError(f"{self.name!r} has two handlers for {sorted(map(str, clash))}")
         combined = copy.copy(self)
@@ -188,7 +213,10 @@ def definition_problems(tool: Tool) -> list[str]:
         problems.append(f"the name does not match {NAME.pattern}")
     if not tool.description.strip():
         problems.append("no description")
-    problems += subset_problems(tool.schema, allow_bounds=True)
+    problems += subset_problems(tool.schema, allow_bounds=True, allow_free=not tool.strict)
+    for path in tool.refs:
+        if not _path_exists(tool.schema, path):
+            problems.append(f"refs names {path!r}, which is not a string parameter")
     properties = tool.schema.get("properties", {})
     required = set(tool.schema.get("required", ()))
     for group in tool.exactly_one:
@@ -197,6 +225,8 @@ def definition_problems(tool: Tool) -> list[str]:
                 problems.append(f"exactly_one names {name!r}, which is not a parameter")
             elif name in required:
                 problems.append(f"exactly_one names {name!r}, which is required")
+    if tool.route is not None and tool.route not in properties:
+        problems.append(f"route names {tool.route!r}, which is not a parameter")
     if not callable(tool.documents):
         for name in tool.documents:
             if name in properties and properties[name].get("type") != "string":
@@ -204,17 +234,35 @@ def definition_problems(tool: Tool) -> list[str]:
     return problems
 
 
+def _path_exists(schema: Mapping[str, Any], path: str) -> bool:
+    """Whether ``path`` (``items[].from.shape``) names a string, or an array of strings."""
+    node: Any = schema
+    for part in path.split("."):
+        array = part.endswith("[]")
+        name = part[:-2] if array else part
+        node = (node.get("properties") or {}).get(name) if isinstance(node, Mapping) else None
+        if not isinstance(node, Mapping):
+            return False
+        if array:
+            if node.get("type") != "array":
+                return False
+            node = node.get("items")
+    return isinstance(node, Mapping) and node.get("type") == "string"
+
+
 def tool(name: str, description: str, params: Mapping[str, Param] | None = None, *,
          group: str = CORE, mutates: bool = False, kind: str | None = None,
          documents: Sequence[str] | Callable[[Mapping[str, Any]], list[str]] = ("doc",),
          exactly_one: Sequence[Sequence[str]] = (),
-         priority: int | None = None) -> Callable[[Handler], Tool]:
+         priority: int | None = None, strict: bool = True, batchable: bool = True,
+         refs: Sequence[str] = ()) -> Callable[[Handler], Tool]:
     """Make a :class:`Tool` of a handler.  ``kind`` restricts it to one document kind."""
 
     def make(handler: Handler) -> Tool:
         return Tool(name=name, description=description, schema=build_schema(params or {}),
                     handlers={kind: handler}, group=group, mutates=mutates,
-                    documents=documents, exactly_one=exactly_one, priority=priority)
+                    documents=documents, exactly_one=exactly_one, priority=priority,
+                    strict=strict, batchable=batchable, refs=tuple(refs))
 
     return make
 

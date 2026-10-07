@@ -61,6 +61,14 @@ class DocumentFormat:
     #: Exceptions the library raises, mapped to error codes: ``{type: code}`` or
     #: ``{type: (code, options)}`` where ``options(exception)`` lists the valid options.
     errors: dict[type[BaseException], Any] = field(default_factory=dict)
+    #: A short summary of an open document (its page count and title), returned by the
+    #: shared ``open_document`` tool.
+    summary: Callable[[Any], Any] | None = None
+    #: The facts every changing call returns: ``checks(entry, touched)`` -> the result's
+    #: ``checks``, where ``touched`` lists what the call's handlers named with
+    #: :meth:`~.dispatch.Call.touch` (pages, blocks), in order.  Run once per call, and once
+    #: per document at the end of a ``batch``.
+    checks: Callable[[Any, Sequence[Any]], dict[str, Any]] | None = None
 
 
 class LRU:
@@ -142,6 +150,9 @@ class DocumentEntry:
     log: list[CallRecord] = field(default_factory=list, repr=False)
     #: Idempotence keys of creating calls: ``(tool, key) -> result data``.
     keys: dict[tuple[str, str], Any] = field(default_factory=dict, repr=False)
+    #: Refs: names a creating call gave its objects, ``{name: address}``.  ``$name`` in a
+    #: target argument of a later call is replaced by the address.
+    refs: dict[str, str] = field(default_factory=dict, repr=False)
     _own_version: int = field(default=0, repr=False)
 
     @property
