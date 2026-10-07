@@ -4,7 +4,7 @@ This is the working plan for the **tool layer** over pptx-agent and docx-agent. 
 
 **Effort key:** S ≈ half a day · M ≈ 1–3 days · L ≈ 1–2 weeks · XL ≈ 3+ weeks.
 
-**Next step: T4** (charts and the remaining gaps). Trial 3 (T6) has run on Sonnet 5.5, and its fixes (T6b) are in ooxml-edit 0.8.0. T0, the plumbing, is in ooxml-edit 0.3.0 (0.4.0: shared definitions, refs, batch; 0.6.0: T5's loading and strict rules; 0.7.0: T5's rationalisation, with the shared `describe`, `edit_chart`'s read action and `Tool.reads`; 0.8.0: trial 3's fixes, among them required properties first in every schema); T1 (PowerPoint core), T2 (Word core), T3 (layout and complex diagrams), T5 (guidance, loading and the rationalisation) and T6 (trial 3) are done.
+**T4 is done as charts only** (ooxml-edit 0.9.0): a new chart from data, in both formats, and the chart formatting the T4 tasks use. LW1 and LW2 are dropped (see T4). Trial 3 (T6) has run on Sonnet 5.5, and its fixes (T6b) are in ooxml-edit 0.8.0. T0, the plumbing, is in ooxml-edit 0.3.0 (0.4.0: shared definitions, refs, batch; 0.6.0: T5's loading and strict rules; 0.7.0: T5's rationalisation, with the shared `describe`, `edit_chart`'s read action and `Tool.reads`; 0.8.0: trial 3's fixes, among them required properties first in every schema; 0.9.0: T4's charts); T1 (PowerPoint core), T2 (Word core), T3 (layout and complex diagrams), T5 (guidance, loading and the rationalisation) T4 (charts) and T6 (trial 3) are done. LW5, LW6 and LP11 stay open, outside T4.
 
 ---
 
@@ -346,7 +346,7 @@ DocumentEntry
 5. **One measuring model.** Measuring is `ppt_add_shape` itself with `measure: true` (since T5b; before, `ppt_measure_text`): the same text spec as `ppt_add_shape`/`ppt_set_text`, and the target shape's (or the new shape's preset's) default insets, font and wrap. What is measured is what is built; the spike's two drift bugs (missing default insets, an unnoticed `bold`) cannot recur.
 6. **Facts in every result.** Each mutating call returns `checks`, which hold facts only:
    - **pptx:** `overflows()` for the slides touched (text, overlap/collisions including box overlap, off_slide), and `near_wrap` lines. `check` adds the full slide facts (LP15); `ppt_design_facts` adds the design facts (LP24).
-   - **docx:** `EditResult.warnings`/`unknown`, and stale fields (gap **LW2**).
+   - **docx:** `EditResult.warnings`/`unknown`. (Stale fields, LW2, were dropped in T4: no task needed them.)
    - **Both:** the `validate()` delta against the baseline: `new` and `fixed` problems. pptx `validate()` takes 0.04 s and docx's 0.18 s on the largest fixture, so it runs every time.
    - **Word reflow** (pages changed, from `layout().compare`) costs seconds on long documents. It is included when the layout is cached or the document has 20 pages or fewer; otherwise `checks.reflow = "stale: call check"`.
 7. **Render on demand, never automatically.**
@@ -525,7 +525,7 @@ The ids of removed items (LP2–LP6, LW4) are retired, not reused; P14 and LP16 
 | S7 | `replace_text` | replace everywhere, or exactly once | `doc`, `find`, `replace`, `scope`, `expect` (`one`/`all`), `regex` | count, addresses | docx `replace`/`anchor().replace`; pptx `find_text` + `resolve().text` | pptx: TL now, **LP11** `deck.replace()` later |
 | S8 | `render` | PNG of slides or pages | `doc`, `slides`/`pages`, `width` (≤2576) | images + sizes + token estimate | `render_png` | worker deadline; **LR4**, **LR5** |
 | S9 | `check` | facts "as Office shows it" | `doc`, `scope`, `include` (fit, collisions, facts, design, validate, reflow, fields), `boxes?` (box-overlap mode) | a report with addresses; no verdicts | `overflows`, `collisions(boxes=)`, slide facts, design facts, `validate`, `layout().compare` | LP15, LP19, LP24, LW1 |
-| S10 | `edit_chart` | read a chart; data, titles, legend | `target`, `action` (read, set_values, set_value, add_category, remove_category, rename_category, add_series, remove_series, rename_series, set_title, set_axis_title, set_legend), `series?`, `category?`, `values?`, `text?`, `position?` | read: type, categories, series, number formats, workbook values; otherwise the chart's state after the edit | `ooxml_edit.charts.Chart` (both libraries adapt it); `read` runs as a read (`Tool.reads`) | S11 `read_chart` folded in (T5b) |
+| S10 | `edit_chart` | add a chart from data; read a chart; data, titles, legend, data labels, gap width | `target`, `action` (read, add, set_values, set_value, add_category, remove_category, rename_category, add_series, remove_series, rename_series, set_title, set_axis_title, set_legend, show_data_labels, hide_data_labels, set_gap_width), add: `chart_type`, `categories`, `data[]` {name, values}, `box` (decks) or `width` (documents), `number_format`, `ref`; `series?`, `category?`, `values?`, `value?`, `text?`, `position?` | read: type, categories, series, number formats, workbook values; add: the new chart, its address (decks) or drawing id and paragraph (documents); otherwise the chart's state after the edit | `ooxml_edit.charts.Chart`, `add_chart` (both libraries adapt them); `read` runs as a read (`Tool.reads`) | S11 `read_chart` folded in (T5b); P18, P19 and W28 folded in (T4) |
 | S12 | `edit_smartart` | node text, add or remove nodes | `target`, `action`, `node`, `text`, `parent?` | nodes | `Diagram.set_text/add_node/remove_node/add_child` | — |
 | S13 | `set_properties` | metadata | `title?`, `author?`, `language?`, `subject?` | properties | pptx `title`/`author`/`language`; docx `set_properties` | — |
 | S14 | `batch` | several calls as one: in order, all or none, one undo step | `ops[]` {tool, arguments} | each op's summary and data; checks once at the end | the dispatcher | core; non-strict (D14) |
@@ -550,8 +550,8 @@ The ids of removed items (LP2–LP6, LW4) are retired, not reused; P14 and LP16 
 | P12 | `ppt_align` | PowerPoint's Align and Distribute | `targets`, `edge` (left, center, right, top, middle, bottom) or `distribute` (horizontal/vertical), `to` (selection/slide/content/first), `gap?` (distribute; pt; omitted = equal spread) | moved shapes | — | **LP1**; P13 `ppt_distribute` folded in (T5b) |
 | P15 | `ppt_edit_table` | cells, rows, columns, merges, cell fill and borders | `target`, `action` (set_cells, insert_row, delete_row, insert_column, delete_column, merge, split, set_widths, set_heights, format_cells), `cells[]` {row/col or row_label/col_label, text}, `like?`, `rows?`/`columns?`, `fill?`, `borders?` {side, width, color} | the table after the edit, by labels | `Table.*`, `cell_by_label`, `TableCell.fill`, `set_border` | P16 `ppt_format_table` split (T5b): fill and borders here, cell text through P5 on `256.7/cell1,2` |
 | P17 | `ppt_add_table` | a new table | `slide`, `box`, `rows`, `columns`, `data[][]`, `header_row` | address | `add_table` + cells | — |
-| P18 | `ppt_add_chart` | a new chart from data | `slide`, `box`, `type`, `categories`, `series[]` | address | — | **LE3 + LP7** |
-| P19 | `ppt_format_chart` | series colours, data labels, number format, axis bounds | `target`, … | — | — | **LP8** (in `ooxml_edit.charts`) |
+| P18 | (folded into S10, T4) `edit_chart` `add` | a new chart from data | `target` (the slide), `box`, `chart_type`, `categories`, `data[]` | address | `slide.add_chart` | **LE3 + LP7**, done |
+| P19 | (folded into S10, T4) `edit_chart` `show_data_labels`, `hide_data_labels`, `set_gap_width` | data labels with a number format, gap width | `target`, `number_format?`, `value` | the chart | `Chart.set_data_labels`, `set_gap_width` | **LP8**, the part a task uses, done |
 | P20 | `ppt_add_slide` | add from a layout, optionally filled | `layout`, `at?`, `title?`, `body?` (Markdown list), `notes?` | slide id, placeholders | `add_slide`, placeholders, `notes` | — |
 | P21 | `ppt_draft_slides` | slides from a Markdown outline | `markdown`, `at?`, `layout_map?` | slide ids, `OutlineWarning`s, overflows | `insert_outline(images=blob mapping)` | — |
 | P22 | `ppt_manage_slides` | duplicate, move, delete, find by title | `action`, `slide`, `to?`, `notes?`, `title?` | ids in order | `duplicate_slide(notes=)`, `move_slide`, `delete_slide`, `slide_titled` | — |
@@ -562,13 +562,13 @@ The ids of removed items (LP2–LP6, LW4) are retired, not reused; P14 and LP16 
 | P27 | `ppt_scale` | declare a data scale once, as `$name`; its ticks | `name`, `kind?` (linear/date/band; omitted: read an existing scale), `from`, `to` (pt), `min`/`max`, `start`/`end`/`exclude[]`, `bands[]`/`gap`/`padding`, `ticks?` {every, step, format} | the scale, its ticks (positions and labels) | `edit.scales` | D15 |
 | P14 | `ppt_draw` (experimental, not in the defaults) | draw a graphic from SVG in the authoring profile as native shapes | `slide`, `svg`, `box?`, `replace?`, `measure?` | SVG id → address, text fits, warnings | `edit.svgprofile` | **LP16** |
 
-With the shared tools, that is **35 definitions** reachable for a deck after T5b's rationalisation (20 PowerPoint tools and 15 shared ones; 36 with the experimental `ppt_draw`; P18 and P19 come in T4), down from 40. Thirteen of them are "core" (see Model guidance), and the rest load through tool search.
+With the shared tools, that is **35 definitions** reachable for a deck after T5b's rationalisation (20 PowerPoint tools and 15 shared ones; 36 with the experimental `ppt_draw`), down from 40; T4 added none (P18 and P19 are actions of `edit_chart`). Thirteen of them are "core" (see Model guidance), and the rest load through tool search.
 
 **PowerPoint library gaps (work items):**
 - **LP1 `pptx_agent.edit.arrange`: `align(shapes, edge, to)` and `distribute(shapes, axis, to, gap=None)`** (M). Done in T3.
   - These match PowerPoint's Align and Distribute: relative to the selection or the slide. They use `drawn_bounds` for rotated shapes and move groups as one; the whole call is one undo step.
-- **LP7 `slide.add_chart(type, categories, series, box)`,** on LE3 (M).
-- **LP8 chart formatting in `ooxml_edit.charts`** (M–L): series fill/line by theme colour, data labels on/off with a number format, the value axis's min/max/major unit, and the gap width.
+- **LP7 `slide.add_chart(type, categories, series, left, top, width, height, title=…)`,** on LE3 (M). Done in T4.
+- **LP8 chart formatting in `ooxml_edit.charts`** (M–L). Done in T4 for what a task uses: data labels on/off with a number format (`Chart.set_data_labels`), and the gap width (`set_gap_width`; p9 needs it, since at PowerPoint's default 219 its labels are wider than their columns). Left out, because no task uses them: series colour by theme colour (a new chart already takes the theme's accents in order, which is what p9's "theme colours" asks), and the value axis's min, max and major unit.
 - **LP9 layout and master editing** (L). Trial 2's N17: template branding beyond the theme. Deferred (D8).
 - **LP11 `Document.replace(find, replace, slides=, regex=)`** (S): parity with docx.
 - **LP14 `LabelError.candidates`** (S): structured candidates for `valid_options`.
@@ -626,28 +626,28 @@ With the shared tools, that is **35 definitions** reachable for a deck after T5b
 | W24 | `word_format_table` | table, row and cell formatting | `table`, `scope` (table/row/cell/column), `index?`, width, alignment, look, shading, borders, vertical_alignment, height, height_rule, repeat_header | — | `set_table`, `set_row`, `format_cell`, `set_column_width` | — |
 | W26 | `word_drawings` | pictures, text boxes and shapes: insert, move, resize, wrap, z-order | `action` (list, insert_picture, insert_text_box, insert_shape, move, resize, float, inline, set), `target?`, `image?` (blob handle), `at?`/`find?`, `width?` (pt; a picture keeps its ratio), `alt_text?` (needed for a picture), `wrap?` (an insert floats with it), `x?`, `y?`, `align?`, `against?` (column/margin/page), `ref?`, `key?`, … | drawing id | `insert_picture(bytes)`, `float_drawing`, `set_drawing`, `DrawingOps` | W25 `word_insert_picture` folded in (T5b) |
 | W27 | `word_controls` | content controls | `action` (list, insert, fill, remove), `at`, `type`, `items?`, `value?` | ids | `ControlOps`, `content_controls()` | — |
-| W28 | `word_insert_chart` | a new chart from data | `at`, `type`, `categories`, `series[]`, `width?` | drawing id | — | **LE3 + LW3** |
+| W28 | (folded into S10, T4) `edit_chart` `add` | a new chart from data | `target` (the paragraph it follows), `chart_type`, `categories`, `data[]`, `width?` | drawing id, paragraph | `doc.insert_chart` | **LE3 + LW3**, done |
 | W29 | `word_template` | template work | `action` (upgrade_to_modern; apply_styles_from in T4) | reflow pages | `upgrade_to_modern`; a template is saved by S3 `save_document(format="dotx")` (its `save_as_template` action dropped in T5b) | "apply a template's styles to an open document": **LW5** |
 
-That is 25 Word tools and 16 shared ones: **41 definitions** reachable for a document after T5b, down from 44.
+That is 25 Word tools and 16 shared ones: **41 definitions** reachable for a document after T5b, down from 44; T4 added none (W28 is `edit_chart`'s `add`).
 
 **Word library gaps:**
-- **LW1 `doc.problems()`: layout facts** (M–L), from `layout()`:
+- **LW1 `doc.problems()`: layout facts** (M–L), from `layout()`. **Dropped in T4** by the user's decision: no task needed it -- every Word run in trial 3 scored 10 without it.
   - a table wider than its text column;
   - a picture past the margins;
   - a heading last on its page despite `keep_with_next`;
   - an empty TOC (trial 2's N8);
   - a REF to a missing bookmark;
   - text under 8 pt.
-- **LW2 field staleness** (S–M): a field whose inputs changed since its last update (headings for a TOC, bookmarks for a REF, pagination for PAGEREF) is marked `stale` in `fields()`. The tool result then says "run `word_fields update`".
-- **LW3 `doc.insert_chart(at, type, categories, series)`,** hosted as a drawing, on LE3 (M).
+- **LW2 field staleness** (S–M). **Dropped in T4** by the user's decision: no task needed it -- every Word run scored 10, and the models updated fields themselves. a field whose inputs changed since its last update (headings for a TOC, bookmarks for a REF, pagination for PAGEREF) is marked `stale` in `fields()`. The tool result then says "run `word_fields update`".
+- **LW3 `doc.insert_chart(at, type, categories, series, width=…)`,** an inline drawing, on LE3 (M). Done in T4.
 - **LW5 `doc.apply_template(bytes, styles=True, headers=False)`** (M): bring a template's styles into an open document. Today only `Document.new(template=)` and `copy_blocks` exist.
 - **LW6 `doc.outline()`** (S): the heading tree as data. It can be composed in the tool layer from `paragraphs()` and outline levels, but is cleaner in the library.
 
 **ooxml-edit gaps:**
 - **LE1 `History.version`:** monotonic, restored on undo/redo (S).
 - **LE2: `ooxml_edit.tools` itself** (T0).
-- **LE3 a new chart from data:** the chart part (bar, column, line and pie at least), with an embedded workbook written to match and a `GraphicHost` insertion hook, so pptx (LP7) and docx (LW3) each add only the frame (L).
+- **LE3 a new chart from data:** the chart part (bar, column, line and pie at least), with an embedded workbook written to match and a `GraphicHost` insertion hook, so pptx (LP7) and docx (LW3) each add only the frame (L). Done in T4 (`ooxml_edit.charts.create`).
 
 **Renderer items:**
 - **LR1:** docx2svg still styles TOC entries as links (trial #18).
@@ -674,7 +674,6 @@ These pairs stay format-specific, because their parameters differ too much:
 | general setter | `ppt_set_shape`/`ppt_format_text` | `word_format` |
 | add a picture | `ppt_add_picture` | `word_drawings` (`insert_picture`) |
 | new table | `ppt_add_table` | `word_insert_table` |
-| new chart | `ppt_add_chart` | `word_insert_chart` |
 
 ---
 
@@ -997,12 +996,27 @@ Status: done, apart from the items under "Deferred".
   - `ppt_copy` texts as a text spec (`paragraphs`); group rotation for members copied out alone;
   - label anchors in data units (a label is anchored to a shape or a point).
 
-### T4 — charts and the remaining gaps (L)
+### T4 — charts (L) — done in ooxml-edit 0.9.0
 
-- **Scope:** LE3, LP7, LP8, LW1, LW2, LW3, LW5, LW6, LP11; tools P18, P19 and W28; `word_template` complete.
-- **Exit:**
-  - a new chart opens in PowerPoint and Word with Edit Data matching (oracle);
-  - `check` on Word reports stale fields and an empty TOC.
+- **Scope, as the user narrowed it:** charts only -- LE3, LP7, LW3 and the part of LP8 a task uses. **LW1 and LW2 are dropped**: no task needed them (every Word run in trial 3 scored 10, and the models updated fields themselves). LW5, LW6 and LP11 were not part of this work and stay open.
+- **Principle:** every tool, and every action, has a realistic task that uses it.
+- **Built:**
+  - `ooxml_edit.charts.create.add_chart`: the chart part and its embedded workbook from data (clustered and stacked column and bar, line, pie, scatter; categories, named series, a title, axis titles, the legend position, a number format), the caches and the workbook equal from the start, related to the holder part; the format adds only its frame around `NewChart.graphic()` (the insertion hook). `GraphicHost.look` gives new titles and data labels the application's sizes.
+  - `slide.add_chart` (LP7) and `doc.insert_chart` (LW3, inline, in a new paragraph after a block or at a position).
+  - `Chart.set_data_labels` (with a number format) and `Chart.set_gap_width` (LP8).
+  - **Tools: an action of `edit_chart`, not new tools.** `add`, `show_data_labels`, `hide_data_labels` and `set_gap_width` join the shared definition; decks stay at 35 definitions and documents at 41. Chart work is one tool either way, and tool search on "chart" already finds it. The cost: `edit_chart` has 14 optional parameters and is no longer sent strict (more than half the request's 24); every definition grew by about 350 tokens (decks 12,812 -> 13,158, documents 11,056 -> 11,402, offline estimates), and the core is unchanged (decks 4,961, documents 3,527, counted-proxy).
+- **Office's new-chart look, measured** on Office for Mac 16 (Insert > Chart, each type's first subtype, in PowerPoint and Word, saved and read back; facts recorded, nothing of Office's copied):
+  - chart style 201 / `c14:style` 102, `roundedCorners` 0, legend at the bottom (none for a one-series scatter), `autoTitleDeleted` 0;
+  - series in the theme's accents in order, then Office's colour cycle (the six accents again at lumMod 60%, then 80% + lumOff 20%, ...); pie slices the same, each with a 1.5 pt `lt1` border;
+  - columns: gap width 219, overlap -27; bars: gap width 182; lines: 2.25 pt, round caps, no markers; scatter: circle markers, size 5, no line;
+  - gridlines and the category axis line 0.75 pt at `tx1` 15%; scatter axis lines at 25%; labels in the minor face at `tx1` 65% (data labels 75%), no tick marks;
+  - sizes: PowerPoint title 18.62 pt, axis titles 13.3, labels, legend and data labels 11.97; Word 14, 10 and 9;
+  - chart area: PowerPoint no fill and no line; Word `bg1` with a 0.75 pt border at `tx1` 15%; Word's inline default 432 x 252 pt;
+  - workbook: categories in column A from row 2, series names in row 1.
+  - Not measured: the stacked subtypes (the ribbon gallery is not scriptable); stacking writes overlap 100 and the schema's gap width 150.
+- **Goldens, tools only:** p9 (decks: a chart slide of quarterly revenue by region from a CSV, theme colours, data labels in EUR m, a one-line takeaway) 19/19 in 9 calls; w9 (documents: a line chart of monthly volumes from a CSV after a paragraph, axis titles, a caption) 18/18 in 8 calls. Both replay byte for byte.
+- **Office:** PowerPoint and Word open both outputs unprompted and draw the charts; re-saved by each, the caches and `workbook_values` still agree. The PDFs' data labels are the workbook's values (w9 checked on a copy with labels shown). At PowerPoint's default gap width p9's labels are wider than their columns, which is why p9 sets it.
+- **Renderer findings** (not fixed here): pptx2svg draws data labels without their own number format (`12.4`, not `€12.4m`), so an agent's render does not show the crowding PowerPoint shows; docx2svg starts a value axis at 0 where Word starts it near the data (110-140); both draw tick labels near black, not at `tx1` 65%.
 
 ### T5 — guidance and loading (M) — done in ooxml-edit 0.6.0
 
@@ -1098,7 +1112,7 @@ T0 ─┬─▶ T1 ─┬─▶ T3 (layout, copy, design facts) ──┐
 LR3, LR4, LR5 (pptx2svg; any time) ───────────────────────▶ T6
 ```
 
-- T0, T1, T2, T3, T5 and T5b (the rationalisation) are done. T4 is next; T6 runs last.
+- T0, T1, T2, T3, T4 (charts), T5, T5b (the rationalisation), T6 and T6b are done.
 - T3 needs T1 (the text spec and `content_area` come first).
 - T5 can start once T1 lands, but its budgets are only final after T3 and T4.
 - Trial 3 runs last, but a smoke run of the graphics tasks after T3 is cheap and worth doing.

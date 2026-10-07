@@ -848,6 +848,95 @@ class Chart:
             editor.changed = True
         return self
 
+    # -- editing: formatting -------------------------------------------------------------------
+
+    @property
+    def gap_width(self) -> int | None:
+        """The space between bar or column clusters, in percent of a bar's width; ``None``
+        for a chart with no bars."""
+        plot = find(self._root(), "c:chart/c:plotArea/c:barChart")
+        if plot is None:
+            return None
+        node = plot.find(qn("c:gapWidth"))
+        try:
+            return int(node.get("val")) if node is not None else 150
+        except (TypeError, ValueError):
+            return 150
+
+    def set_gap_width(self, percent: int) -> "Chart":
+        """The space between bar or column clusters, 0-500% of a bar's width (Office's new
+        column chart: 219).  Narrower gaps make wider bars -- room for data labels."""
+        if isinstance(percent, bool) or not isinstance(percent, int) or not 0 <= percent <= 500:
+            raise ChartDataError(f"{self.address}: a gap width is a whole percentage, 0-500")
+        plots = self._root().findall(f"{qn('c:chart')}/{qn('c:plotArea')}/{qn('c:barChart')}")
+        if not plots:
+            raise ChartDataError(f"{self.address}: only bar and column charts have a gap width")
+        if self.gap_width == percent:
+            return self
+        with self._edit() as editor:
+            for plot in editor.root.findall(
+                    f"{qn('c:chart')}/{qn('c:plotArea')}/{qn('c:barChart')}"):
+                subelement(plot, "c:gapWidth").set("val", str(percent))
+            editor.changed = True
+        return self
+
+    @property
+    def data_labels(self) -> list[dict[str, Any]]:
+        """Per series, whether its points show their values and in which number format:
+        ``[{"series", "shown", "format"}]`` (``format`` ``None`` when it follows the
+        values' own)."""
+        out = []
+        for index, ser in enumerate(self._series()):
+            own = ser.element.find(qn("c:dLbls"))
+            plot = ser.plot.find(qn("c:dLbls")) if ser.plot is not None else None
+            holder = own if own is not None else plot
+            shown = _labels_show_values(holder)
+            fmt = holder.find(qn("c:numFmt")) if holder is not None else None
+            out.append({"series": index, "shown": shown,
+                        "format": None if fmt is None or fmt.get("sourceLinked") in ("1", "true")
+                        else fmt.get("formatCode")})
+        return out
+
+    def set_data_labels(self, visible: bool, *, number_format: str | None = None,
+                        series: "Sequence[int] | None" = None) -> "Chart":
+        """Show (or hide) every point's value as a label, on every series or those at
+        ``series`` (positions).  ``number_format`` is an Excel format code for the labels
+        (``"€"#,##0.0"m"``); ``None`` follows the values' own format.  The labels take
+        Office's data-label style: the theme's minor face at 75% of the text colour, at the
+        size of the chart's axis labels, where the application puts them by default."""
+        if number_format is not None and (not isinstance(number_format, str)
+                                          or not number_format.strip()
+                                          or len(number_format) > 255):
+            raise ChartDataError(f"{self.address}: a number format is a format code, such as "
+                                 f"#,##0.0")
+        if number_format is not None and not visible:
+            raise ChartDataError(f"{self.address}: a number format is for labels shown")
+        count = len(self._series())
+        chosen = list(range(count)) if series is None else list(series)
+        for index in chosen:
+            if not isinstance(index, int) or not 0 <= index < count:
+                raise IndexError(f"{self.address}: no series {index}")
+        with self._edit() as editor:
+            all_series = self._series(editor.root)
+            look = editor.host.look
+            size = look.data_labels if look is not None else _label_size(editor.root)
+            for index in chosen:
+                ser = all_series[index]
+                current = ser.element.find(qn("c:dLbls"))
+                if current is not None:
+                    remove(current)
+                plot_labels = ser.plot.find(qn("c:dLbls")) if ser.plot is not None else None
+                if visible:
+                    append_in_order(ser.element, _value_labels(size, number_format,
+                                                               pie=local_name(ser.plot) == "pieChart",
+                                                               lang=editor.host.lang))
+                elif _labels_show_values(plot_labels):
+                    labels = make("c:dLbls")
+                    labels.append(make("c:delete", val="1"))
+                    append_in_order(ser.element, labels)
+            editor.changed = True
+        return self
+
     # -- internals ---------------------------------------------------------------------------
 
     @contextmanager
@@ -1307,6 +1396,59 @@ def _per_series(values, series: list[_Series]) -> list:
     return result
 
 
+def _labels_show_values(holder: Element | None) -> bool:
+    if holder is None:
+        return False
+    deleted = holder.find(qn("c:delete"))
+    if deleted is not None and deleted.get("val", "1") in ("1", "true"):
+        return False
+    shown = holder.find(qn("c:showVal"))
+    return shown is not None and shown.get("val", "1") in ("1", "true")
+
+
+def _label_size(root: Element) -> int | None:
+    """The size of the chart's axis labels (or its legend's): what Office gives data labels
+    too, in PowerPoint and in Word (measured)."""
+    plot_area = find(root, "c:chart/c:plotArea")
+    holders = [] if plot_area is None else [a for a in plot_area
+                                            if a.tag in {qn(t) for t in AXIS_TAGS}]
+    legend = find(root, "c:chart/c:legend")
+    if legend is not None:
+        holders.append(legend)
+    for holder in holders:
+        node = holder.find(f"{qn('c:txPr')}/{qn('a:p')}/{qn('a:pPr')}/{qn('a:defRPr')}")
+        if node is not None and (node.get("sz") or "").isdigit():
+            return int(node.get("sz"))
+    return None
+
+
+def _value_labels(size: int | None, number_format: str | None, *, pie: bool,
+                  lang: str | None) -> Element:
+    """A series' ``c:dLbls`` showing its values, in Office's data-label style."""
+    from .create import text_properties  # the creation module builds on this one
+
+    labels = make("c:dLbls")
+    if number_format is not None:
+        labels.append(make("c:numFmt", formatCode=number_format, sourceLinked="0"))
+    shape = make("c:spPr")
+    shape.append(make("a:noFill"))
+    line = make("a:ln")
+    line.append(make("a:noFill"))
+    shape.append(line)
+    shape.append(make("a:effectLst"))
+    labels.append(shape)
+    properties = text_properties(size or 1000, shade=75000, lang=lang)
+    if size is None:
+        del properties.find(f"{qn('a:p')}/{qn('a:pPr')}/{qn('a:defRPr')}").attrib["sz"]
+    labels.append(properties)
+    for flag, value in (("showLegendKey", 0), ("showVal", 1), ("showCatName", 0),
+                        ("showSerName", 0), ("showPercent", 0), ("showBubbleSize", 0)):
+        labels.append(make(f"c:{flag}", val=str(value)))
+    if pie:
+        labels.append(make("c:showLeaderLines", val="1"))
+    return labels
+
+
 def _shift_point_formats(ser: Element, index: int, delta: int) -> None:
     """Keep per-point formatting (``c:dPt``) and labels (``c:dLbl``) on their points."""
     holders = list(ser.findall(qn("c:dPt")))
@@ -1487,6 +1629,13 @@ def _write_title(editor: _Editor, owner: Element, text: str | None, *, vertical:
             return
         remove(tx)
         tx = None
+    if tx is None and editor.host.look is not None:
+        from .create import title_text  # the creation module builds on this one
+
+        look = editor.host.look
+        size = look.title if owner.tag == qn("c:chart") else look.axis_title
+        tx = title_text(size, vertical=vertical, lang=editor.host.lang)
+        append_in_order(title, tx)
     if tx is None:
         host = editor.host
         template = host.title_template

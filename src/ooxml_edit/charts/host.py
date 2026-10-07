@@ -18,6 +18,16 @@ diagram is resolved::
 
 Resolve it afresh on every call, as the format layer would resolve a shape, so a
 :class:`~.chart.Chart` survives undo.
+
+**A new chart** is the same split.  :func:`~.create.add_chart` writes the chart part and its
+workbook and relates them to ``part``, inside the format's undo step; the format then puts
+:meth:`~.create.NewChart.graphic` in a frame of its own, and resolves a host for that frame
+as for any other chart::
+
+    with history.batch():
+        made = add_chart(package, "doc/main.xml", "column", ["Q1", "Q2"],
+                         [{"name": "North", "values": [12.4, 13.1]}], title="Revenue")
+        frame.append(made.graphic())         # the format's frame, wherever it goes
 """
 
 from __future__ import annotations
@@ -61,6 +71,11 @@ class GraphicHost:
     #: by :func:`~.dmltext.replace_body_text`, so a run with no text to inherit from takes
     #: its formatting from the paragraph's ``a:endParaRPr``, if the template gives one.
     title_template: Callable[[bool], Element] | None = None
+    #: The application's new-chart look (:data:`~.create.POWERPOINT_LOOK`,
+    #: :data:`~.create.WORD_LOOK`): when given, a new chart title and a new axis title are
+    #: written at its measured sizes, in Office's title style, and ``title_template`` is not
+    #: used.  Data labels shown on a chart take its ``data_labels`` size too.
+    look: Any = None
 
 
 def _find(frame: Element, tag: str) -> Element | None:
