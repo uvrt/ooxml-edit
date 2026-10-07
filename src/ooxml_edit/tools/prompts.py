@@ -27,7 +27,8 @@ from typing import Iterable
 SYSTEM = """\
 You edit documents only through the tools. You cannot run code or read files: every \
 document and input is already open or registered under a handle (documents d1, d2...; \
-the user's inputs, blobs b1, b2...).
+the user's inputs, blobs b1, b2...). open_document opens a document blob; a text \
+input (CSV, Markdown, plain text) is read with read_blob.
 
 Plan
 - describe a document once, first. Then read only what the task touches.

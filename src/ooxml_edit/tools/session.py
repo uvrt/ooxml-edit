@@ -14,6 +14,7 @@ session's own maps have a lock of their own, never held while a document lock is
 
 from __future__ import annotations
 
+import codecs
 import datetime as _dt
 import itertools
 import re
@@ -366,7 +367,15 @@ class Session:
         except LimitError as exc:
             raise ToolError("limit", str(exc)) from None
         except ValueError as exc:
-            raise ToolError("invalid_arguments", str(exc),
+            if _is_text(blob):
+                raise ToolError("invalid_arguments", f"{blob.name} is text ({blob.mime}), not "
+                                f"a document: read it with read_blob", field="blob",
+                                valid_options=["read_blob"]) from None
+            if blob.mime.startswith("image/"):
+                raise ToolError("invalid_arguments", f"{blob.name} is an image ({blob.mime}), "
+                                "not a document: place it with a picture tool",
+                                field="blob") from None
+            raise ToolError("invalid_arguments", str(exc), field="blob",
                             valid_options=sorted(self.formats)) from None
 
     # -- outputs -----------------------------------------------------------------------------
@@ -427,6 +436,18 @@ class Session:
             if used + size > self.limits.max_total_document_bytes:
                 raise LimitError(f"open documents would total {used + size} bytes; at most "
                                  f"{self.limits.max_total_document_bytes}")
+
+
+def _is_text(blob: Blob) -> bool:
+    """Whether a blob holds text (CSV, Markdown, plain text, JSON): what ``read_blob`` reads."""
+    if blob.data.startswith(b"PK") or blob.mime.startswith("image/"):
+        return False
+    try:
+        # Not final: a cut through a multi-byte character at the end is still text.
+        text = codecs.getincrementaldecoder("utf-8-sig")().decode(blob.data[:65536])
+    except UnicodeDecodeError:
+        return False
+    return "\x00" not in text
 
 
 def _require_bytes(data: Any, what: str) -> bytes:

@@ -214,6 +214,18 @@ def test_open_document_opens_a_blob_with_the_formats_summary(toolbox, session):
     assert unknown.error.code == "not_found"
 
 
+@pytest.mark.parametrize("name, data, mime", [
+    ("figures.csv", b"region,q1\nNorth,12\n", "text/csv"),
+    ("draft.md", "# Draft \u2014 notes\n".encode(), "text/markdown"),
+    ("outline.txt", b"Title\n- point\n", None)])
+def test_open_document_on_a_text_blob_points_to_read_blob(toolbox, session, name, data, mime):
+    handle = session.add_blob(data, name, mime=mime)
+    result = call(toolbox, session, "open_document", blob=handle)
+    assert result.error.code == "invalid_arguments" and result.error.field == "blob"
+    assert result.error.valid_options == ["read_blob"] and "read_blob" in result.error.message
+    assert "read_blob" in toolbox.system_prompt()
+
+
 def test_list_close_and_undo(toolbox, session):
     listed = call(toolbox, session, "list_documents")
     assert [d["doc"] for d in listed.data["documents"]] == ["d1", "d2"]
