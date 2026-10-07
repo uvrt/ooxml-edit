@@ -160,7 +160,7 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
           "steps": integer("Steps, 1-50. Default 1.", minimum=1, maximum=50, optional=True),
           "redo": boolean("Redo instead. Default false.", optional=True)},
          batchable=False),
-    # S14: describe, one schema for every kind
+    # S16: describe, one schema for every kind
     Spec("describe",
          "The document at a glance; call once, first. Decks: slides (id, title, layout, "
          "content area), size, theme colours, fonts, roles and tints, layouts and their "
