@@ -81,8 +81,23 @@ def _ord(cxn: Element, attribute: str = "srcOrd") -> int:
         return 0
 
 
-def new_model_id() -> str:
-    return "{%s}" % str(uuid.uuid4()).upper()
+#: The namespace of the model ids an edit makes (``uuid5``): made from the edit, so the same
+#: edits give the same bytes.
+_MODEL_IDS = uuid.UUID("2f0c6a8e-5b1d-4e57-9a3c-7d41b8e2c905")
+
+
+def new_model_id(seed: str | None = None, taken: "set[str] | None" = None) -> str:
+    """A braced GUID for a new point or connection: from ``seed`` (``uuid5``), the first not
+    in ``taken``; random without a seed."""
+    if seed is None:
+        return "{%s}" % str(uuid.uuid4()).upper()
+    taken = taken or set()
+    counter = 0
+    while True:
+        value = "{%s}" % str(uuid.uuid5(_MODEL_IDS, f"{seed}:{counter}")).upper()
+        if value not in taken:
+            return value
+        counter += 1
 
 
 class _Model:
@@ -292,7 +307,14 @@ class Diagram:
             if not 0 <= position <= len(siblings):
                 raise IndexError(f"index {index} out of range 0..{len(siblings)}")
             template = siblings[min(position, len(siblings) - 1)][1] if siblings else None
-            node_id, par_id, sib_id, cxn_id = (new_model_id() for _ in range(4))
+            taken = {node.get("modelId") for node in model.root.iter()
+                     if node.get("modelId") is not None}
+            seed = f"{parent_id}:{position}:{len(taken)}:{text}"
+            ids = []
+            for role in ("node", "par", "sib", "cxn"):
+                ids.append(new_model_id(f"{seed}:{role}", taken))
+                taken.add(ids[-1])
+            node_id, par_id, sib_id, cxn_id = ids
             lang = model.host.lang
             node = _node_point(node_id, template, text, lang)
             parent_transition = _transition(par_id, "parTrans", cxn_id, lang)

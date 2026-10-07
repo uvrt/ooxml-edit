@@ -28,7 +28,7 @@ How a call finds its handler:
   and one description saying what each kind returns;
 * ``edit_chart`` also reads (``action: "read"``): that call runs as a reading one
   (``Tool.reads``), with no undo step and no checks;
-* ``open_document``, ``list_documents``, ``close_document``, ``undo`` and ``read_blob``
+* ``open_document``, ``close_document``, ``undo`` and ``read_blob``
   (an input's text, a page at a time) work the same for every kind, and their handlers
   are here, in :data:`SESSION_TOOLS`.  Both libraries list the same objects; the toolbox
   keeps one.
@@ -150,10 +150,9 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
                            "a text copy.",
                            enum=["pptx", "potx", "docx", "dotx", "markdown", "outline"])},
          batchable=False),
-    # S4
-    Spec("list_documents", "List the open documents and the user's input blobs.",
-         {}, group=MISC, documents=_no_documents, batchable=False),
-    Spec("close_document", "Close a document, discarding unsaved changes.",
+    # S4 (list_documents went post-T4: the application names the documents and inputs)
+    Spec("close_document", "Close a document, discarding unsaved changes. The session holds "
+         "a few documents at a time: close a source once you have taken what you need.",
          {"doc": _DOC}, group=MISC, batchable=False),
     # S5
     Spec("undo",
@@ -339,12 +338,6 @@ def _open_document(call: Any, blob: str) -> Result:
                   data=data)
 
 
-def _list_documents(call: Any) -> Result:
-    data = call.session.describe()
-    return Result(summary=f"{len(data['documents'])} document(s), {len(data['blobs'])} input(s)",
-                  data=data)
-
-
 def _close_document(call: Any, doc: str) -> Result:
     call.session.close(doc)
     return Result(summary=f"Closed {doc}", removed=[doc])
@@ -399,7 +392,6 @@ def _read_blob(call: Any, blob: str, cursor: str | None = None) -> Result:
 #: objects in its tools; the toolbox keeps one of each.
 SESSION_TOOLS: list[Tool] = [
     SPECS["open_document"].make({None: _open_document}),
-    SPECS["list_documents"].make({None: _list_documents}),
     SPECS["close_document"].make({None: _close_document}),
     SPECS["undo"].make({None: _undo}),
     SPECS["batch"].make({None: _composite}),

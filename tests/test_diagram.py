@@ -189,6 +189,20 @@ def test_adding_a_node_drops_the_drawing():
     assert cs.DRAWING in cs.parts(edited)  # the other diagram's is untouched
 
 
+def test_the_same_additions_give_the_same_bytes():
+    """New points and connections get ids made from the edit (uuid5), not random ones."""
+    outputs = []
+    for _ in range(2):
+        document = opened()
+        diagram = document.diagram("blocks")
+        diagram.add_node("Measure", index=1)
+        diagram.add_node("Measure", index=1)
+        outputs.append(cs.parts(gates(document))[cs.FLAT_DATA])
+    assert outputs[0] == outputs[1]
+    ids = re.findall(r'modelId="([^"]+)"', outputs[0].decode())
+    assert len(ids) == len(set(ids))
+
+
 def test_a_node_added_beside_an_assistant_is_one():
     document = opened(lang="en-GB")
     diagram = document.diagram("bullets")

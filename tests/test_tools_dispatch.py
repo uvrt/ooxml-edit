@@ -320,7 +320,7 @@ def test_a_zip_bomb_is_refused_before_opening(toolbox):
 def test_the_number_of_open_documents_is_limited(toolbox):
     session = toolbox.session(limits=Limits(max_documents=1))
     session.open(synthetic.outer_package(), "a.pptx")
-    with pytest.raises(LimitError, match="open"):
+    with pytest.raises(LimitError, match="open.*close_document"):
         session.open(synthetic.outer_package(), "b.pptx")
 
 
