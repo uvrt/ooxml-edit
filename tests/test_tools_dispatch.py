@@ -109,6 +109,29 @@ def test_a_handler_error_after_the_edit_rolls_the_whole_call_back(session):
     assert own.entry("d1").document.title(1) is None
 
 
+def test_a_changing_tools_reading_mode_runs_as_a_read(session):
+    @tool("toy_title", "Read or set a page's title.",
+          {"doc": string("Doc."), "action": string("What to do.", enum=["read", "set"]),
+           "text": string("set: the title.", optional=True)},
+          kind="pptx", mutates=True, reads=lambda arguments: arguments.get("action") == "read")
+    def toy_title(call, doc, action, text=None):
+        assert call.changing == (action == "set")
+        if action == "set":
+            call.document.set_title(1, text)
+        return Result(summary="title", data=call.document.title(1))
+
+    with Toolbox([toy_title], formats=tools_toys.FORMATS) as box:
+        own = box.session()
+        own.open(synthetic.outer_package(), "deck.pptx")
+        read = box.dispatch(own, "toy_title", {"doc": "d1", "action": "read"})
+        assert read.ok and read.version == 0 and read.checks == {}
+        assert box.dispatch(own, "toy_title", {"doc": "d1", "action": "set", "text": "A"}).version == 1
+        assert box.dispatch(own, "toy_title", {"doc": "d1", "action": "read"}).version == 1
+        assert own.undo("d1", 5) == 1          # the reads made no undo steps
+        assert box.tools["toy_title"].changes({"action": "set"})
+        assert not box.tools["toy_title"].changes({"action": "read"})
+
+
 def test_undo_and_redo_restore_bytes_and_version(toolbox, session):
     original = session.entry("d1").document.to_bytes()
     toolbox.dispatch(session, "toy_ppt_set_title", {"doc": "d1", "page": 1, "text": "A"})

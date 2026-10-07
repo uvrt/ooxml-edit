@@ -1,8 +1,8 @@
 """The shared tools: one definition each, a handler per document kind.
 
 Tools S1-S13 of the tool layer do the same job for a deck and a document -- open, save,
-undo, find, replace, render, check, charts, SmartArt, properties -- so each has **one**
-canonical definition here, and each format library adds its handler for its own kind::
+undo, describe, find, replace, render, check, charts, SmartArt, properties -- so each has
+**one** canonical definition here, and each format library adds its handler for its own kind::
 
     from ooxml_edit.tools import shared
 
@@ -24,6 +24,10 @@ How a call finds its handler:
 
 * a tool that names a document (``doc``) runs the handler for that document's kind;
 * ``new_document`` names no document yet: its ``kind`` argument picks the handler;
+* ``describe`` gives the document at a glance, its own way per kind: one schema (``doc``)
+  and one description saying what each kind returns;
+* ``edit_chart`` also reads (``action: "read"``): that call runs as a reading one
+  (``Tool.reads``), with no undo step and no checks;
 * ``open_document``, ``list_documents``, ``close_document``, ``undo`` and ``read_blob``
   (an input's text, a page at a time) work the same for every kind, and their handlers
   are here, in :data:`SESSION_TOOLS`.  Both libraries list the same objects; the toolbox
@@ -76,7 +80,8 @@ class Spec:
                  group: str = CORE, mutates: bool = False, exactly_one: tuple = (),
                  documents: Any = ("doc",), route: str | None = None, strict: bool = True,
                  batchable: bool = True, composite: bool = False,
-                 refs: tuple[str, ...] = ()) -> None:
+                 refs: tuple[str, ...] = (),
+                 reads: Callable[[Mapping[str, Any]], bool] | None = None) -> None:
         self.name = name
         self.description = description
         self.params = dict(params)
@@ -89,13 +94,15 @@ class Spec:
         self.batchable = batchable
         self.composite = composite
         self.refs = refs
+        self.reads = reads
 
     def make(self, handlers: Mapping[str | None, Callable[..., Any]]) -> Tool:
         return Tool(name=self.name, description=self.description,
                     schema=build_schema(self.params), handlers=dict(handlers),
                     group=self.group, mutates=self.mutates, documents=self.documents,
                     exactly_one=self.exactly_one, route=self.route, strict=self.strict,
-                    batchable=self.batchable, composite=self.composite, refs=self.refs)
+                    batchable=self.batchable, composite=self.composite, refs=self.refs,
+                    reads=self.reads)
 
     @property
     def schema(self) -> dict[str, Any]:
@@ -104,6 +111,11 @@ class Spec:
 
 def _no_documents(arguments: Mapping[str, Any]) -> list[str]:
     return []
+
+
+def _reading_action(arguments: Mapping[str, Any]) -> bool:
+    """``action: "read"``: the call reads, changing nothing."""
+    return arguments.get("action") == "read"
 
 
 SPECS: dict[str, Spec] = {spec.name: spec for spec in [
@@ -148,6 +160,13 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
           "steps": integer("Steps, 1-50. Default 1.", minimum=1, maximum=50, optional=True),
           "redo": boolean("Redo instead. Default false.", optional=True)},
          batchable=False),
+    # S14: describe, one schema for every kind
+    Spec("describe",
+         "The document at a glance; call once, first. Decks: slides (id, title, layout, "
+         "content area), size, theme colours, fonts, roles and tints, layouts and their "
+         "placeholders. Documents: headings with ids, sections, styles in use, comments, "
+         "revisions, fields, tables, drawings, pages. Both: the problems it opened with.",
+         {"doc": _DOC}),
     # S6
     Spec("find_text",
          "Find text: each match's address, kind and context, in order, across slides, notes, "
@@ -195,13 +214,15 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
               "(documents).", optional=True),
           "boxes": boolean("Decks: also text boxes that overlap where their text does not. "
                            "Default false.", optional=True)}),
-    # S10
+    # S10, S11: edit_chart reads too
     Spec("edit_chart",
-         "Change a chart's data, labels, title or legend; the drawn values and the embedded "
-         "workbook change together. Returns the chart after.",
+         "Read or change a chart. read: type, categories, series and values as drawn, number "
+         "formats, and what Edit Data holds. The other actions change data, labels, title or "
+         "legend; the drawn values and the embedded workbook change together. Returns the "
+         "chart after.",
          {"doc": _DOC, "target": _TARGET,
-          "action": string("What to do.", enum=[
-              "set_values", "set_value", "add_category", "remove_category", "rename_category",
+          "action": string("What to do; read changes nothing.", enum=[
+              "read", "set_values", "set_value", "add_category", "remove_category", "rename_category",
               "add_series", "remove_series", "rename_series", "set_title", "set_axis_title",
               "set_legend"]),
           "series": string("Series name, or number from 0.", optional=True),
@@ -215,12 +236,7 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
           "position": string("set_legend: where; none hides it.",
                              enum=["right", "left", "top", "bottom", "none"],
                              optional=True)},
-         group=MISC, mutates=True, refs=("target",)),
-    # S11
-    Spec("read_chart",
-         "Read a chart: type, categories, series and values as drawn, number formats, and "
-         "what Edit Data holds.",
-         {"doc": _DOC, "target": _TARGET}, group=MISC, refs=("target",)),
+         group=MISC, mutates=True, refs=("target",), reads=_reading_action),
     # S12
     Spec("edit_smartart",
          "Change a SmartArt diagram's node text, or add and remove nodes. Returns the nodes.",

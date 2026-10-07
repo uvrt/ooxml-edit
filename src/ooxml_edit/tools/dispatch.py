@@ -9,7 +9,8 @@ describe, makes sessions, emits provider definitions, and runs calls.  A call go
    did (``invalid_arguments`` names the field and the allowed values);
 3. the documents the call names are locked, in a fixed order;
 4. the handler runs; a mutating call runs inside the document's batch, so it is one undo
-   step and an exception rolls it back whole;
+   step and an exception rolls it back whole (a changing tool's reading mode, such as
+   ``edit_chart`` with ``action: "read"``, runs as a reading call: ``Tool.reads``);
 5. warnings the libraries raise are collected into the result, never printed; exceptions
    become error results with a code and, where there is a closed set, ``valid_options``.
 
@@ -92,6 +93,12 @@ class Call:
     @property
     def in_batch(self) -> bool:
         return self.context.batch
+
+    @property
+    def changing(self) -> bool:
+        """Whether this call changes its document (:meth:`Tool.changes`): false for a
+        changing tool's reading mode."""
+        return self.tool.changes(self.arguments)
 
     def touch(self, *scopes: Any, doc: str | None = None) -> None:
         """Say what this call changed (pages, blocks): the checks after it cover them."""
@@ -439,7 +446,8 @@ class Toolbox:
         if tool.composite:
             return self._run_batch(session, arguments, entries, primary)
         handler = self._handler(session, tool, arguments, primary)
-        key = arguments.get("key") if tool.mutates and isinstance(arguments.get("key"), str) else None
+        changing = tool.changes(arguments)
+        key = arguments.get("key") if changing and isinstance(arguments.get("key"), str) else None
         if key is not None and primary is not None and (tool.name, key) in primary.keys:
             replay = primary.keys[(tool.name, key)]
             return Result(summary=f"already done with key {key!r}: nothing new was made",
@@ -449,14 +457,14 @@ class Toolbox:
         with collect_warnings() as caught:
             arguments = self._with_refs(tool, arguments, entries, primary, context)
             call = Call(self, session, tool, arguments, entries, primary, context)
-            if tool.mutates and primary is not None:
+            if changing and primary is not None:
                 with primary.batch():
                     returned = handler(call, **arguments)
                 primary.bump()
             else:
                 returned = handler(call, **arguments)
             result = _as_result(returned, call.result)
-            if tool.mutates and result.ok:
+            if changing and result.ok:
                 self._keep_refs(entries, context, [primary.doc_id] if primary else [])
                 if primary is not None:
                     result.checks = {**self._checks(session, primary, context), **result.checks}
@@ -625,7 +633,7 @@ class Toolbox:
             for doc in sorted(entries, key=doc_order):
                 entries[doc].bump()
             self._keep_refs(entries, context, list(entries))
-            changing = any(tool.mutates for _, tool, _ in prepared)
+            changing = any(tool.changes(clean) for _, tool, clean in prepared)
             checks = {doc: self._checks(session, entries[doc], context)
                       for doc in sorted(entries, key=doc_order)} if changing else {}
         combined.warnings.extend(caught)
