@@ -2,9 +2,12 @@
 
 Skipped unless ``ANTHROPIC_API_KEY`` is set; they spend a few thousand tokens.  Run with
 ``python -m pytest -m provider``.  ``ANTHROPIC_MODEL`` picks the model (default
-``claude-sonnet-5``, the trial model).  No SDK: the request is a plain HTTPS POST, which is
-also a check that the adapters' dicts are all the API needs.  The OpenAI equivalent is
-written when a GPT-6 trial is approved; until then nothing here calls OpenAI.
+``claude-sonnet-5-5``, the trial model).  ``ANTHROPIC_WORKSPACE_ID``, when set, is sent as the
+``anthropic-workspace-id`` header (a key not scoped to a workspace needs it).  No SDK: the
+request is a plain HTTPS POST, which is also a check that the adapters' dicts are all the API
+needs.  Neither the key nor any header is ever printed: a failure reports the status and the
+response body only.  The OpenAI equivalent is written when a GPT-6 trial is approved; until
+then nothing here calls OpenAI.
 """
 
 from __future__ import annotations
@@ -28,20 +31,34 @@ pytestmark = [
                        reason="ANTHROPIC_API_KEY is not set"),
 ]
 
-MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-5")
+MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-5-5")
 API = "https://api.anthropic.com/v1"
 
 
+def _headers() -> dict[str, str]:
+    headers = {"x-api-key": os.environ["ANTHROPIC_API_KEY"],
+               "anthropic-version": "2023-06-01", "content-type": "application/json"}
+    workspace = os.environ.get("ANTHROPIC_WORKSPACE_ID", "").strip()
+    if workspace:
+        headers["anthropic-workspace-id"] = workspace
+    return headers
+
+
 def _post(path: str, body: dict) -> dict:
-    request = urllib.request.Request(
-        f"{API}/{path}", data=json.dumps(body).encode(), method="POST",
-        headers={"x-api-key": os.environ["ANTHROPIC_API_KEY"],
-                 "anthropic-version": "2023-06-01", "content-type": "application/json"})
+    request = urllib.request.Request(f"{API}/{path}", data=json.dumps(body).encode(),
+                                     method="POST", headers=_headers())
+    failure = None
     try:
         with urllib.request.urlopen(request, timeout=120) as response:
-            return json.loads(response.read())
+            reply = json.loads(response.read())
     except urllib.error.HTTPError as error:
-        pytest.fail(f"{error.code}: {error.read().decode(errors='replace')}")
+        failure = f"{path}: HTTP {error.code}: {error.read().decode(errors='replace')}"
+    if failure is not None:
+        # Failed outside the handler, so no traceback carries the request and its headers.
+        pytest.fail(failure, pytrace=False)
+    if "usage" in reply:
+        print(f"\n{path} usage: {json.dumps(reply['usage'])}")
+    return reply
 
 
 @pytest.fixture(scope="module")
@@ -51,7 +68,7 @@ def toolbox():
 
 
 def test_all_definitions_are_accepted_with_strict_as_the_adapter_sets_it(toolbox):
-    tools = toolbox.definitions("anthropic")
+    tools = toolbox.definitions("anthropic", defer=False)
     assert anthropic_problems(tools) == []
     reply = _post("messages", {"model": MODEL, "max_tokens": 32, "tools": tools,
                                "tool_choice": {"type": "auto"},
@@ -78,3 +95,17 @@ def test_an_image_result_round_trips_in_a_tool_result(toolbox):
                                "tools": toolbox.definitions("anthropic"), "messages": messages})
     text = " ".join(block.get("text", "") for block in reply["content"]).lower()
     assert reply["stop_reason"] in ("end_turn", "max_tokens") and "blue" in text
+
+
+def test_a_deferred_tool_is_found_by_tool_search_and_called(toolbox):
+    tools = toolbox.definitions("anthropic")            # the default: non-core deferred
+    assert any(d.get("defer_loading") for d in tools) and anthropic_problems(tools) == []
+    reply = _post("messages", {"model": MODEL, "max_tokens": 300, "tools": tools,
+                               "messages": [{"role": "user", "content":
+                                   "Deck d1 is open. Which page of d1 has the label "
+                                   "'untitled 1'? Find the tool that looks up a label, call "
+                                   "it once, and say nothing else."}]})
+    kinds = [block["type"] for block in reply["content"]]
+    called = [block["name"] for block in reply["content"] if block["type"] == "tool_use"]
+    assert "server_tool_use" in kinds, kinds
+    assert called == ["toy_ppt_find_label"], kinds
