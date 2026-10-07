@@ -4,7 +4,7 @@ This is the working plan for the **tool layer** over pptx-agent and docx-agent. 
 
 **Effort key:** S ≈ half a day · M ≈ 1–3 days · L ≈ 1–2 weeks · XL ≈ 3+ weeks.
 
-**Next step: T1 and T2** (PowerPoint and Word core). T0, the plumbing, is in ooxml-edit 0.3.0.
+**Next step: T4 and T5** (charts and the remaining gaps; guidance and loading), then trial 3 (T6). T0, the plumbing, is in ooxml-edit 0.3.0 (0.4.0: shared definitions, refs, batch); T1 (PowerPoint core), T2 (Word core) and T3 (layout and complex diagrams) are done.
 
 ---
 
@@ -36,10 +36,12 @@ These are settled; nothing below reopens them.
 | D6 | Overriding the validate gate | **App-level override only**, never by the model. |
 | D7 | Full-state SVG/XML editing | **No.** Raw full-state XML/SVG editing (`apply_svg`) is not exposed. The SVG read view is output only. SVG authoring is parked (G1). |
 | D8 | Layout and master editing (LP9) | **Later.** No trial task needs it; theme setters cover rebranding. |
-| D9 | Trial 3 models | **Sonnet 5 (`claude-sonnet-5`) only**, 2 runs per task. A GPT-6 trial on the same harness is possible later. |
-| D11 | Main route for graphics (G1, first round) | **Shape calls**, decided by the spike. SVG authoring is parked, and G1 stays open for the arm-C test only. |
+| D9 | Trial 3 models | **Sonnet 5.5 (`claude-sonnet-5-5`) only**, 2 runs per task. A GPT-6 trial on the same harness is possible later. |
+| D11 | Main route for graphics (G1) | **Shape calls**, decided by the spike and confirmed by arm C (hand-written SVG: 8.00 vs 8.375, 2.6% fewer tokens, 4 structural failures vs 1). SVG authoring ships only as the experimental `ppt_draw`, outside the default definitions, for trial 3's comparison. |
 | D12 | Where the compact SVG read view lives (was O2) | **A pptx2svg mode (LR3).** pptx2svg already resolves geometry and theme colours, and may change to serve this. |
-| D13 | Layout help | **General tools** (`ppt_layout`, `ppt_copy`, align/distribute, `ppt_design_facts`), each backed by a library call. |
+| D13 | Layout help | **General tools** (`ppt_layout`, `ppt_copy`, align/distribute, `ppt_scale`, `ppt_design_facts`), each backed by a library call. |
+| D14 | Many objects per call | High-volume pptx tools take `items[]`, always a list. Creating items may carry `ref` (`^[a-z][a-z0-9_]{0,31}$`) and targets accept `$ref`; refs are kept per document for the session and restored with undo/redo. A generic `batch` tool runs ops in order, all or nothing, one undo step per document, checks once at the end, at most 200 ops with a deadline. `batch` is never strict; the dispatcher validates each op. |
+| D15 | Data positions (from arm C) | **Scales, declared once.** `ppt_scale` keeps a linear, date or band scale as a ref (`$time`); shape items and connector ends give `place` in data units (strings: a number, a date or a band) and the tool computes the points. No chart or timeline builders: a Gantt, a scatter or a matrix is shapes composed against scales. |
 
 The ids D10 (the needs-human comment flag, dropped) and O1/O2 are retired, not reused.
 
@@ -72,7 +74,13 @@ Two trials (24 runs each) used the libraries as Python black boxes (the trial 1/
 - **Why SVG saved nothing:** agents generated SVG from Python loops rather than writing it, so both arms were code. About 12k tokens per run went into reading the library docs, measuring and verifying cost the same either way, and SVG added escaping, inset bookkeeping and whole-graphic rebuilds.
 - **Where both arms lost points:** layout and design, not the API: dead space, rainbow palettes, no legend, no focus. Neither the API nor the profile helps with layout, and no check catches these.
 - **Shape-call friction:** sizing from `measure_text` without the shape's default insets (14 overflows in one run); `bold=` on `measure_text` visible only in its signature; a library-render bullet "blob"; no preset-name list; `overflows()` comparing visible text, not boxes, so two overlapping label boxes went unseen (the one structural failure).
-- **Praised:** `content_area(slide)` (on the spike branch only).
+- **Praised:** `content_area(slide)` (on the spike branch only; public since T1, LP17).
+
+**Arm C** then had the model write the SVG by hand, with no code, through a small command-line tool over the fixed converter, under the same rule:
+- **Result:** C averaged 8.00 against A's re-graded 8.375, used 2.6% fewer tokens (125.9k vs 129.3k) and had 4 structural failures against A's 1. Editability was equal. **Shape calls stay the main route.**
+- **Why:** without code the model became a calculator. Proportional placement (dates, scores) and label distances failed: m1 labels 1.03–1.21 in from their bubbles where 1.0 was the limit, and both p8 runs split the marker line into pieces to clear a collision, so it no longer spanned the rows.
+- **What it asked for:** declarative layout instead of coordinates -- data-to-position scales first, then stack/grid/equal columns, label placement with a stated distance rule, and the measure → height loop that already worked; checks that explain themselves; design facts.
+- **The converter itself was reliable:** every first apply was valid, half as many apply cycles as before, every connector glued.
 
 Most of what the trial reports asked of the libraries has since landed in pptx-agent (README "What works today"):
 - `collisions()`;
@@ -113,7 +121,7 @@ The trial reports' "Implications for an agent-facing tool layer", with the spike
 
 These come from the earlier research against the official docs, re-checked online in T0 (2026-10-06). Items marked **[verified T0]** were confirmed or corrected then, with the page each comes from.
 
-**Current Claude models [verified T0]:** Fable 5.1 (`claude-fable-5-1`), Opus 5.5 (`claude-opus-5-5`), Sonnet 5.5 (`claude-sonnet-5-5`) and Haiku 4.5 (`claude-haiku-4-5`, retiring no sooner than 2026-10-15) (https://platform.claude.com/docs/en/models/overview). Sonnet 5 (`claude-sonnet-5`) is now a **legacy** model: still available, retiring no sooner than 2027-06-30 (https://platform.claude.com/docs/en/models/sonnet-5/overview). Trial 3 uses Sonnet 5 (D9).
+**Current Claude models [verified T0]:** Fable 5.1 (`claude-fable-5-1`), Opus 5.5 (`claude-opus-5-5`), Sonnet 5.5 (`claude-sonnet-5-5`) and Haiku 4.5 (`claude-haiku-4-5`, retiring no sooner than 2026-10-15) (https://platform.claude.com/docs/en/models/overview). Sonnet 5 (`claude-sonnet-5`) is now a **legacy** model: still available, retiring no sooner than 2027-06-30 (https://platform.claude.com/docs/en/models/sonnet-5/overview). Trial 3 uses Sonnet 5.5 (D9).
 
 ### Anthropic Messages API
 
@@ -172,10 +180,10 @@ Every tool's **canonical schema** is written in this subset, and a test enforces
 | root `type: object`; `properties`; `required`; `additionalProperties: false` on every object | `oneOf`, `allOf`, `not`, `if/then/else`, `patternProperties`, `dependent*` |
 | `string`, `integer`, `number`, `boolean`, `array` (`items`), nested `object` | numeric bounds (`minimum`, `maximum`, `multipleOf`): Anthropic lacks them |
 | `enum` of strings (at most 50 values per enum, 1000 in total) | `minLength`/`maxLength`, `maxItems`, `minItems > 1` |
-| `description` on every property | recursion and `$ref` (inline everything; nesting at most 4 levels) |
+| `description` on every property | recursion and `$ref` (inline everything; nesting at most 6 levels) |
 | `format: "date"` and `"date-time"` only | `format: "uri"` (OpenAI lacks it), `pattern` (kept out for simplicity) |
 | names matching `^[a-z][a-z0-9_]{0,63}$` | `default` (both providers: say it in the description) |
-| | free-form objects (`additionalProperties: true`): every key is named |
+| | free-form objects (`additionalProperties: true`): every key is named. One exception: a free-form object in a non-strict tool (`batch.ops[].arguments`), which the dispatcher validates against the named tool |
 
 The canonical form marks each property *required* or *optional*; it does not use type unions. Where a tool takes one of two shapes (plain `text` or a `paragraphs` spec), they are two optional properties, and the dispatcher requires exactly one. Each adapter then handles its own provider's rules.
 
@@ -375,6 +383,8 @@ DocumentEntry
  "data": {}, "next_cursor": null}
 ```
 
+12. **Batch, don't loop.** Build a whole graphic in one `items[]` call, chaining with refs; mix tools with `batch` (D14). Not allowed in a batch: render, save_document and the session tools. Declare data scales once (`ppt_scale`) and place in data units rather than computing points (D15).
+
 ---
 
 ## Complex diagrams: layout, copy and design facts
@@ -399,90 +409,90 @@ One shape, in `ppt_add_shape`, `ppt_set_text` and `ppt_measure_text` alike:
 - Plain `text` (`\n` paragraphs, `\v` line breaks) remains for the simple case.
 - Library: **LP18** (a `TextSpec` type shared by `set_text` and `measure_text`).
 
-### Layout (`ppt_layout`)
+### Layout (`ppt_layout`, `ppt_align`, `ppt_distribute`) -- built in T3
 
 | Action | What it does | Parameters |
 |---|---|---|
-| `stack` | place shapes in a row, left to right, in the order given | `targets`, `box?` (default: the slide's content area), `gap` (pt), `align` (top/middle/bottom), `justify?` (start/center/end/spread) |
-| `column` | the same, top to bottom | as `stack`, with `align` left/center/right |
-| `grid` | place shapes into an n×m arrangement within a box | `targets`, `box?`, `rows`, `columns`, `gutter` {x, y}, `order` (rows/columns), `fit` (keep size and centre in the cell / resize to the cell) |
-| `place_labels` | put each label beside its anchor shape or point, avoiding collisions with other labels and other shapes | `labels[]` {label, anchor (address) or point {x, y}}, `sides` (preference order: right, left, above, below), `distance` (pt), `leader` (none/line), `avoid?` (addresses that may be overlapped, e.g. a background band) |
+| `stack` | place shapes in a row, left to right, in the order given | `targets`, `box?` or `inside?` (a shape's box; default: the slide's content area), `gap` (pt), `align` (top/middle/bottom/keep), `justify` (start/center/end/spread), `equal?` (equal widths filling the box), `fit_text?` (heights fit the text first) |
+| `column` | the same, top to bottom | as `stack`, with `align` left/center/right/keep and `equal` giving equal heights |
+| `grid` | place shapes into rows × columns within a box | `targets`, `box?`, `rows?`, `columns?` (one may follow from the other), `gutter` {x, y}, `order` (rows/columns), `fit` (keep size and centre in the cell / resize to the cell) |
+| `place_labels` | put each label beside its anchor shape or point, avoiding collisions with other labels, shapes and lines | `labels[]` {`label` (an existing text shape) or `text` (a new text box, sized by `measure_text`), `anchor` (address) or `point` {x, y}}, `sides` (preference order), `distance` (pt), `max_center` or `max_edge` (the distance rule, pt), `leader` (none/line/auto), `avoid?` (shapes that may be overlapped), `box?` |
+| `place` | move existing shapes to data positions | `items[]` {target, `place`} (see "Data positions") |
 
-- Groups move as one; rotated shapes use `drawn_bounds`.
-- `place_labels` measures each label with `measure_text`, tries the preferred sides in order, then nearby offsets, and reports any label it could not place without a collision (as a fact, not an error). Leader lines are connectors glued to the label and counted in the collision check.
-- Returns: the moved shapes with their new boxes, unplaced labels, and the collisions afterwards.
+- Groups move as one; rotated shapes are placed by what is drawn (`drawn_bounds`), as PowerPoint aligns them.
+- `place_labels` tries each side in order of preference -- its base spot `distance` from the anchor's edge, centred on it, then slid along that side and pushed further out -- before the next side, within the distance rule. A spot is taken when it stays in the box, overlaps no other shape or placed label, and crosses no line; a filled shape without text that the label lies wholly on (a quadrant panel) is allowed, as `collisions()` allows it. Labels it cannot place are returned with the reason and the shapes most in the way (a fact, not an error); the slide's `collisions(boxes=True)` that involve a label are returned too. New labels align their text toward the anchor.
+- A layout that cannot fit its box is `refused`, with `needed` and `available`.
 - One call is one undo step.
-- Library: **LP21** (`stack`, `column`, `grid`), **LP22** (`place_labels`), **LP17** (`content_area`).
+- `ppt_align` (edge: left/center/right/top/middle/bottom; `to`: selection, slide, content area, or the first shape, which stays) and `ppt_distribute` (`axis`; `to`: selection, slide, content; or a fixed `gap`) are PowerPoint's commands; distribute orders shapes by where they stand, as PowerPoint does.
+- Library: **LP1** `pptx_agent.edit.arrange` (`align`, `distribute`, `place`), **LP21** and **LP22** `pptx_agent.edit.layout` (`stack`, `column`, `grid`, `place_labels`), **LP17** `content_area`.
 
-**Align and distribute** stay as their own tools (`ppt_align`, `ppt_distribute`; **LP1**), matching PowerPoint's commands.
+### Data positions: scales (`ppt_scale`, `place`) -- new in T3, from arm C
 
-### Copy and repeat (`ppt_copy`)
+A scale is declared once and the tools compute positions from it; the model never does the proportion arithmetic arm C failed at.
 
-Build one exemplar (say a step: a chevron, a label and a box beneath, grouped), then copy it, instead of placing every part again.
+- **Kinds:** `linear` (`min`, `max`), `date` (`start`, `end`, whole days **inclusive**, optional `exclude[]` ranges that close up, e.g. a holiday break) and `band` (named categories of equal width, `gap` between them and `padding` at the ends). Each maps onto `from` → `to` in slide points; a reversed range runs upwards (a y axis). The scale knows no axis.
+- **Kept as a ref:** `ppt_scale(name="time", …)` keeps `$time` with the document's refs, so it lasts for the session, is listed in results and follows undo like any ref. Defining one changes no content and records no undo step.
+- **Ticks:** `ppt_scale` returns tick positions and labels on request: round numbers (or a `step`), days, weeks, months, quarters or years (each with its start, centre and end, clipped to the scale), or the bands. Month headers and gridlines then come from one `items[]` call.
+- **`place` on shape items** (`ppt_add_shape`, `ppt_layout action=place`): `scale_x`/`scale_y` name the scales; `x`, `x2`, `cx` and `y`, `y2`, `cy` are edges and centres as strings (a number, a date or a band name; without a scale, points); `w`/`h` in points; `dx`/`dy` shift. Two facts per axis fix it; one fact takes the other from `box`. A date or a band has a start, a centre and an end: `x` means the start of its day or band, `x2` the end, `cx` the centre, so `x` and `x2` of the same date cover the whole day.
+- **`place` on connector ends:** `x`, `y` with `at_x`/`at_y` (start, center, end; default centre) -- a marker line from the first band's start to the last band's end spans every row.
+- **Strict-schema compatible:** values are strings, so there are no type unions; the dispatcher validates them against the scale and names the field.
+- **Library:** `pptx_agent.edit.scales` (`LinearScale`, `DateScale`, `BandScale`, `scale_from`), shared with the experimental `ppt_draw`.
 
-- **Source:** one or more shapes, or a group (`source[]` addresses). A set of shapes is copied as a set, keeping relative positions.
-- **Target:** the same slide, another slide, or another open deck (`to_slide`, with a `d2:` prefix for another deck).
-- **Where:** `at` {x, y} (the top-left of the set's bounds), or `repeat` {count, dx, dy}, or `cells` {box, rows, columns, gutter} to put one copy in each grid cell.
-- **Per-copy text:** `texts[]` of {`copy` (index), `target` (the source address within the copied set, or a placeholder token like `{{step}}` written in the exemplar's text), `text` or `paragraphs`}.
-- **Returns:** per copy, a map from each source address to the new address, plus collisions and off-slide facts.
-- One call is one undo step; `key` makes a retry safe.
+### Copy and repeat (`ppt_copy`) -- built in T3
 
-**What pptx-agent has today:**
-- `Shape.duplicate(dx, dy)`: copies a shape or group into the same container on the same slide, with a fresh top-level id and stamped ids stripped.
-- `Document.duplicate_slide(slide, index=, notes=)` and `Slide.duplicate`: a whole slide within one deck, with charts, diagrams and notes copied as per-slide parts.
-- `Slide.group`, and connectors glued by `add_connector`.
-- **Not there:** copying shapes to another slide, copying anything (shapes or slides) between decks, repeat placement, and text replacement in copies.
+Build one exemplar (say a step: a chevron, its activities and a box beneath), then copy it, instead of placing every part again.
 
-**Library gaps: LP23 `Slide.copy_shapes(shapes, to_slide, at=)`** (L):
-- the same deck or another deck; relationship-bearing content is copied with its parts: pictures and media, hyperlinks, charts with their embedded workbooks, SmartArt;
-- fresh ids for **every** shape in the copy, nested group members included (today `duplicate` renumbers only the top-level shape; verify and fix as part of LP23);
-- connectors glued inside the copied set are re-glued to the copies; glue to shapes outside the set is dropped and reported;
-- a placeholder becomes a plain shape with its effective geometry and text formatting written out;
-- theme colours stay theme references; when the target deck's theme differs, the result says which colours changed appearance (a fact).
-- Repeat, cells and text replacement are composed in the tool layer (TL) over LP23, LP21's grid and the text spec.
-- **`repeat` and `cells` are conditional on arm C (G1).** If model-written SVG wins, repetition goes through `ppt_draw` and these two options are dropped; the plain copy (to a position or another slide or deck, with text replacements) stays either way: it is how an agent extends an existing diagram or reuses template elements that SVG cannot reproduce.
+- **Source:** one or more shapes, or a group (`source[]` addresses or refs), all on one slide; copied as a set, keeping relative positions.
+- **Target:** the same slide, another slide (`to_slide`), or another open deck (`to_doc` + `to_slide`; both decks are locked, and each gets its own undo step).
+- **Where:** `at` {x, y} (the top-left of the set's bounds), `repeat` {count, dx, dy}, or `cells` {x, y, w, h, rows, columns, gutter, count} with one copy centred in each cell. Arm C kept shape calls as the main route, so `repeat` and `cells` are included.
+- **Per-copy text:** `texts[]` of {`copy`, `target` (a source address or ref within the set) or `token` (a `{{token}}` written in the exemplar's text), `text`}; formatting is kept.
+- **Returns:** per copy, a map from each source address (nested members included) to the new address, its box, dropped glue and theme-colour changes; for a copy into another deck, that deck's fit and collision facts.
+- **Library, LP23 `Slide.copy_shapes(shapes, to_slide=, at=, dx=, dy=)`:** fresh ids for every shape, nested group members included; connectors glued inside the set are re-glued to the copies, glue to shapes outside it is dropped and reported; pictures and media (shared within a deck, imported once by content into another), hyperlinks, charts with their workbooks and SmartArt are copied with their parts; a placeholder becomes a plain shape with its frame and run sizes written out; theme colours stay theme references, and a target theme that draws one differently is reported. A link to another slide copied into another deck, and slide-structure relationships, are refused.
+- One call is one undo step per deck; `key` makes a retry safe.
 
-### Design facts (`ppt_design_facts`)
+### Design facts (`ppt_design_facts`) -- built in T3
 
-**How it works without hardcoding judgement.** The library measures; it never decides. `slide.design_facts()` (**LP24**, M–L) returns, for a slide or a region of it:
+**How it works without hardcoding judgement.** The library measures; it never decides. `slide.design_facts(region=, within=)` (**LP24**) returns:
 
 | Fact | What is reported |
 |---|---|
-| Palette in use | distinct fill hues (lightness variants of one hue grouped), each with its shape count and its theme role (`accent2`, `accent2` tint 40%, or "not a theme colour") |
-| Colour-coded groups | groups of like shapes (same preset, similar size, same row or column band), the hues used within each group, and whether a legend-like group exists (small swatches beside short text whose fills match the group's hues), with the hues it covers |
-| Empty regions | the largest unused rectangles in the content area, with their area as a share of it |
-| Alignment | clusters of shared left/centre/right/top/middle/bottom lines, and near-misses: edges or centres that differ by more than 0 and at most `within` pt (a parameter), with the offset |
-| Shape vocabulary | presets in use with counts; corner styles (square, rounded with radius); line dashes and connector kinds |
-| Text sizes | the effective sizes in use, with counts and the shapes at each size |
-| Z-order notes | a line or connector drawn in front of text, with both addresses (a marker line over bars counts; see LP20) |
+| Palette in use | colour families (a theme slot, a hue bucket or grey), each with its count, whether it is an accent, and its variants (the colour as written, hex, where used: fill, line or text, and the shapes); non-theme colours listed apart |
+| Colour-coded sets | sets of like shapes (same preset, similar size; bars of one height count), their fills, hues and accent hues, whether they are colour-coded, and a **legend** if one exists (small swatches beside short text in a row or column), with the fills it covers and misses |
+| Empty regions | the largest empty rectangles of the content area (text boxes count by their text), each with its share; large text-less panels with their fill and lightness |
+| Alignment | shared left/centre/right/top/middle/bottom lines, and near-misses within `within` pt, with the offset |
+| Shape vocabulary | presets with counts; square and rounded corners (with the radius); dashes; connector kinds |
+| Text sizes | each effective size with its count and shapes |
+| Lines over text | a line or connector crossing a text-bearing shape's text: both addresses, the length crossed, both z-indexes, whether the line is in front and whether the shape is opaque |
 
-The only parameters are tolerances (`within`, a hue tolerance, a minimum empty-region size), never thresholds of taste. The tool returns the facts as data, with addresses. **The app's thinking layer decides** what they mean: its prompt, or a critique pass over the render plus these facts, applies its house rules.
+`slide.facts()` (**LP15**) adds the problem facts `check(include=["facts"])` reports: colours that are not theme colours, and wrap margins for titles and text close to wrapping. `check(include=["facts"])` returns them with a compact design section; `"design"` returns the design facts alone.
+
+The only parameters are tolerances (`within`, a region), never thresholds of taste. On the spike's outputs they report, as facts, what the graders marked down: the "rainbow" (a set of four like boxes with four accent hues and no legend), dead bands (a full-width empty region of 14–28%), missing quadrant shading or focus (no panels, or panels at lightness 0.95–1.0), colour that carries meaning without a legend, and mixed corners. **The app's thinking layer decides** what they mean.
 
 An app-side rule written against these facts, for example in the app's critique pass:
 
 ```python
-for group in facts.color_groups:
-    if len(group.accent_hues) > 2 and not group.legend:
-        findings.append(Finding(group.shapes,
-            "more than 2 accent hues on like shapes: recolour to one accent and its tints"))
+for group in facts["groups"]["sets"]:
+    if len(group["accent_hues"]) > 2 and group["legend"] is None:
+        findings.append(Finding(group["shapes"],
+            "more than 2 accent hues on like shapes and no legend: recolour or add one"))
 ```
 
 The same rule could be one line of the app's guidance instead ("if `ppt_design_facts` shows more than 2 accent hues on like shapes, recolour"). Either way the rule lives in the app; the libraries and tools ship none.
 
-### The SVG read view (an option, tested in trial 3)
+### The SVG read view (an option, tested in trial 3) -- built in T3
 
-`ppt_read_slides(detail="svg")` returns a per-slide SVG rendered by pptx2svg in a compact agent mode (gap **LR3**, D12):
-- every shape is an element or `g` with `data-id="256.5"`;
-- geometry is in slide points;
-- fills give the hex plus a `data-fill` theme token;
-- text is boxed `text` with runs, with no glyph outlines and no embedded fonts;
-- pictures, charts and tables are placeholders (`rect data-kind="picture"`) carrying their address.
+`ppt_read_slides(detail="svg")` returns a per-slide SVG from pptx2svg's compact agent view (**LR3**, D12; `convert_pptx_to_agent_svg`), with pptx-agent's addresses:
+- every shape is an element or `g` with `data-id="256.5"`, accepted verbatim by every write tool; the layout's and master's own shapes come first, marked `data-layer`;
+- geometry is in slide points (`viewBox="0 0 960 540"`), numbers rounded to 0.1 pt;
+- fills and strokes give the hex plus a `data-fill`/`data-stroke` theme name with its transforms (`accent1 lumMod=75%`);
+- text is a `<text>` per shape with paragraph and run `tspan`s (size, weight, colour), no glyphs and no fonts;
+- pictures, charts, tables and SmartArt are placeholders (`rect data-kind="picture"`), a table with its cell text and a chart with its type and title.
 
-It is the model's geometry view as an alternative to `detail="geometry"`: a per-shape JSON dump of kind, bounds, drawn bounds, z-index, fill (theme + hex), line, text, effective sizes, autofit and placeholder, composed in the tool layer (TL). Trial 3 compares the two on the graphics tasks (G2). The read view is output only: nothing applies it back.
+Measured per slide (whole tool result, chars/3.5): about 340 tokens for a title-only slide (most of it the layout's decoration), 2,600–3,700 for the spike's graphics slides, 2,800–4,100 for a real financial report; `detail="geometry"` is 0.4–1.3 times that and `outline` about a tenth. Trial 3 compares the two geometry views (G2). The read view is output only: nothing applies it back.
 
-### SVG authoring (parked)
+### SVG authoring (experimental `ppt_draw`)
 
-The authoring profile (`ppt_draw`, gap **LP16**) is **parked pending the arm-C test (model-written SVG without code)**. The spike's arm B had agents generate SVG from Python; arm C has the model write SVG directly through an apply tool, with `&` escaping fixed. G1 is re-decided by arm C's result against the same pre-registered rule (+1 grade, or equal grade at ≤ 75% of the tokens). If arm C wins, `ppt_draw` returns as an optional route beside the shape calls; nothing in T0–T3 waits for it. The converter is on pptx-agent's local branch `svg-profile-spike`.
+Arm C decided G1 against SVG authoring as the main route (D11). The converter (spike, with arm C's fixes: escaping, element-named errors, insets on the shape, tree-aware connector sides, measuring an element as it will be built) ships as **`ppt_draw`** in the group `ppt_experimental`, which is **not** in the default definitions: an app opts in. It reads the same scales as the shape tools (`<g data-scale-x="$time">` with `x="@2026-11-16"`), so trial 3 can compare the two routes on equal footing. `measure=true` sizes text boxes without changing anything; `replace` redraws one top-level group in place. Its documentation is the profile (pptx-agent `docs/PROFILE.md`). Full-state SVG editing stays excluded (D7).
 
 ---
 
@@ -494,7 +504,7 @@ The authoring profile (`ppt_draw`, gap **LP16**) is **parked pending the arm-C t
 - **LR**: a renderer;
 - **TL**: composed in the tool layer from existing calls; no library change.
 
-The ids of removed items (LP2–LP6, LW4) are retired, not reused; P14 and LP16 are held for `ppt_draw` while G1 is open. Lengths are in points at the tool boundary.
+The ids of removed items (LP2–LP6, LW4) are retired, not reused; P14 and LP16 are the experimental `ppt_draw` and its converter. Lengths are in points at the tool boundary.
 
 ### Shared-shape tools (one definition each, dispatched by the document's kind)
 
@@ -503,8 +513,8 @@ The ids of removed items (LP2–LP6, LW4) are retired, not reused; P14 and LP16 
 | S1 | `open_document` | open a registered blob as a deck or document | `blob`; `as_template_source` | `doc`, kind, a short describe | `Document.open(bytes)` | warns `TemplateOpenedWarning` |
 | S2 | `new_document` | a new deck or document | `kind`, `template_blob?`, `size?`/`page?`, `title?`, `author?` | `doc` | `Document.new(template=bytes…)` | — |
 | S3 | `save_document` | hand the file to the app | `doc`, `name`, `format` (pptx/potx/docx/dotx/markdown/outline) | name, format, size, validate report (no bytes) | `to_bytes`, `validate(target=)`, `to_markdown`/`to_outline` → `session.outputs` | validate gate (see Safety) |
-| S4 | `list_documents` / `close_document` | session housekeeping | `doc` | documents (ids, names, versions) and blobs (handles, names, mime) | session | — |
-| S5 | `undo` / `redo` | step through history | `doc`, `steps` | version, summary of what was restored | `Document.undo/redo` | LE1 version |
+| S4 | `list_documents`, `close_document` (two tools) | session housekeeping | `close_document`: `doc` | documents (ids, names, versions) and blobs (handles, names, mime) | session | — |
+| S5 | `undo` | step through history | `doc`, `steps?`, `redo?` | version, steps taken; the refs of the state it returns to | `Document.undo/redo` | LE1 version |
 | S6 | `find_text` | every match, with addresses | `doc`, `text`, `regex`, `scope` (slides, or a range/stories) | matches: address, kind, context | pptx `find_text`, docx `find` | — |
 | S7 | `replace_text` | replace everywhere, or exactly once | `doc`, `find`, `replace`, `scope`, `expect` (`one`/`all`), `regex` | count, addresses | docx `replace`/`anchor().replace`; pptx `find_text` + `resolve().text` | pptx: TL now, **LP11** `deck.replace()` later |
 | S8 | `render` | PNG of slides or pages | `doc`, `slides`/`pages`, `width` (≤2576) | images + sizes + token estimate | `render_png` | worker deadline; **LR4**, **LR5** |
@@ -513,6 +523,8 @@ The ids of removed items (LP2–LP6, LW4) are retired, not reused; P14 and LP16 
 | S11 | `read_chart` | what is drawn and what Edit Data holds | `target` | type, categories, series, number formats, workbook values | `Chart.data`, `workbook_values`, `number_formats` | — |
 | S12 | `edit_smartart` | node text, add or remove nodes | `target`, `action`, `node`, `text`, `parent?` | nodes | `Diagram.set_text/add_node/remove_node/add_child` | — |
 | S13 | `set_properties` | metadata | `title?`, `author?`, `language?`, `subject?` | properties | pptx `title`/`author`/`language`; docx `set_properties` | — |
+| S14 | `batch` | several calls as one: in order, all or none, one undo step | `ops[]` {tool, arguments} | each op's summary and data; checks once at the end | the dispatcher | core; non-strict (D14) |
+| S15 | `read_blob` | an input's text (CSV, Markdown, plain text, JSON), a page at a time | `blob`, `cursor?` | the text page, name, type, size, lines | session blobs | ooxml-edit 0.5.0; images and packages refused |
 
 ### PowerPoint-specific (prefix `ppt_`)
 
@@ -520,15 +532,15 @@ The ids of removed items (LP2–LP6, LW4) are retired, not reused; P14 and LP16 
 |---|---|---|---|---|---|---|
 | P1 | `ppt_describe` | the deck at a glance | `doc` | slides (id, n, title, layout, shape count, content area in pt), size, sections, theme colours, fonts, roles, tint ramps, layouts with placeholders (type, idx, bounds in pt), baseline problems | `slides`, `slide.title`, `layouts`, `Layout.placeholders`, `theme.colors/fonts/roles/ramps`, `validate` | LP17 (content area) |
 | P2 | `ppt_read_slides` | slide content with ids | `doc`, `slides`, `detail` (outline/geometry/svg) | outline Markdown with ids; a per-shape geometry dump; or the per-slide SVG read view | `to_outline`; shape properties; pptx2svg agent view | `geometry`: TL; `svg`: **LR3** |
-| P3 | `ppt_measure_text` | size text before building, with the same spec | `paragraphs` (text spec) or `text` + `size` + `bold?`; `width`; `like?` (a shape address: its font, insets, wrap) or `preset?` (a new shape's defaults) | lines, text height, **box height** (insets included: `fit_box`), widest line, `margin_to_wrap`, `near_wrap` | `measure_text`, `fit_height` | **LP18** |
-| P4 | `ppt_set_text` | replace a shape's, cell's or notes' text | `target`, `text` (`\n` paragraphs, `\v` line breaks; keeps formatting) or `paragraphs` (text spec) | text_fit | `resolve(addr).text`, `set_text` | LP18 (spec) |
-| P5 | `ppt_format_text` | run, paragraph and frame formatting | `target`; run: bold, italic, underline, strike, size, font, color, hyperlink; paragraph: alignment, level, bullet (none/bullet/number), space_before/after (pt), line_spacing; frame: autofit, font_scale, insets, anchor, wrap | text_fit | `Run.format`, `Paragraph.*`, `set_bullet`, `TextFrame.*` | — |
+| P3 | `ppt_measure_text` | size text before building, with the same spec | `paragraphs` (text spec) or `text` + `size` + `bold?`; `width`; `height?`; `like?` (a shape address: its font, insets, wrap) or `preset?` (a new shape's defaults; `textbox` included) | lines, text height, **box height** (insets included: `fit_box`), widest line, `margin_to_wrap`, `near_wrap` | `measure_text`, `fit_height` | **LP18** |
+| P4 | `ppt_set_text` | replace a shape's, cell's or notes' text | `items[]`: `target`, `text` (`\n` paragraphs, `\v` line breaks; keeps formatting) or `paragraphs` (text spec) | text_fit | `resolve(addr).text`, `set_text` | LP18 (spec) |
+| P5 | `ppt_format_text` | run, paragraph and frame formatting | `items[]`: `target`; run: bold, italic, underline, strike, size, font, color, hyperlink; paragraph: alignment, level, bullet (none/bullet/number), space_before/after (pt), line_spacing; frame: autofit, font_scale, insets, anchor, wrap | text_fit | `Run.format`, `Paragraph.*`, `set_bullet`, `TextFrame.*` | — |
 | P6 | `ppt_set_notes` | speaker notes | `slide`, `text` | notes | `slide.notes` | — |
-| P7 | `ppt_add_shape` | an autoshape or text box | `slide`, `preset` (enum of common presets + `other` with `preset_name`), `box` {x,y,w,h pt}, `text?` or `paragraphs?` (text spec), `fill?`, `line?`, `name?`, `key?` | address, text_fit, collisions | `add_shape`, `add_textbox(autofit="none")` | LP18 (spec), LP20 (preset list) |
-| P8 | `ppt_set_shape` | **general setter** | `target`, any of: x, y, w, h, rotation, flip_h, flip_v, fill, gradient, line{color, width, dash, start, end}, preset, adjustments, name, autofit, insets, anchor, wrap | the shape after the edit | Shape properties, `LineFormat`, `Adjustments` | — |
+| P7 | `ppt_add_shape` | autoshapes or text boxes | `slide`, `items[]`: `preset` (enum of common presets + `other` with `preset_name`), `box` {x,y,w,h pt} and/or `place` (data units, D15), `text?` or `paragraphs?` (text spec), `fit_height?`, `fill?`, `line?`, `adjustments?`, `name?`, `ref?`; `key?` | address, text_fit, collisions | `add_shape`, `add_textbox(autofit="none")` | LP18 (spec), LP20 (preset list) |
+| P8 | `ppt_set_shape` | **general setter** | `items[]`: `target`, any of: x, y, w, h, rotation, flip_h, flip_v, fill, gradient, line{color, width, dash, start, end}, preset, adjustments, name (frame fields stay in P5) | the shape after the edit | Shape properties, `LineFormat`, `Adjustments` | — |
 | P9 | `ppt_add_picture` | insert or replace an image | `slide` or `target`, `image` (blob handle), `box?`, `keep` (frame/height/width/none), `anchor?` | address, native size | `add_picture(bytes)`, `replace_image`, `image_size` | — |
-| P10 | `ppt_add_connector` | a line that stays attached | `kind` (straight/elbow/curved), `from` {shape, side}, `to` {shape, side} or points, `line` {color, width, dash, start, end} | address, route, collisions | `add_connector`, `connection_site` | — |
-| P11 | `ppt_arrange` | z-order, group, duplicate, delete | `targets`, `action` (front, back, forward, backward, group, ungroup, duplicate, delete), `dx?`, `dy?` | new addresses, collisions | `bring_to_front`…`send_to_back`, `group`, `ungroup`, `duplicate`, `delete` | — |
+| P10 | `ppt_add_connector` | lines that stay attached | `items[]`: `kind` (straight/elbow/curved), `from`/`to` {shape, side} or a point {x, y} or `place` (data units), `line` {color, width, dash, start, end}, `ref?` | address, route, collisions | `add_connector`, `connection_site` | — |
+| P11 | `ppt_arrange` | z-order, group, duplicate, delete | `targets` (addresses or `$ref`), `action` (front, back, forward, backward, group, ungroup, duplicate, delete), `dx?`, `dy?` | new addresses, collisions | `bring_to_front`…`send_to_back`, `group`, `ungroup`, `duplicate`, `delete` | — |
 | P12 | `ppt_align` | PowerPoint's Align | `targets`, `edge` (left, center, right, top, middle, bottom), `to` (selection/slide) | moved shapes | — | **LP1** |
 | P13 | `ppt_distribute` | PowerPoint's Distribute | `targets`, `axis` (horizontal/vertical), `to` (selection/slide), `gap?` (pt; omitted = equal spread) | moved shapes | — | **LP1** |
 | P15 | `ppt_edit_table` | cells, rows, columns, merges | `target`, `action` (set_cells, insert_row, delete_row, insert_column, delete_column, merge, split, set_widths, set_heights), `cells[]` {row/col or row_label/col_label, text}, `like?` | the table after the edit, by labels | `Table.*`, `cell_by_label` | — |
@@ -540,26 +552,28 @@ The ids of removed items (LP2–LP6, LW4) are retired, not reused; P14 and LP16 
 | P21 | `ppt_draft_slides` | slides from a Markdown outline | `markdown`, `at?`, `layout_map?` | slide ids, `OutlineWarning`s, overflows | `insert_outline(images=blob mapping)` | — |
 | P22 | `ppt_manage_slides` | duplicate, move, delete, find by title | `action`, `slide`, `to?`, `notes?`, `title?` | ids in order | `duplicate_slide(notes=)`, `move_slide`, `delete_slide`, `slide_titled` | — |
 | P23 | `ppt_set_theme` | brand the theme | `colors?` {slot: hex}, `fonts?` {major, minor} | the theme, roles | `theme.set_colors`, `set_fonts` | layout/master editing **LP9** (later, D8) |
-| P24 | `ppt_layout` | arrange shapes: row, column, grid, labels | `action` (stack, column, grid, place_labels), `targets` or `labels[]`, `box?`, `gap?`, `align?`, `justify?`, `rows?`, `columns?`, `gutter?`, `order?`, `fit?`, `sides?`, `distance?`, `leader?`, `avoid?` | moved shapes and boxes, unplaced labels, collisions | — | **LP17, LP21, LP22** |
-| P25 | `ppt_copy` | copy or repeat shapes or a group, with new text | `source[]`, `to_slide?`, `at?`, `repeat?` {count, dx, dy}, `cells?` {box, rows, columns, gutter}, `texts[]?` {copy, target or token, text or paragraphs}, `key?` | per copy: source → new address map; collisions, off-slide | `Shape.duplicate` (same slide) | **LP23**; repeat/cells/texts TL |
-| P26 | `ppt_design_facts` | measurable design facts of a slide | `slide`, `region?` (box), `within?` (pt), `include?` (palette, groups, empty, alignment, vocabulary, text_sizes, z_order) | the facts, with addresses; no verdicts | — | **LP24** |
+| P24 | `ppt_layout` | arrange shapes: row, column, grid, labels, data positions | `action` (stack, column, grid, place_labels, place), `targets`, `labels[]` or `items[]`, `box?`/`inside?`, `gap?`, `align?`, `justify?`, `equal?`, `fit_text?`, `rows?`, `columns?`, `gutter?`, `order?`, `fit?`, `sides?`, `distance?`, `max_center?`/`max_edge?`, `leader?`, `avoid?`, `label_width?` | moved shapes and boxes; placed labels with their distances, unplaced labels with blockers, collisions | `edit.layout`, `edit.arrange` | **LP17, LP21, LP22** |
+| P25 | `ppt_copy` | copy or repeat shapes or a group, with new text | `source[]`, `to_slide?`, `to_doc?`, `at?`, `repeat?` {count, dx, dy}, `cells?` {x, y, w, h, rows, columns, gutter, count}, `texts[]?` {copy, target or token, text}, `ref_prefix?`, `key?` | per copy: source → new address map; dropped glue, theme changes; the target deck's facts | `Slide.copy_shapes` | **LP23**; repeat/cells/texts TL |
+| P26 | `ppt_design_facts` | measurable design facts of a slide | `slide`, `region?` (box), `within?` (pt), `include?` (palette, groups, empty, alignment, vocabulary, text_sizes, z_order) | the facts, with addresses; no verdicts | `Slide.design_facts` | **LP24** |
+| P27 | `ppt_scale` | declare a data scale once, as `$name`; its ticks | `name`, `kind?` (linear/date/band; omitted: read an existing scale), `from`, `to` (pt), `min`/`max`, `start`/`end`/`exclude[]`, `bands[]`/`gap`/`padding`, `ticks?` {every, step, format} | the scale, its ticks (positions and labels) | `edit.scales` | D15 |
+| P14 | `ppt_draw` (experimental, not in the defaults) | draw a graphic from SVG in the authoring profile as native shapes | `slide`, `svg`, `box?`, `replace?`, `measure?` | SVG id → address, text fits, warnings | `edit.svgprofile` | **LP16** |
 
-With the shared tools, that is 25 + 13 = **38 definitions** reachable for a deck (39 if G1 brings back `ppt_draw`). Twelve of them are "core" (see Model guidance), and the rest load through tool search.
+With the shared tools, that is **40 definitions** reachable for a deck after T3 (26 PowerPoint tools and 14 shared ones; 41 with the experimental `ppt_draw`; P18 and P19 come in T4). Thirteen of them are "core" (see Model guidance), and the rest load through tool search.
 
 **PowerPoint library gaps (work items):**
-- **LP1 `pptx_agent.edit.arrange`: `align(shapes, edge, to)` and `distribute(shapes, axis, to, gap=None)`** (M).
+- **LP1 `pptx_agent.edit.arrange`: `align(shapes, edge, to)` and `distribute(shapes, axis, to, gap=None)`** (M). Done in T3.
   - These match PowerPoint's Align and Distribute: relative to the selection or the slide. They use `drawn_bounds` for rotated shapes and move groups as one; the whole call is one undo step.
 - **LP7 `slide.add_chart(type, categories, series, box)`,** on LE3 (M).
 - **LP8 chart formatting in `ooxml_edit.charts`** (M–L): series fill/line by theme colour, data labels on/off with a number format, the value axis's min/max/major unit, and the gap width.
 - **LP9 layout and master editing** (L). Trial 2's N17: template branding beyond the theme. Deferred (D8).
 - **LP11 `Document.replace(find, replace, slides=, regex=)`** (S): parity with docx.
 - **LP14 `LabelError.candidates`** (S): structured candidates for `valid_options`.
-- **LP15 `slide.facts()`** (M). The problem facts, no rules or thresholds of taste:
+- **LP15 `slide.facts()`** (M; done in T3). The problem facts, no rules or thresholds of taste:
   - overflow, collisions and off-slide shapes (existing `overflows`/`collisions`, plus LP19's box mode);
   - fills, lines and text colours that are not theme colours (from `Color.resolve`);
   - wrap margins (`margin_to_wrap`/`near_wrap`) for titles and text boxes.
   - (Near-alignment and text sizes moved to LP24.)
-- **LP16 the SVG authoring converter:** parked (G1, arm C).
+- **LP16 the SVG authoring converter:** `pptx_agent.edit.svgprofile`, merged from the spike branch in T3 behind the experimental `ppt_draw` (G1 decided).
 - **LP17 `content_area(slide)` public** (S): the body placeholder's box, or the slide minus the title band and margins. It exists on the spike branch only.
 - **LP18 one measuring model** (M):
   - a `TextSpec` (paragraphs, runs, bullets, frame) accepted by both `Shape.set_text` and `measure_text`;
@@ -571,10 +585,10 @@ With the shared tools, that is 25 + 13 = **38 definitions** reachable for a deck
   - a list of preset names (`pptx_agent.PRESETS`), with adjustment names (`adj` vs `adj1`) per preset;
   - unit helpers beside `Pt`: `Inches`, `Cm`, and `to_pt`;
   - document that a marker line drawn in front of bars counts as a collision unless it is sent behind them.
-- **LP21 `pptx_agent.edit.layout`: `stack`, `column`, `grid`** (M): positions for given shapes in a box, with gap, gutter and alignment; groups move as one; one undo step.
-- **LP22 `place_labels(labels, sides, distance, leader, avoid)`** (M–L): greedy placement by side preference, then nearby offsets, measured with `measure_text`, checked with `collisions(boxes=True)`; returns unplaced labels.
-- **LP23 `Slide.copy_shapes(shapes, to_slide, at=)`** across slides and decks (L): see "Copy and repeat".
-- **LP24 `slide.design_facts(region=, within=)`** (M–L): see "Design facts".
+- **LP21 `pptx_agent.edit.layout`: `stack`, `column`, `grid`** (M; done in T3): positions for given shapes in a box, with gap, gutter and alignment; groups move as one; one undo step.
+- **LP22 `place_labels(labels, sides, distance, max_center/max_edge, leader, avoid)`** (M–L; done in T3): greedy placement by side preference, then nearby offsets, measured with `measure_text`, checked with `collisions(boxes=True)`; returns unplaced labels.
+- **LP23 `Slide.copy_shapes(shapes, to_slide, at=)`** across slides and decks (L; done in T3): see "Copy and repeat".
+- **LP24 `slide.design_facts(region=, within=)`** (M–L; done in T3): see "Design facts".
 - **Later:** importing a whole slide from another deck (`Document.import_slide`). No trial task needs it; `ppt_copy` covers shapes.
 
 ---
@@ -675,7 +689,7 @@ These pairs stay format-specific, because their parameters differ too much:
    - Use `find_text` when you know the words but not the id.
 3. **Prefer coarse tools:**
    - for a repeated element, build one exemplar, group it, and `ppt_copy` it with `repeat` or `cells` and per-copy `texts`;
-   - `ppt_layout` to place shapes in a row, column or grid, and to place labels; `ppt_align`/`ppt_distribute` instead of computing coordinates;
+   - `ppt_layout` to place shapes in a row, column or grid, and to place labels; `ppt_align`/`ppt_distribute` instead of computing coordinates; for data (dates, scores, categories) a `ppt_scale` and `place` in data units;
    - `word_move` for sections; `ppt_draft_slides`/`word_insert_markdown` for bulk text.
    - Use the general setter for adjustments.
 4. **Read every result's `checks`:**
@@ -697,10 +711,10 @@ These pairs stay format-specific, because their parameters differ too much:
 - Enums replace prose.
 - The text spec is described once (in `ppt_add_shape`) and referred to by the others.
 - No `input_examples` at first. Trial 3 checks whether one `ppt_copy` example earns its tokens on Claude.
-- **Budget, checked by a test:** the core group is ≤ 4,000 tokens per format, and all definitions are ≤ 12,000 tokens per format. These are counted with Anthropic's count-tokens endpoint in CI (marked online). OpenAI counts are estimated offline until a GPT-6 trial is planned.
+- **Budget, checked by a test:** the core group is ≤ 4,000 tokens per format, and all definitions ≤ 16,500 tokens per format for now (12,000 before T3; T5's description pass is to bring it back down). Estimated offline at 3.5 characters per token: after T3 the pptx core is 3,907 and all 40 deck tools 16,394 (16,745 with `ppt_draw`); the Word core is 2,940. They are to be counted with Anthropic's count-tokens endpoint in CI (marked online) once an API key is available. OpenAI counts are estimated offline until a GPT-6 trial is planned.
 
 **Tool groups and deferred loading:**
-- **Core, never deferred (12 per format):**
+- **Core, never deferred (12 per format, plus the shared `batch`):**
   - shared: `open_document`, `new_document`, `save_document`, `undo`, `find_text`, `replace_text`, `render`, `check`;
   - pptx: `ppt_describe`, `ppt_read_slides`, `ppt_set_text`, `ppt_set_shape`;
   - Word: `word_describe`, `word_read`, `word_set_text`, `word_format`.
@@ -708,10 +722,11 @@ These pairs stay format-specific, because their parameters differ too much:
 
   | Group | Tools |
   |---|---|
-  | `shared_misc` | S4, S10–S13 |
+  | `shared_misc` | S4, S10–S13, S15 |
   | `ppt_text` | P3, P5, P6 |
   | `ppt_graphics` | P7, P10, P11, P25 |
-  | `ppt_layout` | P12, P13, P24, P26 |
+  | `ppt_layout` | P12, P13, P24, P26, P27 |
+  | `ppt_experimental` (opt-in, not in the defaults) | P14 |
   | `ppt_objects` | P9, P15–P19 |
   | `ppt_slides` | P20–P23 |
   | `word_text` | W3, W6, W7, W8 |
@@ -793,6 +808,7 @@ The trial harness acts as an app. It supplies each task's brief and nothing more
    - **one measuring model:** for a set of text specs and presets, `ppt_measure_text`'s box height equals the `text_fit` height after `ppt_add_shape` with the same spec;
    - `stack`/`column`/`grid` place shapes exactly (to 0.01 pt), with groups and rotated shapes;
    - `place_labels` leaves no collisions on the p8 milestone, o1 and m1 label sets, or reports the unplaced ones;
+   - scales: dates inclusive with excluded ranges, bands, reversed ranges, ticks; `place` on shapes and connector ends, inside `batch` and with `$ref`;
    - `ppt_copy` of a grouped exemplar to another slide and to another deck: every id is fresh, inner connectors are glued to the copies, pictures and charts carry their parts, and PowerPoint opens the result (oracle);
    - design facts on the trial-2 p7/p8 and spike outputs report the four-hue group, the unused band and the missing legend as facts, with no verdicts.
 5. **Dispatcher tests:**
@@ -806,13 +822,13 @@ The trial harness acts as an app. It supplies each task's brief and nothing more
    - Recorded tool-call sequences, with arguments and expected results normalised (versions, ids), for each trial task's reference solution expressed as tool calls, and for the spike's o1 and m1 references.
    - Replayed offline on every library release. The output file must be byte-identical (fixed session clock), `check` must be clean, and the task's checks must pass.
    - This makes "the tools can do every trial task without Python" a regression test.
-7. **Trial 3 (Sonnet 5 only, D9):**
+7. **Trial 3 (Sonnet 5.5 only, D9):**
    - **Tasks:** the trial-2 tasks (p1–p8, and w1–w6 with w3 and w5 restored: 14 tasks) plus the spike's o1 and m1, so graphics are not judged on p7/p8 alone: 16 tasks. Each is run **twice**, using only the tools: no Python and no file access.
    - **Read-view comparison (G2):** the four graphics tasks (p7, p8, o1, m1) run twice more with `detail="svg"` available instead of `detail="geometry"`, everything else equal. The rule is pre-registered before the first run: the SVG read view becomes the default geometry view if its mean grade is at least the geometry arm's and its tokens are no higher; otherwise `geometry` stays the default and `svg` stays optional or is dropped.
    - **Harness:** a small `harness/run_trial.py` in the tool-layer repository.
      - It runs the Anthropic loop (all results in one user message), with a per-run session, a fixed clock and a token and tool-call meter, and writes `transcript.jsonl` and the output bytes.
      - Its provider loop is pluggable, so a later GPT-6 trial (Responses API, `previous_response_id`) reuses it unchanged.
-     - Grading reuses trial 2's grading unchanged: the per-task checks, the Office oracles run serially, and blind Sonnet 5 visual graders that do not see the transcript.
+     - Grading reuses trial 2's grading unchanged: the per-task checks, the Office oracles run serially, and blind Sonnet 5.5 visual graders that do not see the transcript.
    - **Prerequisites:** `ANTHROPIC_API_KEY` and spending approval. Rough estimate: 40 runs (32 + 8 read-view runs) × about 100–150k tokens.
    - **Compared with trial 2 and the spike, per task:**
      - success (strict definition);
@@ -832,7 +848,7 @@ The trial harness acts as an app. It supplies each task's brief and nothing more
 
 ### T0 — plumbing (L) — done in ooxml-edit 0.3.0
 
-Status: `ooxml_edit.tools` and LE1 are implemented, with toy tools in the tests. Every exit item below passes offline; the online Anthropic test is written (`pytest -m provider`) and waits for an `ANTHROPIC_API_KEY`, and with it the live image round trip.
+Status: `ooxml_edit.tools` and LE1 are implemented, with toy tools in the tests. Added after the fact, in 0.4.0: shared definitions (`ooxml_edit.tools.shared`), refs, the central checks hook and `batch`. Every exit item below passes offline; the online Anthropic test is written (`pytest -m provider`) and waits for an `ANTHROPIC_API_KEY`, and with it the live image round trip.
 
 - **Scope:**
   - `ooxml_edit.tools`: registry, the subset checker, three adapters, the result envelope and error codes, Session with blobs and outputs (cross-document locking included), limits, the worker pool, logging;
@@ -846,10 +862,12 @@ Status: `ooxml_edit.tools` and LE1 are implemented, with toy tools in the tests.
   - the concurrency tests pass;
   - no tool accepts a path.
 
-### T1 — PowerPoint core (L)
+### T1 — PowerPoint core (L) — done
+
+Status: done. Golden transcripts p1–p6 replay byte for byte to passing checks (17/17, 39/39, 13/13, 19/19, 13/13, 14/14) in 6–9 calls each, and PowerPoint opens every output. Core estimate 3,885 tokens; the online count is pending.
 
 - **Scope:**
-  - S1–S9 and S13 for pptx; P1, P2 (`outline` and `geometry`), P3–P11, P15–P17, P20–P23; the per-edit checks; paging; the core and group definitions;
+  - S1–S9, S10–S12 (charts and SmartArt) and S13 for pptx; `items[]`, refs and `batch` (D14); the duplicate fix (every nested shape renumbered); P1, P2 (`outline` and `geometry`), P3–P11, P15–P17, P20–P23; the per-edit checks; paging; the core and group definitions;
   - **LP18** one measuring model and the text spec (P3, P4, P7); **LP17** `content_area`; **LP19** box-overlap collisions; **LP20** small fixes; **LP14**.
 - **Exit:**
   - golden transcripts for p1–p6 replay to passing checks, with Office opening every output;
@@ -857,14 +875,22 @@ Status: `ooxml_edit.tools` and LE1 are implemented, with toy tools in the tests.
   - `check(boxes=true)` reports the spike's p8 A1 label-box overlap;
   - the core definitions are ≤ 4k tokens.
 
-### T2 — Word core (L)
+### T2 — Word core (L) — done
+
+Status: done. 43 Word definitions, core about 2,940 tokens; golden transcripts w1–w6 pass (25/25, 40/40, 14/14, 17/17, 20/20, 24/24), and Word opens every output. Also landed: an empty-TOC warning, a `Document.converter` hook, and a batch that changes nothing records no undo step (ooxml-edit 0.4.0). Deferred: W28 (LE3/LW3), `apply_styles_from` (LW5), LW1/LW2 (T4); a shared tool to read text blobs was added in T3 (S15).
 
 - **Scope:** S1–S9 for docx; W1–W27 and W29 (the `apply_styles_from` action waits for LW5); tracking mode; the validate gate.
 - **Exit:**
   - golden transcripts for w1–w6 replay to passing checks, and Word opens every output;
   - a reflow check on `sample-long.docx` stays within its 30 s deadline.
 
-### T3 — layout and complex diagrams (L–XL)
+### T3 — layout and complex diagrams (L–XL) — done
+
+Status: done, apart from the items under "Deferred".
+- **Built:** `ppt_align`, `ppt_distribute`, `ppt_layout` (stack, column, grid, place_labels, place), `ppt_scale` and `place` (D15), `ppt_copy`, `ppt_design_facts` and `check(include=["facts"|"design"])`, `ppt_read_slides(detail="svg")` on pptx2svg's agent view (LR3), `read_blob` (S15), and the experimental `ppt_draw` (opt-in).
+- **Goldens, tools only:** p7 33/33 (6 calls: describe, measure, one batch with an exemplar repeated by `ppt_copy`, render, check, save), p8 37/37 (5 calls; date and band scales, `place`, `place_labels`; the marker line spans every row), o1 27/27 (5 calls; `stack` with equal widths, `column` and `align` per workstream), m1 22/22 (5 calls; two linear scales, labels within 70 pt of their bubbles' centres). They replay byte for byte, and PowerPoint opens every output. The spike's shape-call runs took 29–53 tool calls.
+- **Effort, estimated (3.5 characters per token):** the calls' arguments cost about 1,250 (p7), 3,590 (p8), 2,490 (o1) and 2,300 (m1) output tokens; their results about 3,100–4,200 input tokens, plus one render (1,196). The definitions (core plus the graphics and layout groups) are sent with each turn.
+- **Design facts on the spike's outputs** report, as facts, the rainbow, the dead bands, missing shading or focus, colour without a legend and mixed corners.
 
 - **Scope:**
   - **LP1** with `ppt_align`/`ppt_distribute` (P12, P13);
@@ -882,6 +908,14 @@ Status: `ooxml_edit.tools` and LE1 are implemented, with toy tools in the tests.
   - the SVG read view meets LR3's exit, ready for T6.
 - LR3, LR4 and LR5 are pptx2svg work and can start any time; they must land before T6.
 
+- **Deferred from T3:**
+  - align and distribute compared with PowerPoint's own commands on rotated shapes and groups (oracle);
+  - the thinking-layer critique hook (`check(include=["app"])`) and the example guidance (T5);
+  - LR4 and LR5 (the library render's bullet blob and custom-geometry outlines), before T6;
+  - a "highlight on the focus element" fact; a legend drawn as coloured text alone; gradient fills in colour-coded sets;
+  - `ppt_copy` texts as a text spec (`paragraphs`); group rotation for members copied out alone;
+  - label anchors in data units (a label is anchored to a shape or a point).
+
 ### T4 — charts and the remaining gaps (L)
 
 - **Scope:** LE3, LP7, LP8, LW1, LW2, LW3, LW5, LW6, LP11; tools P18, P19 and W28; `word_template` complete.
@@ -896,7 +930,7 @@ Status: `ooxml_edit.tools` and LE1 are implemented, with toy tools in the tests.
   - a scripted Anthropic session discovers a deferred tool through tool search and calls it, and the OpenAI namespace and `tool_search` shapes pass offline;
   - the budgets hold.
 
-### T6 — trial 3 (M; Sonnet 5 only)
+### T6 — trial 3 (M; Sonnet 5.5 only)
 
 - **Scope:** the harness, 40 runs (including the read-view comparison), grading, and a report in the trial-2 format, written by the main session.
 - **Exit:**
@@ -910,11 +944,11 @@ T0 ─┬─▶ T1 ─┬─▶ T3 (layout, copy, design facts) ──┐
 LR3, LR4, LR5 (pptx2svg; any time) ───────────────────────▶ T6
 ```
 
-- T0 is next. T1 and T2 are independent after it.
+- T0, T1, T2 and T3 are done. T4 and T5 are next; T6 runs last.
 - T3 needs T1 (the text spec and `content_area` come first).
 - T5 can start once T1 lands, but its budgets are only final after T3 and T4.
 - Trial 3 runs last, but a smoke run of the graphics tasks after T3 is cheap and worth doing.
-- If arm C re-opens SVG authoring (G1), `ppt_draw` and LP16 become an optional addition after T3; nothing above waits for it.
+- Arm C did not re-open SVG authoring (G1): `ppt_draw` and LP16 are an experimental, opt-in addition for trial 3's comparison; nothing above waits for it.
 
 ---
 
@@ -922,7 +956,7 @@ LR3, LR4, LR5 (pptx2svg; any time) ───────────────
 
 | # | Question | Options | Recommendation |
 |---|---|---|---|
-| G1 | SVG authoring (`ppt_draw`) as an optional route | parked · add beside shape calls | **Re-decide on the arm-C test** (model-written SVG without code) with the spike's rule: +1 grade, or equal grade at ≤ 75% of the tokens. Shape calls stay the main route either way. |
+| G1 | SVG authoring (`ppt_draw`) as an optional route | parked · add beside shape calls | **Decided by arm C:** not as a route (8.00 vs 8.375, −2.6% tokens, 4 structural failures vs 1). `ppt_draw` stays experimental, outside the defaults, with the same scales, for trial 3's comparison. |
 | G2 | The model's geometry view | `detail="geometry"` (JSON dump) · `detail="svg"` (LR3 read view) | **Decide in trial 3** by its pre-registered rule; `geometry` is the default until then. |
 | O3 | Graphics tools in the core set | core stays 12 · add `ppt_add_shape`/`ppt_layout`/`ppt_copy` to the pptx core | **Keep 12** and load the graphics groups by tool search; revisit after the T3 smoke run if graphics tasks always load them. |
 
@@ -940,6 +974,6 @@ LR3, LR4, LR5 (pptx2svg; any time) ───────────────
 - Rendering tracked changes and comments visually in Word (docx-agent decision 8).
 - Editing a file that is open in Office.
 - Pixel-exact claims: fidelity is the renderers' roadmap.
-- **Later:** SVG authoring profile: tested in the spike (shape calls 8.50 vs SVG 8.13, +5% tokens); the converter is parked on pptx-agent's local branch `svg-profile-spike`; parked pending the arm-C test (model-written SVG without code), and otherwise revisited only if a model shows a clear advantage.
+- **Later:** SVG authoring as a route: tested in the spike (shape calls 8.50 vs SVG 8.13, +5% tokens) and arm C (hand-written SVG 8.00 vs 8.375, 4 structural failures vs 1); kept only as the experimental `ppt_draw`, revisited if trial 3 shows a clear advantage.
 - **Later:** importing whole slides between decks; layout and master editing (LP9, D8).
 ```
