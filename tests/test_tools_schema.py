@@ -57,11 +57,21 @@ def test_what_leaves_the_subset_is_named(change, message):
     assert any(message in problem for problem in problems), problems
 
 
-def test_nesting_is_limited_to_four_levels():
+def test_nesting_is_limited_to_six_levels():
     inner = string("Leaf.")
-    for level in range(5):
+    for level in range(6):
         inner = obj({"next": inner}, f"Level {level}.")
+    assert not any("deeper" in p for p in subset_problems(_schema(top=inner)))
+    inner = obj({"next": inner}, "Level 6.")
     assert any("deeper" in p for p in subset_problems(_schema(top=inner)))
+
+
+def test_a_plural_tool_may_hold_a_text_spec():
+    run = obj({"text": string("Text."), "bold": boolean("Bold.", optional=True)}, "A run.")
+    paragraph = obj({"runs": array(run, "Runs.")}, "A paragraph.")
+    item = obj({"target": string("Address."), "paragraphs": array(paragraph, "Paragraphs.")},
+               "One item.")
+    assert subset_problems(_schema(items=array(item, "Items."))) == []
 
 
 def test_bounds_are_allowed_only_in_a_validation_schema_and_canonical_strips_them():

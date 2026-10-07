@@ -38,7 +38,12 @@ TYPES = ("string", "integer", "number", "boolean", "array", "object")
 FORMATS = ("date", "date-time")
 MAX_ENUM = 50
 MAX_ENUM_TOTAL = 1000
-MAX_DEPTH = 4
+#: How deep an object may sit below the root (an array's items count as a level).  Six
+#: lets a plural tool hold a text spec: ``items[] -> paragraphs[] -> runs[]``, the runs at
+#: depth 6.  OpenAI strict mode allows 10 levels; Anthropic documents no depth limit, only
+#: an overall complexity limit (a 400, "Schema is too complex for compilation"), which the
+#: online test checks with every definition sent at once.
+MAX_DEPTH = 6
 
 #: The keywords a canonical schema node may carry.
 SUBSET_KEYWORDS = frozenset({
