@@ -47,6 +47,9 @@ from .registry import (CORE, Param, Tool, ToolGroup, array, boolean, build_schem
                        free_object, integer, number, obj, string)
 from .results import Result, ToolError, page_text
 
+#: ``edit_chart``'s chart types for ``add`` (``ooxml_edit.charts.create``'s kinds).
+CHART_TYPES = ("column", "stacked_column", "bar", "stacked_bar", "line", "pie", "scatter")
+
 #: The group of the shared tools that are not core: loaded on demand.
 MISC = "shared_misc"
 
@@ -216,26 +219,40 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
                            "Default false.", optional=True)}),
     # S10, S11: edit_chart reads too
     Spec("edit_chart",
-         "Read or change a chart. read: type, categories, series and values as drawn, number "
-         "formats, and what Edit Data holds. The other actions change data, labels, title or "
-         "legend; the drawn values and the embedded workbook change together. Returns the "
-         "chart after.",
-         {"doc": _DOC, "target": _TARGET,
+         "Add, read or change a chart. add: a new chart from data, styled as Office inserts "
+         "one. read: type, data, formats, and what Edit Data holds. Other actions change data, "
+         "titles, legend, data labels or gap width; values and workbook change together.",
+         {"doc": _DOC,
+          "target": string("The chart; add: decks the slide, documents the paragraph to "
+                           "follow. Or $ref."),
           "action": string("What to do; read changes nothing.", enum=[
-              "read", "set_values", "set_value", "add_category", "remove_category", "rename_category",
-              "add_series", "remove_series", "rename_series", "set_title", "set_axis_title",
-              "set_legend"]),
+              "read", "add", "set_values", "set_value", "add_category", "remove_category",
+              "rename_category", "add_series", "remove_series", "rename_series", "set_title",
+              "set_axis_title", "set_legend", "show_data_labels", "hide_data_labels",
+              "set_gap_width"]),
+          "chart_type": string("add: the kind of chart.", enum=list(CHART_TYPES), optional=True),
+          "categories": array(string(), "add: category labels, in order.", optional=True),
+          "data": array(obj({"name": string(), "values": array(number())}),
+                        "add: each series' name and one value per category.", optional=True),
+          "box": obj({"x": number(), "y": number(), "w": number(), "h": number()},
+                     "add, decks: the frame, pt.", optional=True),
+          "width": number("add, documents: width in pt. Default 432.", minimum=36,
+                          maximum=1584, optional=True),
+          "number_format": string("add: the values'; show_data_labels: the labels'. Excel "
+                                  "code, e.g. #,##0.0.", optional=True),
           "series": string("Series name, or number from 0.", optional=True),
           "category": string("Category label, or number from 0.", optional=True),
           "values": array(number(), "One per category (set_values, add_series) or per "
-                          "series (add_category).", optional=True),
-          "value": number("set_value: the value.", optional=True),
-          "text": string("New name, label or title.", optional=True),
+                          "series (add_category); add: scatter x values.", optional=True),
+          "value": number("set_value: the value; set_gap_width: percent of a bar's width.",
+                          optional=True),
+          "text": string("New name, label or title; add: the chart title.", optional=True),
           "axis": string("set_axis_title: which axis.", enum=["category", "value"],
                          optional=True),
-          "position": string("set_legend: where; none hides it.",
+          "position": string("set_legend, add: legend position; none hides it.",
                              enum=["right", "left", "top", "bottom", "none"],
-                             optional=True)},
+                             optional=True),
+          "ref": string("add: ref name for the new chart.", optional=True)},
          group=MISC, mutates=True, refs=("target",), reads=_reading_action),
     # S12
     Spec("edit_smartart",
