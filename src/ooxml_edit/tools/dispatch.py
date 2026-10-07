@@ -423,7 +423,7 @@ class Toolbox:
                 returned = handler(call, **arguments)
             result = _as_result(returned, call.result)
             if tool.mutates and result.ok:
-                self._keep_refs(entries, context)
+                self._keep_refs(entries, context, [primary.doc_id] if primary else [])
                 if primary is not None:
                     result.checks = {**self._checks(session, primary, context), **result.checks}
         result.warnings.extend(caught)
@@ -499,10 +499,13 @@ class Toolbox:
         return arguments
 
     @staticmethod
-    def _keep_refs(entries: dict[str, DocumentEntry], context: CallContext) -> None:
-        for doc, refs in context.refs.items():
+    def _keep_refs(entries: dict[str, DocumentEntry], context: CallContext,
+                   changed: Iterable[str] = ()) -> None:
+        """Keep the refs a call defined, and record every changed document's refs under
+        its new version (so undo can bring back the refs of the state it returns to)."""
+        for doc in set(context.refs) | set(changed):
             if doc in entries:
-                entries[doc].refs.update(refs)
+                entries[doc].keep_refs(context.refs.get(doc, {}))
 
     def _checks(self, session: Session, entry: DocumentEntry,
                 context: CallContext) -> dict[str, Any]:
@@ -587,7 +590,7 @@ class Toolbox:
                              "completed_before": failed.index}) from None
             for doc in sorted(entries, key=doc_order):
                 entries[doc].bump()
-            self._keep_refs(entries, context)
+            self._keep_refs(entries, context, list(entries))
             changing = any(tool.mutates for _, tool, _ in prepared)
             checks = {doc: self._checks(session, entries[doc], context)
                       for doc in sorted(entries, key=doc_order)} if changing else {}

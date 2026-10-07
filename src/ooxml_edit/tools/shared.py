@@ -55,19 +55,18 @@ _TARGET = string("Address of the object, exactly as a read tool printed it.")
 
 
 def _slides(what: str) -> Param:
-    return array(integer("Slide number, from 1.", minimum=1),
-                 f"Decks only: slide numbers, from 1, {what}.", optional=True)
+    return array(integer("Slide number.", minimum=1),
+                 f"Decks only: slide numbers from 1, {what}.", optional=True)
 
 
 def _pages(what: str) -> Param:
-    return array(integer("Page number, from 1.", minimum=1),
-                 f"Documents only: page numbers, from 1, {what}.", optional=True)
+    return array(integer("Page number.", minimum=1),
+                 f"Documents only: page numbers from 1, {what}.", optional=True)
 
 
-_RANGE = string("Documents only: a block or span address (p:A..t:B) to search within. "
-                "Default: everything.", optional=True)
-_STORIES = string("Documents only: body (default), or all stories: headers, footers, notes, "
-                  "comments.", enum=["body", "all"], optional=True)
+_RANGE = string("Documents only: a block or span (p:A..t:B) to search in.", optional=True)
+_STORIES = string("Documents only: body (default) or all stories.", enum=["body", "all"],
+                  optional=True)
 
 
 class Spec:
@@ -157,11 +156,11 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
          batchable=False),
     # S6
     Spec("find_text",
-         "Find text everywhere it occurs: slides, notes, tables, SmartArt; or a document's "
-         "blocks. Returns each match's address, kind and context, in order.",
+         "Find text: every match's address, kind and context, in order (slides, notes, "
+         "tables, SmartArt; a document's stories).",
          {"doc": _DOC,
-          "text": string("The text to find; a regular expression when regex is true."),
-          "regex": boolean("Treat text as a Python regular expression. Default false.",
+          "text": string("Text to find."),
+          "regex": boolean("text is a Python regular expression. Default false.",
                            optional=True),
           "slides": _slides("to search. Default: all"),
           "range": _RANGE,
@@ -169,15 +168,13 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
           "cursor": string("next_cursor from the previous page of matches.", optional=True)}),
     # S7
     Spec("replace_text",
-         "Replace text, keeping its formatting: everywhere, or exactly one occurrence. With "
-         "expect=one, more than one match is an error listing them. Returns the count and "
-         "addresses.",
+         "Replace text, keeping its formatting. expect=one: exactly one match must exist "
+         "(else an error lists them); all: every match. Returns the count and addresses.",
          {"doc": _DOC,
-          "find": string("The text to replace; a regular expression when regex is true."),
-          "replace": string("The replacement text; with regex, \\1 refers to a group."),
-          "expect": string("one: exactly one match must exist; all: replace every match.",
-                           enum=["one", "all"]),
-          "regex": boolean("Treat find as a Python regular expression. Default false.",
+          "find": string("Text to replace."),
+          "replace": string("Replacement; with regex, \\1 is a group."),
+          "expect": string("one or all.", enum=["one", "all"]),
+          "regex": boolean("find is a Python regular expression. Default false.",
                            optional=True),
           "slides": _slides("to search. Default: all"),
           "range": _RANGE,
@@ -195,17 +192,17 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
          batchable=False),
     # S9
     Spec("check",
-         "Report facts as the application will show the document: text that does not fit, "
-         "collisions, validation problems and more. Facts, not verdicts.",
+         "Facts as the document will show: text that does not fit, collisions, validation "
+         "problems. Facts, not verdicts.",
          {"doc": _DOC,
           "slides": _slides("to check. Default: all"),
           "pages": _pages("to check. Default: all"),
           "include": array(string("A kind of fact.", enum=[
               "fit", "collisions", "facts", "design", "validate", "reflow", "fields", "app"]),
-              "What to report. Default: fit, collisions, validate (decks); validate, "
-              "reflow, fields (documents).", optional=True),
-          "boxes": boolean("Decks: also report text shapes whose boxes overlap even where "
-                           "their text does not. Default false.", optional=True)}),
+              "What to report. Default: decks fit, collisions, validate; documents "
+              "validate, reflow, fields.", optional=True),
+          "boxes": boolean("Decks: also text boxes that overlap where their text does not. "
+                           "Default false.", optional=True)}),
     # S10
     Spec("edit_chart",
          "Change a chart's data or labels; the drawn values and the embedded workbook change "
@@ -254,15 +251,13 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
          group=MISC, mutates=True),
     # the generic batch
     Spec("batch",
-         "Run several tool calls in one: in order, all or none, one undo step per document, "
-         "checks once at the end. Use it to build or change many things in one turn. Not for "
-         "render, save_document or the session tools.",
-         {"ops": array(obj({"tool": string("The tool's name, e.g. ppt_add_shape."),
-                            "arguments": free_object("That tool's arguments, exactly as the "
-                                                     "tool takes them.")},
+         "Run several tool calls as one: in order, all or none, one undo step, checks once "
+         "at the end. Not for render, save_document or session tools.",
+         {"ops": array(obj({"tool": string("Tool name."),
+                            "arguments": free_object("Its arguments, as that tool takes them.")},
                            "One call."),
-                       "The calls, in order; at most 200. A ref an op defines may be used as "
-                       "$name by later ops.", min_items=1)},
+                       "The calls, in order; at most 200. Later ops may use earlier ops' refs.",
+                       min_items=1)},
          documents=_no_documents, mutates=True, strict=False, batchable=False,
          composite=True),
 ]}
@@ -333,6 +328,7 @@ def _undo(call: Any, doc: str, steps: int = 1, redo: bool = False) -> Result:
         raise ToolError("refused", f"nothing to {'redo' if redo else 'undo'} in {doc}")
     entry = session.entry(doc)
     entry.check_cache.clear()
+    entry.restore_refs()
     return Result(summary=f"{verb} {done} step(s) of {doc}", changed=[doc],
                   data={"steps": done, "version": entry.version})
 

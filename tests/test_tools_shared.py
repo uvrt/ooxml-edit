@@ -344,3 +344,22 @@ def test_parallel_batches_on_one_document_run_in_order(toolbox, session):
     results = toolbox.dispatch_many(session, [first, second])
     assert all(r.ok for r in results)
     assert session.entry("d1").document.items() == ["a", "b"]
+
+
+def test_undo_takes_back_the_refs_of_what_it_undoes(toolbox, session):
+    entry = session.entry("d1")
+    call(toolbox, session, "t_add", doc="d1", items=[{"text": "a", "ref": "x"}])
+    ops = _ops(("t_add", {"doc": "d1", "items": [{"text": "b", "ref": "y"}]}))
+    call(toolbox, session, "batch", ops=ops)
+    assert entry.refs == {"x": "item:1", "y": "item:2"}
+    call(toolbox, session, "undo", doc="d1")
+    assert entry.refs == {"x": "item:1"}
+    call(toolbox, session, "undo", doc="d1")
+    assert entry.refs == {}
+    call(toolbox, session, "undo", doc="d1", redo=True, steps=2)
+    assert entry.refs == {"x": "item:1", "y": "item:2"}
+    call(toolbox, session, "undo", doc="d1")
+    call(toolbox, session, "t_add", doc="d1", items=[{"text": "c"}])
+    assert entry.refs == {"x": "item:1"}
+    stale = call(toolbox, session, "t_set", doc="d1", target="$y", text="B")
+    assert stale.error.code == "not_found"
