@@ -9,7 +9,10 @@ mode, so one definition serves Claude and the OpenAI APIs alike:
   ``object``, one type per property -- no unions;
 * ``enum`` of strings, at most :data:`MAX_ENUM` values each and :data:`MAX_ENUM_TOTAL` in a
   tool; ``format`` only ``date`` and ``date-time``; ``minItems`` only 0 or 1;
-* a ``description`` on every property, and property names that match :data:`NAME`;
+* a ``description`` on every top-level property, and property names that match
+  :data:`NAME`.  Nested properties and array items may leave it out where the name, type
+  and enum say it all (``bold``, ``x``): every description is sent with every request, so
+  one that repeats the name is cost without information;
 * nesting at most :data:`MAX_DEPTH` levels below the root, no ``$ref``, no recursion.
 
 One exception: a tool that is never sent strict (``Tool(strict=False)``, the generic
@@ -128,8 +131,10 @@ def _check_node(node: Any, where: str, depth: int, problems: list[str], enum_tot
     if kind not in TYPES:
         problems.append(f"{where}: type {kind!r} is not one of {', '.join(TYPES)}")
         return
-    if not is_root and not str(node.get("description") or "").strip():
+    if depth == 1 and not str(node.get("description") or "").strip():
         problems.append(f"{where}: no description")
+    if "description" in node and not isinstance(node["description"], str):
+        problems.append(f"{where}: description must be a string")
     if "enum" in node:
         values = node["enum"]
         if kind != "string" or not isinstance(values, list) or not values:
@@ -186,10 +191,8 @@ def _check_node(node: Any, where: str, depth: int, problems: list[str], enum_tot
         if "items" not in node:
             problems.append(f"{where}: an array needs items")
         else:
-            items = dict(node["items"]) if isinstance(node["items"], Mapping) else node["items"]
-            if isinstance(items, dict) and "description" not in items:
-                # Items take their meaning from the array's own description.
-                items["description"] = "item"
+            # Items take their meaning from the array's own description.
+            items = node["items"]
             _check_node(items, f"{where}[]", depth + 1, problems, enum_total, allow_bounds,
                         allow_free=allow_free)
     elif "items" in node:
