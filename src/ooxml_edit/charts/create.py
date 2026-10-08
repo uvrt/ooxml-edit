@@ -661,6 +661,7 @@ def chart_workbook(kind: str, categories: Sequence, series: Sequence, *,
         for name, text in parts:
             info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
             info.compress_type = zipfile.ZIP_DEFLATED
+            info.create_system = 3  # the same bytes on every platform (opc._new_entry)
             archive.writestr(info, (declaration + text).encode("utf-8"))
     return buffer.getvalue()
 

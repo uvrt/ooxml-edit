@@ -119,6 +119,20 @@ def test_an_added_part_is_stored_typed_and_related(package):
     assert reread.relationships(PAGE2)[rel_id].target == "../media/image2.png"
 
 
+def test_an_added_part_is_written_the_same_on_every_platform(data, monkeypatch):
+    """zipfile stamps the platform a ZipInfo is made on into each header (0 on Windows, 3
+    elsewhere); an added part must not carry it, or the same edit saves different bytes."""
+    saved = []
+    for platform in ("win32", "darwin"):
+        monkeypatch.setattr("sys.platform", platform)
+        package = OpcPackage.open(data)
+        package.add_part("doc/media/image2.png", PNG + b"2", "image/png")
+        saved.append(package.to_bytes())
+    assert saved[0] == saved[1]
+    with zipfile.ZipFile(io.BytesIO(saved[0])) as archive:
+        assert archive.getinfo("doc/media/image2.png").create_system == 3
+
+
 def test_a_new_extension_gets_a_default_and_a_known_one_an_override(package):
     package.add_part("doc/media/image2.png", PNG, "image/png")
     package.add_part("doc/pages/page3.xml", b"<x/>", synthetic.CT_PAGE)
