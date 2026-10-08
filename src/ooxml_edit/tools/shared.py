@@ -161,7 +161,9 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
          "Returns the version.",
          {"doc": _DOC,
           "steps": integer("Steps, 1-50. Default 1.", minimum=1, maximum=50, optional=True),
-          "redo": boolean("Redo instead. Default false.", optional=True)},
+          "redo": boolean("Redo instead. Default false.", optional=True),
+          "scope": string("Decks: only this slide's changes, e.g. 256. Default: the latest, "
+                          "anywhere.", optional=True)},
          batchable=False),
     # S16: describe, one schema for every kind
     Spec("describe",
@@ -344,17 +346,27 @@ def _close_document(call: Any, doc: str) -> Result:
     return Result(summary=f"Closed {doc}", removed=[doc])
 
 
-def _undo(call: Any, doc: str, steps: int = 1, redo: bool = False) -> Result:
+def _undo(call: Any, doc: str, steps: int = 1, redo: bool = False,
+          scope: str | None = None) -> Result:
     session = call.session
-    done = session.redo(doc, steps) if redo else session.undo(doc, steps)
+    done = (session.redo(doc, steps, scope=scope) if redo
+            else session.undo(doc, steps, scope=scope))
     verb = "Redid" if redo else "Undid"
+    where = f" of {scope}" if scope is not None else ""
     if done == 0:
-        raise ToolError("refused", f"nothing to {'redo' if redo else 'undo'} in {doc}")
+        raise ToolError("refused", f"nothing{where} to {'redo' if redo else 'undo'} in {doc}")
     entry = session.entry(doc)
     entry.check_cache.clear()
-    entry.restore_refs()
-    return Result(summary=f"{verb} {done} step(s) of {doc}", changed=[doc],
-                  data={"steps": done, "version": entry.version})
+    if scope is None:
+        entry.restore_refs()
+    data = {"steps": done, "version": entry.version}
+    if scope is not None:
+        data["scope"] = scope
+    result = Result(summary=f"{verb} {done} step(s){where} of {doc}", changed=[doc], data=data)
+    if scope is not None and done < steps:
+        result.warnings.append(f"{done} of {steps} step(s): no more{where}, or the next is "
+                               "entangled with changes outside it")
+    return result
 
 
 #: Text a blob may hold, by type; anything else that decodes as UTF-8 is read too.

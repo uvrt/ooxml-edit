@@ -21,6 +21,7 @@ ERROR_CODES: dict[str, str] = {
     "refused": "an edit the library refuses, or a layout that cannot fit",
     "unit": "a length or value in the wrong unit or out of range",
     "invalid_arguments": "arguments that do not match the tool's schema, or an unknown tool",
+    "entangled": "a scoped undo whose change shares parts with later changes outside the scope",
     "timeout": "the deadline passed",
     "limit": "a size or budget limit",
     "internal": "an unexpected failure in the tool layer or a library",

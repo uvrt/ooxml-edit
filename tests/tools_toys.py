@@ -112,10 +112,24 @@ def _label_candidates(exc: ToyLabelError) -> list[str]:
     return exc.candidates
 
 
+def _page_scope(document: ToyDocument, scope: str) -> list[str]:
+    """A toy deck's undo scope: a page (``"2"``), its part and relationships."""
+    try:
+        part = document.page(int(scope))
+    except (ValueError, IndexError):
+        raise ToolError("not_found", f"no page {scope!r}", field="scope",
+                        valid_options=[str(n) for n in range(1, len(document.pages) + 1)]) from None
+    return document.package.reachable_parts(part, lambda rel: False)
+
+
+#: What a scoped undo told the format (``restored``), for the tests.
+RESTORED: list[int] = []
+
 DECK = DocumentFormat(
     kind="pptx", open=ToyDocument, detect=_is(".pptx"), problems=ToyDocument.problems,
     warnings=(ToyWarning,), prompt="Toy deck: pages are numbered from 1.",
-    errors={ToyLabelError: ("label_not_found", _label_candidates)})
+    errors={ToyLabelError: ("label_not_found", _label_candidates)},
+    undo_scope=_page_scope, restored=lambda document: RESTORED.append(id(document)))
 TEXT = DocumentFormat(
     kind="docx", open=ToyDocument, detect=_is(".docx"), problems=ToyDocument.problems,
     warnings=(ToyWarning,), prompt="Toy text: items are numbered from 1.")
@@ -260,3 +274,27 @@ __all__ = ["TOOLS", "FORMATS", "GROUPS", "ToyDocument", "ToyWarning", "ToyLabelE
 
 def raise_tool_error() -> None:
     raise ToolError("refused", "not this way", valid_options=["a", "b"])
+
+
+# -- a daemonic parent (a Celery prefork worker's child, say) ----------------------------------
+
+
+def render_in_a_daemonic_process(queue, fallback: bool = True, stall: int = 0) -> None:
+    """In a daemonic process, which may not start children: a toolbox renders a page.
+
+    Puts ``(ok, error code or exception text, in_process)`` on ``queue``.  With
+    ``fallback=False`` the pool behaves as it did before 0.12: ``Process.start`` fails."""
+    from ooxml_edit.tools import Limits, Toolbox, WorkerPool
+
+    try:
+        limits = Limits(render_timeout=1.5)
+        runner = WorkerPool(1, fallback=fallback)
+        with Toolbox(TOOLS, formats=FORMATS, limits=limits, runner=runner) as box:
+            session = box.session(limits=limits)
+            session.open(synthetic.outer_package(), "deck.pptx")
+            result = box.dispatch(session, "toy_ppt_render",
+                                  {"doc": "d1", "page": 1, "width": 32, "stall": stall})
+            queue.put((result.ok, None if result.ok else result.error.code,
+                       runner.in_process, result.error.message if result.error else ""))
+    except BaseException as exc:  # noqa: BLE001 -- reported to the test
+        queue.put((False, f"{type(exc).__name__}: {exc}", None, ""))

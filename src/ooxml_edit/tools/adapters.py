@@ -344,10 +344,28 @@ def to_openai_chat(tools: Iterable[Tool]) -> list[dict[str, Any]]:
     return definitions
 
 
+#: Where the Responses adapter puts a result's images: in the ``function_call_output``
+#: (``output`` is then a list of ``input_text`` and ``input_image``, which OpenAI's
+#: function-calling guide documents) or in a user message after the outputs, as Chat
+#: Completions must -- for a deployment that takes images only in messages.
+OPENAI_IMAGE_PLACEMENTS = ("output", "message")
+#: ``input_image``'s ``detail``: OpenAI's images guide lists these (``original`` on the
+#: models that support it); ``auto``, the API's own default, is the adapters' default.
+OPENAI_DETAILS = ("auto", "low", "high", "original")
+
+
+def _check_image_options(images: str, detail: str) -> None:
+    if images not in OPENAI_IMAGE_PLACEMENTS:
+        raise ValueError(f"images={images!r}; one of {', '.join(OPENAI_IMAGE_PLACEMENTS)}")
+    if detail not in OPENAI_DETAILS:
+        raise ValueError(f"detail={detail!r}; one of {', '.join(OPENAI_DETAILS)}")
+
+
 def openai_function_call_output(result: Result, call_id: str, *,
                                 limit: int | None = None,
                                 detail: str = "auto") -> dict[str, Any]:
     """A Responses ``function_call_output`` item: a string, or text and images."""
+    _check_image_options("output", detail)
     text = result.to_text(limit)
     if not result.images:
         return {"type": "function_call_output", "call_id": call_id, "output": text}
@@ -359,10 +377,78 @@ def openai_function_call_output(result: Result, call_id: str, *,
 
 
 def openai_responses_items(results: Sequence[tuple[str, Result]], *,
-                           limit: int | None = None) -> list[dict[str, Any]]:
-    """One ``function_call_output`` per ``call_id``, in call order."""
-    return [openai_function_call_output(result, call_id, limit=limit)
-            for call_id, result in results]
+                           limit: int | None = None, images: str = "output",
+                           detail: str = "auto") -> list[dict[str, Any]]:
+    """One ``function_call_output`` per ``call_id``, in call order.
+
+    ``images="output"`` (the default) puts each result's images in its own output;
+    ``images="message"`` keeps every output text -- each saying its images follow -- and
+    adds one user message after them carrying every image, labelled with its call.
+    ``detail`` is each ``input_image``'s: ``auto`` (default), ``low``, ``high``, ``original``.
+    """
+    _check_image_options(images, detail)
+    if images == "output":
+        return [openai_function_call_output(result, call_id, limit=limit, detail=detail)
+                for call_id, result in results]
+    items: list[dict[str, Any]] = []
+    parts: list[dict[str, Any]] = []
+    for call_id, result in results:
+        text = result.to_text(limit)
+        if result.images:
+            text += f"\n[{len(result.images)} image(s) from this call follow in the next user message]"
+            parts.append({"type": "input_text", "text": f"Images from tool call {call_id}:"})
+            for image in result.images:
+                parts.append({"type": "input_image", "image_url": _data_url(image),
+                              "detail": detail})
+        items.append({"type": "function_call_output", "call_id": call_id, "output": text})
+    if parts:
+        items.append({"type": "message", "role": "user", "content": parts})
+    return items
+
+
+def openai_input_problems(items: Sequence[Mapping[str, Any]]) -> list[str]:
+    """Where Responses input items answering tool calls break the documented shapes: an
+    output that is not a string or a list of ``input_text``, ``input_image`` and
+    ``input_file``; an image without ``image_url`` or ``file_id``; a ``detail`` outside
+    :data:`OPENAI_DETAILS`; a user message with other content.  Offline: what a real
+    request accepts is the API's to say (no Responses image test runs online yet)."""
+    problems: list[str] = []
+
+    def image(where: str, part: Mapping[str, Any]) -> None:
+        if not (part.get("image_url") or part.get("file_id")):
+            problems.append(f"{where}: an input_image needs image_url or file_id")
+        if part.get("detail", "auto") not in OPENAI_DETAILS:
+            problems.append(f"{where}: detail {part.get('detail')!r} is not one of "
+                            f"{', '.join(OPENAI_DETAILS)}")
+
+    for index, item in enumerate(items):
+        where = f"item {index}"
+        kind = item.get("type", "message" if "role" in item else None)
+        if kind == "function_call_output":
+            if not item.get("call_id"):
+                problems.append(f"{where}: no call_id")
+            output = item.get("output")
+            if isinstance(output, str):
+                continue
+            if not isinstance(output, list) or not output:
+                problems.append(f"{where}: output is a string or a non-empty list")
+                continue
+            for part in output:
+                if part.get("type") == "input_image":
+                    image(where, part)
+                elif part.get("type") not in ("input_text", "input_file"):
+                    problems.append(f"{where}: {part.get('type')!r} cannot be in an output")
+        elif kind == "message":
+            if item.get("role") != "user":
+                problems.append(f"{where}: images go back in a user message")
+            for part in item.get("content") or ():
+                if part.get("type") == "input_image":
+                    image(where, part)
+                elif part.get("type") != "input_text":
+                    problems.append(f"{where}: {part.get('type')!r} in a user message")
+        else:
+            problems.append(f"{where}: unexpected item type {kind!r}")
+    return problems
 
 
 def openai_chat_messages(results: Sequence[tuple[str, Result]], *, limit: int | None = None,
@@ -505,14 +591,22 @@ def definitions_for(provider: str, tools: Iterable[Tool], **options: Any) -> lis
 
 
 def results_for(provider: str, results: Sequence[tuple[str, Result]], *,
-                limit: int | None = None) -> Any:
+                limit: int | None = None, images: str | None = None,
+                detail: str | None = None) -> Any:
     """What answers one assistant turn: a user message (Anthropic), a list of items
-    (Responses) or a list of messages (Chat Completions)."""
+    (Responses) or a list of messages (Chat Completions).  ``images`` and ``detail`` are
+    OpenAI's (:func:`openai_responses_items`); Chat Completions always puts images in a user
+    message, and Anthropic takes neither."""
     if provider == "anthropic":
+        if images is not None or detail is not None:
+            raise ValueError("images and detail are OpenAI options")
         return anthropic_user_message(results, limit=limit)
     if provider == "openai-responses":
-        return openai_responses_items(results, limit=limit)
+        return openai_responses_items(results, limit=limit, images=images or "output",
+                                      detail=detail or "auto")
     if provider == "openai-chat":
-        return openai_chat_messages(results, limit=limit)
+        if images not in (None, "message"):
+            raise ValueError("Chat Completions puts images in a user message only")
+        return openai_chat_messages(results, limit=limit, detail=detail or "auto")
     raise ValueError(f"unknown provider {provider!r}; one of {', '.join(PROVIDERS)}")
 

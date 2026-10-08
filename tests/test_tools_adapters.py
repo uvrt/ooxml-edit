@@ -295,6 +295,48 @@ def test_responses_output_with_an_image_is_a_list():
     assert isinstance(plain["output"], str)
 
 
+def test_responses_images_can_follow_in_a_user_message_with_a_detail():
+    image = Image(tools_toys.png(4, 2), 4, 2)
+    turn = [("c1", Result(summary="r", images=[image, image])), ("c2", Result(summary="s"))]
+    default = adapters.openai_responses_items(turn)
+    assert [item["type"] for item in default] == ["function_call_output"] * 2
+    assert [part["detail"] for part in default[0]["output"][1:]] == ["auto", "auto"]
+    assert adapters.openai_input_problems(default) == []
+
+    items = adapters.openai_responses_items(turn, images="message", detail="low")
+    assert [item["type"] for item in items] == ["function_call_output"] * 2 + ["message"]
+    assert all(isinstance(item["output"], str) for item in items[:2])
+    assert "2 image(s) from this call follow in the next user message" in items[0]["output"]
+    assert "next user message" not in items[1]["output"]
+    message = items[2]
+    assert message["role"] == "user"
+    assert message["content"][0] == {"type": "input_text", "text": "Images from tool call c1:"}
+    assert [part["detail"] for part in message["content"][1:]] == ["low", "low"]
+    assert message["content"][1]["image_url"].startswith("data:image/png;base64,")
+    assert adapters.openai_input_problems(items) == []
+    # No images, no message.
+    assert len(adapters.openai_responses_items([("c3", Result())], images="message")) == 1
+    high = adapters.openai_function_call_output(turn[0][1], "c1", detail="high")
+    assert {part.get("detail") for part in high["output"][1:]} == {"high"}
+
+
+def test_responses_image_options_are_checked():
+    with pytest.raises(ValueError, match="images"):
+        adapters.openai_responses_items([], images="inline")
+    with pytest.raises(ValueError, match="detail"):
+        adapters.openai_responses_items([], detail="medium")
+    with pytest.raises(ValueError):
+        adapters.results_for("anthropic", [], detail="low")
+    with pytest.raises(ValueError):
+        adapters.results_for("openai-chat", [], images="output")
+    bad = [{"type": "function_call_output", "call_id": "c", "output": [
+               {"type": "input_image", "detail": "medium"}, {"type": "output_text"}]},
+           {"type": "message", "role": "assistant", "content": [{"type": "image_url"}]},
+           {"type": "reasoning"}]
+    problems = adapters.openai_input_problems(bad)
+    assert len(problems) == 6, problems
+
+
 # -- OpenAI Chat Completions -------------------------------------------------------------------
 
 
@@ -331,6 +373,13 @@ def test_the_toolbox_renders_a_result_for_each_provider(toolbox):
     assert toolbox.render_result("anthropic", result, "t")["type"] == "tool_result"
     assert toolbox.render_result("openai-responses", result, "t")["type"] == "function_call_output"
     assert [m["role"] for m in toolbox.render_result("openai-chat", result, "t")] == ["tool", "user"]
+    placed = toolbox.render_result("openai-responses", result, "t", images="message", detail="high")
+    assert [item["type"] for item in placed] == ["function_call_output", "message"]
+    assert placed[1]["content"][1]["detail"] == "high"
+    turn = toolbox.render_results("openai-responses", [("t", result)], images="message")
+    assert turn == toolbox.render_result("openai-responses", result, "t", images="message")
+    chat = toolbox.render_results("openai-chat", [("t", result)], detail="low")
+    assert chat[1]["content"][1]["image_url"]["detail"] == "low"
     with pytest.raises(ValueError):
         toolbox.definitions("gemini")
 

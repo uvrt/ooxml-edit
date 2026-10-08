@@ -38,7 +38,13 @@ class Limits:
     max_list_items: int = 50
     max_images_per_call: int = 4
     max_image_edge: int = 2576
-    image_budget: int = 40
+    #: Images a session may return in all, every round together; ``None``: no cap.  At
+    #: 1280x720 px an image is about 1,200 tokens, so 40 is about 48,000 of context.
+    image_budget: int | None = 40
+    #: Images per round, where the application starts each round (a user message, say)
+    #: with :meth:`~.session.Session.new_round`; ``None``: no per-round cap.  With it, a long
+    #: conversation can lift ``image_budget`` (or set ``None``) and still bound each round.
+    image_budget_per_round: int | None = None
     # batches
     max_batch_ops: int = 200
     # deadlines, in seconds

@@ -74,6 +74,15 @@ class DocumentFormat:
     #: per-request limits (20 tools, 24 optional parameters) allow only some: its most-used
     #: writing tools first.  Tools not named follow, writing tools first.
     strict_first: tuple[str, ...] = ()
+    #: Undo scopes, for ``undo``'s ``scope``: ``undo_scope(document, scope)`` -> the part
+    #: names the scope owns (a page: its part and what it alone relates to).
+    #: Raise :class:`~.results.ToolError` ``not_found`` for an unknown scope.  ``None``: the
+    #: format undoes document-wide only (as a format whose one body part every edit
+    #: shares should).  The document's history must have ``undo_in`` and ``redo_in``.
+    undo_scope: Callable[[Any, str], Iterable[str]] | None = None
+    #: Called after a scoped undo or redo restored parts behind the document's back, so it
+    #: drops what it caches (what its own ``undo`` does after the history's).
+    restored: Callable[[Any], None] | None = None
 
 
 class LRU:
@@ -197,6 +206,22 @@ class DocumentEntry:
         self.refs.update(defined)
         self.ref_states[self.version] = dict(self.refs)
 
+    def scoped_refs(self, step: Any, *, undone: bool) -> None:
+        """Refs after a scoped undo or redo (:class:`~ooxml_edit.history.ScopedStep`): the
+        names the step defined go (undo) or come back (redo); other refs are kept."""
+        before = self.ref_states.get(step.before, {})
+        made = {name: address for name, address in self.ref_states.get(step.after, {}).items()
+                if before.get(name) != address}
+        if undone:
+            for old, new in step.renumbered.items():
+                if new not in self.ref_states:
+                    self.ref_states[new] = {name: address for name, address in
+                                            self.ref_states.get(old, {}).items()
+                                            if made.get(name) != address}
+        else:
+            self.ref_states[step.version] = {**self.refs, **made}
+        self.refs = dict(self.ref_states.get(step.version, {}))
+
     def restore_refs(self) -> None:
         """The refs of the version the document is at now (after an undo or redo)."""
         self.refs = dict(self.ref_states.get(self.version, {}))
@@ -240,7 +265,10 @@ class Session:
         self.blobs: dict[str, Blob] = {}
         self.outputs: list[Output] = []
         self.log: list[CallRecord] = []
+        #: Images returned this session, and since the last :meth:`new_round`.
         self.images_used = 0
+        self.images_this_round = 0
+        self.rounds = 1
         self._lock = threading.RLock()
         self._doc_numbers = itertools.count(1)
         self._blob_numbers = itertools.count(1)
@@ -300,12 +328,56 @@ class Session:
                 stack.enter_context(entry.lock)
             yield entries
 
-    def undo(self, doc_id: str, steps: int = 1) -> int:
-        """Undo up to ``steps`` calls; the number undone."""
+    def undo(self, doc_id: str, steps: int = 1, *, scope: str | None = None) -> int:
+        """Undo up to ``steps`` calls; the number undone.
+
+        With ``scope`` (a page, as the format's ``undo_scope`` reads it) only the
+        calls that changed the scope are undone, each the latest such call, the others left
+        in place.  A call whose changes share a part with a later call outside the scope is
+        refused with ``entangled`` -- when it is the first step; a later one stops the run."""
+        if scope is not None:
+            return self._scoped(doc_id, steps, scope, "undo")
         return self._step(doc_id, steps, "undo")
 
-    def redo(self, doc_id: str, steps: int = 1) -> int:
+    def redo(self, doc_id: str, steps: int = 1, *, scope: str | None = None) -> int:
+        """Redo up to ``steps`` undone calls; with ``scope``, the scoped undos of it."""
+        if scope is not None:
+            return self._scoped(doc_id, steps, scope, "redo")
         return self._step(doc_id, steps, "redo")
+
+    def _scoped(self, doc_id: str, steps: int, scope: str, direction: str) -> int:
+        from ..history import Entangled
+
+        entry = self.entry(doc_id)
+        fmt = self.formats.get(entry.kind)
+        if fmt is None or fmt.undo_scope is None:
+            raise ToolError("invalid_arguments", f"{doc_id} ({entry.kind}) undoes document-wide "
+                            "only: leave scope out", field="scope")
+        with entry.lock:
+            history = entry.history
+            if history is None or not hasattr(history, f"{direction}_in"):
+                raise ToolError("refused", f"{doc_id} keeps no history to {direction} by scope")
+            parts = list(fmt.undo_scope(entry.document, scope))
+            done = 0
+            try:
+                while done < steps:
+                    step = getattr(history, f"{direction}_in")(parts)
+                    if step is None:
+                        break
+                    done += 1
+                    entry.scoped_refs(step, undone=direction == "undo")
+            except Entangled as exc:
+                if not done:
+                    raise ToolError(
+                        "entangled", f"the latest {'' if direction == 'undo' else 'undone '}"
+                        f"change to {scope} shares parts with later changes outside it: "
+                        "undo without scope (it reverts the latest changes, whoever made "
+                        "them), or leave it", field="scope",
+                        details={"parts": exc.parts, "shared": exc.shared}) from None
+            finally:
+                if done and fmt.restored is not None:
+                    fmt.restored(entry.document)
+            return done
 
     def _step(self, doc_id: str, steps: int, direction: str) -> int:
         entry = self.entry(doc_id)
@@ -395,14 +467,42 @@ class Session:
 
     # -- budgets and the clock -----------------------------------------------------------------
 
-    def reserve_images(self, count: int) -> None:
-        """Count ``count`` images against the session's budget, or refuse with ``limit``."""
+    def new_round(self) -> None:
+        """Start a round (the application calls this per user message, say): the per-round
+        image budget (``Limits.image_budget_per_round``) starts again; the session's does not."""
         with self._lock:
-            if self.images_used + count > self.limits.image_budget:
-                raise ToolError("limit", f"the session's image budget is "
-                                f"{self.limits.image_budget} and {self.images_used} are used",
-                                details={"remaining": self.limits.image_budget - self.images_used})
+            self.images_this_round = 0
+            self.rounds += 1
+
+    def images_remaining(self) -> int | None:
+        """Images still allowed now: the smaller of what the session's and the round's
+        budgets leave; ``None`` when neither caps."""
+        with self._lock:
+            left = [budget - used for budget, used in (
+                (self.limits.image_budget, self.images_used),
+                (self.limits.image_budget_per_round, self.images_this_round))
+                if budget is not None]
+            return max(0, min(left)) if left else None
+
+    def reserve_images(self, count: int) -> None:
+        """Count ``count`` images against the session's and the round's budgets, or refuse
+        with ``limit``."""
+        limits = self.limits
+        with self._lock:
+            if limits.image_budget is not None and self.images_used + count > limits.image_budget:
+                raise ToolError("limit", f"the session's image budget is {limits.image_budget} "
+                                f"and {self.images_used} are used; work from text (describe, "
+                                "check) from here", details={
+                                    "budget": "session", "limit": limits.image_budget,
+                                    "remaining": max(0, limits.image_budget - self.images_used)})
+            per_round = limits.image_budget_per_round
+            if per_round is not None and self.images_this_round + count > per_round:
+                raise ToolError("limit", f"this round's image budget is {per_round} and "
+                                f"{self.images_this_round} are used; render again next round",
+                                details={"budget": "round", "limit": per_round,
+                                         "remaining": max(0, per_round - self.images_this_round)})
             self.images_used += count
+            self.images_this_round += count
 
     def now(self) -> _dt.datetime:
         """The session clock's time: every date a tool writes comes from here."""

@@ -177,7 +177,8 @@ class Call:
 
     def run(self, fn: Callable[..., Any], *args: Any, timeout: float | None = None,
             **kwargs: Any) -> Any:
-        """Run ``fn`` in a worker process; ``timeout`` (s) defaults to the render deadline."""
+        """Run ``fn`` in a worker process (or in-process: :mod:`.worker`); ``timeout`` (s)
+        defaults to the render deadline."""
         return self.toolbox.pool.run(fn, *args, timeout=timeout or self.limits.render_timeout,
                                      **kwargs)
 
@@ -230,7 +231,13 @@ class Toolbox:
                  allow_new_problems: bool = False, workers: int = 2,
                  start_method: str = "spawn", log_arguments: bool = False,
                  error_map: Mapping[type[BaseException], Any] | None = None,
-                 strict_first: Sequence[str] | None = None) -> None:
+                 strict_first: Sequence[str] | None = None,
+                 runner: Any = None) -> None:
+        """``workers`` worker processes render and lay out (``0``: in-process, in threads,
+        for a process that may not start children; a daemonic one falls back to that by
+        itself).  ``runner`` replaces the pool: anything with ``run(fn, *args, timeout=...,
+        **kwargs)`` and ``close()`` -- an :class:`~.worker.InProcess`, or the application's
+        own executor."""
         self.tools: dict[str, Tool] = merge_tools(tools)
         self.formats: dict[str, DocumentFormat] = {fmt.kind: fmt for fmt in formats}
         #: Claude's strict priority: the application's order, else each format's in turn.
@@ -244,7 +251,7 @@ class Toolbox:
         self.log_arguments = log_arguments
         self._workers = workers
         self._start_method = start_method
-        self._pool: WorkerPool | None = None
+        self._pool: Any = runner
         self._pool_lock = threading.Lock()
         self._errors: dict[type[BaseException], Any] = {}
         for fmt in self.formats.values():
@@ -323,23 +330,34 @@ class Toolbox:
         """The shared fragment, each format's fragment, then the application's ``extra``."""
         return prompts.system_prompt(*(fmt.prompt for fmt in self.formats.values()), extra=extra)
 
-    def render_result(self, provider: str, result: Result, call_id: str) -> Any:
-        """One result as the provider wants it (for Chat Completions: a list of messages)."""
+    def render_result(self, provider: str, result: Result, call_id: str, *,
+                      images: str | None = None, detail: str | None = None) -> Any:
+        """One result as the provider wants it (for Chat Completions, and for the Responses
+        API with ``images="message"``: a list).  ``images`` and ``detail`` are OpenAI's:
+        :func:`~.adapters.openai_responses_items`."""
         limit = self.limits.max_result_chars
-        if provider == "anthropic":
+        if provider == "anthropic" and images is None and detail is None:
             return adapters.anthropic_tool_result(result, call_id, limit=limit)
-        if provider == "openai-responses":
-            return adapters.openai_function_call_output(result, call_id, limit=limit)
-        return adapters.results_for(provider, [(call_id, result)], limit=limit)
+        if provider == "openai-responses" and images in (None, "output"):
+            return adapters.openai_function_call_output(result, call_id, limit=limit,
+                                                        detail=detail or "auto")
+        return adapters.results_for(provider, [(call_id, result)], limit=limit,
+                                    images=images, detail=detail)
 
-    def render_results(self, provider: str, results: Sequence[tuple[str, Result]]) -> Any:
-        """One assistant turn's results, in call order, as the provider wants them."""
-        return adapters.results_for(provider, results, limit=self.limits.max_result_chars)
+    def render_results(self, provider: str, results: Sequence[tuple[str, Result]], *,
+                       images: str | None = None, detail: str | None = None) -> Any:
+        """One assistant turn's results, in call order, as the provider wants them.  On the
+        Responses API ``images="message"`` puts the images in a user message after the
+        outputs instead of in them; ``detail`` sets OpenAI's image detail."""
+        return adapters.results_for(provider, results, limit=self.limits.max_result_chars,
+                                    images=images, detail=detail)
 
     # -- running calls -----------------------------------------------------------------------
 
     @property
-    def pool(self) -> WorkerPool:
+    def pool(self) -> Any:
+        """What runs CPU-bound work: the :class:`~.worker.WorkerPool`, made when first
+        needed, or the ``runner`` the application gave."""
         with self._pool_lock:
             if self._pool is None:
                 self._pool = WorkerPool(self._workers, start_method=self._start_method)

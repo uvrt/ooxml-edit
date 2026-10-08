@@ -189,7 +189,31 @@ def test_the_image_budget_is_a_limit(toolbox):
     session.open(synthetic.outer_package(), "deck.pptx")
     assert toolbox.dispatch(session, "toy_ppt_render", {"doc": "d1", "page": 1, "width": 32}).ok
     again = toolbox.dispatch(session, "toy_ppt_render", {"doc": "d1", "page": 1, "width": 32})
-    assert again.error.code == "limit"
+    assert again.error.code == "limit" and again.error.details["budget"] == "session"
+    session.new_round()           # a round does not refill the session's budget
+    assert session.images_remaining() == 0
+    assert toolbox.dispatch(session, "toy_ppt_render",
+                            {"doc": "d1", "page": 1, "width": 32}).error.code == "limit"
+
+
+def test_a_per_round_image_budget_starts_again_each_round(toolbox):
+    session = toolbox.session(limits=Limits(image_budget=None, image_budget_per_round=2))
+    session.open(synthetic.outer_package(), "deck.pptx")
+    render = lambda: toolbox.dispatch(session, "toy_ppt_render",  # noqa: E731
+                                      {"doc": "d1", "page": 1, "width": 32})
+    assert render().ok and render().ok and session.images_remaining() == 0
+    refused = render()
+    assert refused.error.code == "limit" and refused.error.details == {
+        "budget": "round", "limit": 2, "remaining": 0}
+    for _ in range(30):           # no session cap: rounds go on
+        session.new_round()
+        assert render().ok and render().ok and not render().ok
+    assert session.images_used == 62 and session.rounds == 31
+    both = toolbox.session(limits=Limits(image_budget=3, image_budget_per_round=2))
+    assert both.images_remaining() == 2
+    both.reserve_images(2); both.new_round()
+    assert both.images_remaining() == 1
+    assert toolbox.session(limits=Limits(image_budget=None)).images_remaining() is None
 
 
 def test_paging_through_a_long_read(toolbox, session):

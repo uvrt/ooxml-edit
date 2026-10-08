@@ -30,7 +30,8 @@ What is here:
 * :mod:`.session` -- documents, blobs and outputs, all in memory and under handles; locks,
   versions and caches;
 * :mod:`.limits` -- size limits, magic-byte checks and the zip-bomb guard;
-* :mod:`.worker` -- a process pool whose deadlines are kept by killing the worker;
+* :mod:`.worker` -- a process pool whose deadlines are kept by killing the worker (in-process
+  in a process that may not start children);
 * :mod:`.logs` -- call records with argument digests, not content;
 * :mod:`.prompts` -- the shared system-prompt fragment: mechanics, no house style;
 * :mod:`.shared` -- the definitions of the tools every format shares (open, save, undo,
@@ -55,12 +56,12 @@ from .results import (ERROR_CODES, Image, Result, ToolError, anthropic_image_tok
                       openai_image_tokens, page_list, page_text, truncate)
 from .schema import CallError, SubsetError, canonical, check_subset, validate_call
 from .session import Blob, DocumentEntry, DocumentFormat, Output, Session, doc_order
-from .worker import WorkerPool
+from .worker import InProcess, WorkerPool
 
 __all__ = [
     "Blob", "CORE", "Call", "CallContext", "CallError", "CallRecord", "DocumentEntry", "DocumentFormat",
     "ERROR_CODES", "REF", "Image", "LimitError", "Limits", "Output", "Param", "Result", "SYSTEM",
-    "Session", "SubsetError", "Tool", "ToolError", "ToolGroup", "Toolbox", "WorkerPool",
+    "InProcess", "Session", "SubsetError", "Tool", "ToolError", "ToolGroup", "Toolbox", "WorkerPool",
     "anthropic_image_tokens", "array", "boolean", "build_schema", "canonical", "check_subset",
     "collect_warnings", "doc_order", "free_object", "integer", "number", "obj", "openai_image_tokens",
     "page_list", "page_text", "shared", "string", "system_prompt", "tool", "truncate", "validate_call",
