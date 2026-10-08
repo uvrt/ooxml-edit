@@ -215,3 +215,109 @@ def test_an_empty_batch_on_a_package_records_nothing(tmp_path):
         package.tree(MAIN).set("seen", "1")
         package.mark_dirty(MAIN)
     assert history.version == 1 and history.can_undo()
+
+
+# -- scoped undo: several writers on one package -----------------------------------------------
+
+
+from ooxml_edit.history import Entangled  # noqa: E402
+from ooxml_edit.opc import OpcPackage  # noqa: E402
+
+from synthetic import IMAGE, PAGE1, REL_IMAGE, outer_package  # noqa: E402
+
+
+def _title(package: OpcPackage, part: str, text: str, history: History) -> None:
+    history.checkpoint()
+    package.tree(part).set("title", text)
+    package.mark_dirty(part)
+
+
+def _page(package: OpcPackage, part: str) -> list[str]:
+    return package.reachable_parts(part, lambda rel: False)
+
+
+def _titles(package: OpcPackage) -> tuple:
+    return tuple(package.tree(part).get("title") for part in (PAGE1, PAGE2))
+
+
+def test_a_scoped_undo_reverts_the_latest_step_in_scope_and_keeps_the_others():
+    package = OpcPackage.open(outer_package())
+    original = package.to_bytes()
+    history = History(package)
+    _title(package, PAGE1, "A", history)        # v1
+    _title(package, PAGE2, "B", history)        # v2
+    _title(package, PAGE1, "C", history)        # v3
+    step = history.undo_in(_page(package, PAGE2))
+    assert step.parts == {PAGE2} and (step.before, step.after) == (1, 2)
+    assert _titles(package) == ("C", None)
+    assert history.version not in (0, 1, 2, 3) and step.renumbered[3] == history.version
+    # The history is the two page-1 steps now: undo walks them, then nothing.
+    assert history.undo() and _titles(package) == ("A", None)
+    assert history.undo() and _titles(package) == (None, None)
+    assert not history.undo() and package.to_bytes() == original
+    assert history.redo() and history.redo() and _titles(package) == ("C", None)
+    # Scoped redo brings page 2's step back as a new step.
+    assert history.redo_in(_page(package, PAGE2)).parts == {PAGE2}
+    assert _titles(package) == ("C", "B")
+    assert history.undo() and _titles(package) == ("C", None)
+
+
+def test_a_scoped_undo_of_the_latest_step_is_a_plain_undo():
+    package = OpcPackage.open(outer_package())
+    history = History(package)
+    _title(package, PAGE1, "A", history)
+    _title(package, PAGE2, "B", history)
+    step = history.undo_in(_page(package, PAGE2))
+    assert history.version == 1 and step.renumbered == {2: 1}
+    assert _titles(package) == ("A", None)
+    assert history.undo_in(_page(package, PAGE2)) is None       # nothing left in scope
+    assert history.can_undo_in(_page(package, PAGE1)) and not history.can_undo_in([IMAGE])
+
+
+def test_a_step_sharing_a_part_with_a_later_one_is_entangled_and_nothing_changes():
+    package = OpcPackage.open(outer_package())
+    history = History(package)
+    with history.batch():                        # page 1 and the main part, as adding a page does
+        _title(package, PAGE1, "A", history)
+        _title(package, MAIN, "m1", history)
+    _title(package, MAIN, "m2", history)         # another writer, the shared part
+    before = package.to_bytes(), history.version
+    with pytest.raises(Entangled) as caught:
+        history.undo_in(_page(package, PAGE1))
+    assert caught.value.shared == [MAIN] and set(caught.value.parts) == {PAGE1, MAIN}
+    assert (package.to_bytes(), history.version) == before
+    assert history.undo() and history.undo_in(_page(package, PAGE1))   # untangled
+    assert _titles(package) == (None, None) and package.tree(MAIN).get("title") is None
+
+
+def test_a_scoped_redo_is_refused_once_its_parts_changed_again():
+    package = OpcPackage.open(outer_package())
+    history = History(package)
+    _title(package, PAGE1, "A", history)
+    _title(package, PAGE2, "B", history)
+    history.undo_in(_page(package, PAGE1))
+    _title(package, PAGE1, "Z", history)
+    with pytest.raises(Entangled):
+        history.redo_in(_page(package, PAGE1))
+    assert _titles(package) == ("Z", "B")
+    assert history.redo_in(_page(package, PAGE2)) is None
+
+
+def test_a_scoped_undo_puts_back_an_added_part_and_its_relationship():
+    package = OpcPackage.open(outer_package())
+    original = package.to_bytes()
+    history = History(package)
+    with history.batch():
+        package.add_part("doc/media/image9.png", b"\x89PNG\r\n\x1a\n9", "image/png")
+        package.add_relationship(PAGE1, REL_IMAGE, "doc/media/image9.png")
+    _title(package, PAGE2, "B", history)
+    scope = _page(package, PAGE1)
+    assert "doc/media/image9.png" not in scope       # follow nothing: the page and its rels
+    step = history.undo_in(scope)
+    assert "doc/media/image9.png" in step.parts and not package.has_part("doc/media/image9.png")
+    assert history.undo() and package.to_bytes() == original
+
+
+def test_scoped_undo_needs_a_package_that_compares_parts():
+    with pytest.raises(TypeError):
+        History(Counter()).undo_in(["x"])

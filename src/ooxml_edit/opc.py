@@ -735,6 +735,66 @@ class OpcPackage:
             self._dirty.add(path)
             self._rels_cache.pop(_part_for_rels(path), None)
 
+    # -- snapshots part by part (scoped undo) ----------------------------------------------
+
+    def snapshot_value(self, snapshot: "PackageSnapshot", path: str) -> bytes | None:
+        """A part's bytes in ``snapshot``; ``None`` when it did not exist then."""
+        path = normalize_part_path(path)
+        if path in snapshot.trees:
+            return snapshot.trees[path]
+        if path in snapshot.raw:
+            return snapshot.raw[path]
+        return self._original.get(path)
+
+    def changed_between(self, before: "PackageSnapshot",
+                        after: "PackageSnapshot") -> frozenset[str]:
+        """The parts whose bytes differ between two snapshots of this package.
+
+        A part neither snapshot captured is still the original bytes in both.  A part edited
+        back to bytes that serialize differently from the original counts as changed: the
+        answer may be too wide, never too narrow."""
+        paths = set(before.trees) | set(before.raw) | set(after.trees) | set(after.raw)
+        return frozenset(path for path in paths
+                         if self.snapshot_value(before, path) != self.snapshot_value(after, path))
+
+    def snapshot_with(self, target: "PackageSnapshot", source: "PackageSnapshot",
+                      paths: Iterable[str]) -> "PackageSnapshot":
+        """``target`` with the parts ``paths`` as they are in ``source``: each part's place
+        in ``source`` (edited tree, raw bytes, or the original) is copied over."""
+        trees = dict(target.trees)
+        raw = dict(target.raw)
+        for path in paths:
+            path = normalize_part_path(path)
+            trees.pop(path, None)
+            raw.pop(path, None)
+            if path in source.raw:
+                raw[path] = source.raw[path]
+            if path in source.trees:
+                trees[path] = source.trees[path]
+        return PackageSnapshot(trees=trees, raw=raw)
+
+    def reachable_parts(self, start: str, follow: Callable[[Relationship], bool]
+                        ) -> list[str]:
+        """``start`` and the parts reached from it through relationships that ``follow``
+        accepts, each with its relationships part: what a scope such as one page owns.
+        External targets and missing parts are skipped."""
+        start = normalize_part_path(start)
+        seen: list[str] = []
+        queue = [start]
+        while queue:
+            path = queue.pop(0)
+            if path in seen or path not in self._parts:
+                continue
+            seen.append(path)
+            for rel in self.relationships(path).values():
+                if rel.target_part is not None and not rel.is_external and follow(rel):
+                    queue.append(rel.target_part)
+        parts: list[str] = []
+        for path in seen:
+            # The relationships part even when it does not exist yet: an edit may add it.
+            parts += [path, rels_path_for(path)]
+        return parts
+
     def _set_raw(self, path: str, data: bytes) -> None:
         self._ensure_entry(path)
         self._parts[path] = data

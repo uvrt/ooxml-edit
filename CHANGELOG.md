@@ -2,6 +2,28 @@
 
 Versions are those in `pyproject.toml`; none is published to PyPI yet.
 
+## 0.12.0 -- 2026-10-08
+- Rendering works in a daemonic process (a Celery prefork worker's child), which may not
+  start the worker processes: the pool runs the work in-process there, by itself, and logs
+  once. `Toolbox(workers=0)` asks for that anywhere, and `Toolbox(runner=...)` takes any
+  object with `run(fn, *args, timeout=...)` and `close()` (`tools.InProcess`, or the
+  application's own). In-process, a deadline bounds the wait, not the work: a thread cannot
+  be killed, so a task past its deadline runs on in its slot (`docs/TOOLS.md`).
+- OpenAI Responses: `images="message"` puts a turn's images in a user message after the
+  `function_call_output` items (as Chat Completions does) instead of inside them, and
+  `detail=` sets `input_image`'s detail (`auto`, `low`, `high`, `original`), on
+  `render_result`, `render_results` and `adapters.openai_responses_items`. Defaults
+  unchanged. `adapters.openai_input_problems` checks result items offline.
+- `undo` takes an optional `scope`: a format that has scopes (decks: a slide) undoes only
+  the latest change that touched it, leaving later changes elsewhere in place, and refuses
+  with the new error code `entangled` when that change shares a part with a later one.
+  `redo` with the same scope brings it back. Without `scope` nothing changed. Core:
+  `History.undo_in` / `redo_in`, `OpcPackage.changed_between`, `snapshot_with`,
+  `reachable_parts`; `DocumentFormat.undo_scope` and `restored`.
+- `Limits.image_budget_per_round` with `Session.new_round()`: an image budget that starts
+  again each round; `image_budget=None` lifts the session's cap (default still 40).
+  `Session.images_remaining()`; a `limit` error says which budget ran out.
+
 ## 0.11.0 -- 2026-10-08
 - `add_chart` makes a radar chart (`kind="radar"`, `edit_chart`'s `chart_type`), as
   PowerPoint and Word insert one (measured): lines in the accents, the column chart's axes.

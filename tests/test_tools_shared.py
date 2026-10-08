@@ -101,8 +101,19 @@ def save_deck(call, doc, name, format):
     return Result(summary=f"Saved {name}", data=call.output(name, format, call.document.to_bytes()))
 
 
+@tool("t_title", "Set a page's title, naming the page.",
+      {"doc": string("Document id."), "page": string("Page number."),
+       "text": string("Title."), "ref": string("A name for the page.", optional=True)},
+      kind="pptx", mutates=True)
+def t_title(call, doc, page, text, ref=None):
+    call.document.set_title(int(page), text)
+    if ref:
+        call.define_ref(ref, f"page:{page}")
+    return Result(summary=f"Titled page {page}")
+
+
 TEXT_TOOLS = [t_add, t_set, t_fail, t_read, new_text, save_text, *shared.SESSION_TOOLS]
-DECK_TOOLS = [tools_toys.toy_ppt_set_title, save_deck, *shared.SESSION_TOOLS]
+DECK_TOOLS = [tools_toys.toy_ppt_set_title, t_title, save_deck, *shared.SESSION_TOOLS]
 
 
 @pytest.fixture
@@ -405,6 +416,54 @@ def test_undo_takes_back_the_refs_of_what_it_undoes(toolbox, session):
     assert entry.refs == {"x": "item:1"}
     stale = call(toolbox, session, "t_set", doc="d1", target="$y", text="B")
     assert stale.error.code == "not_found"
+
+
+# -- undo by scope: one writer per page ------------------------------------------------------------
+
+
+def _titles(session, doc="d2"):
+    document = session.entry(doc).document
+    return [document.title(n) for n in (1, 2)]
+
+
+def test_a_scoped_undo_takes_back_one_pages_latest_change_only(toolbox, session):
+    tools_toys.RESTORED.clear()
+    entry = session.entry("d2")
+    assert call(toolbox, session, "t_title", doc="d2", page="1", text="A", ref="one").ok
+    assert call(toolbox, session, "t_title", doc="d2", page="2", text="B", ref="two").ok
+    assert call(toolbox, session, "t_title", doc="d2", page="1", text="C").ok
+    undone = call(toolbox, session, "undo", doc="d2", scope="2")
+    assert undone.ok and undone.data == {"steps": 1, "version": entry.version, "scope": "2"}
+    assert _titles(session) == ["C", None] and tools_toys.RESTORED == [id(entry.document)]
+    assert entry.refs == {"one": "page:1"}                      # page 2's ref went with it
+    nothing = call(toolbox, session, "undo", doc="d2", scope="2")
+    assert nothing.error.code == "refused" and "nothing of 2" in nothing.error.message
+    redone = call(toolbox, session, "undo", doc="d2", scope="2", redo=True)
+    assert redone.ok and _titles(session) == ["C", "B"]
+    assert entry.refs == {"one": "page:1", "two": "page:2"}
+    # Without scope, undo is as it was: the latest change, whoever made it.
+    assert call(toolbox, session, "undo", doc="d2").ok and _titles(session) == ["C", None]
+    two = call(toolbox, session, "undo", doc="d2", scope="1", steps=5)
+    assert two.ok and two.data["steps"] == 2 and _titles(session) == [None, None]
+    assert two.warnings and entry.refs == {}
+
+
+def test_a_scoped_undo_is_refused_when_entangled_and_where_there_are_no_scopes(toolbox, session):
+    entry = session.entry("d2")
+    with entry.batch():                       # a change to page 1 and the main part together
+        entry.document.set_title(1, "A")
+        entry.document.insert("x", "end")
+    entry.document.insert("y", "end")         # another writer: the main part again
+    before = entry.document.to_bytes()
+    refused = call(toolbox, session, "undo", doc="d2", scope="1")
+    assert refused.error.code == "entangled" and refused.error.field == "scope"
+    assert refused.error.details["shared"] == [synthetic.MAIN]
+    assert entry.document.to_bytes() == before
+    unknown = call(toolbox, session, "undo", doc="d2", scope="9")
+    assert unknown.error.code == "not_found" and unknown.error.valid_options == ["1", "2"]
+    call(toolbox, session, "t_add", doc="d1", items=[{"text": "a"}])
+    word = call(toolbox, session, "undo", doc="d1", scope="1")
+    assert word.error.code == "invalid_arguments" and "document-wide" in word.error.message
 
 
 # -- reading an input's text ---------------------------------------------------------------------
