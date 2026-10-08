@@ -789,6 +789,10 @@ class PackageSnapshot:
 
 def _new_entry(path: str) -> zipfile.ZipInfo:
     entry = zipfile.ZipInfo(path, date_time=(1980, 1, 1, 0, 0, 0))
+    # ZipInfo records the platform it was made on (0 on Windows, 3 elsewhere) in every
+    # header, so a package's bytes would differ by platform.  Pin it: the same edit writes
+    # the same bytes everywhere.
+    entry.create_system = 3
     # XML compresses well; media is usually compressed already.
     if path.endswith((".xml", ".rels")):
         entry.compress_type = zipfile.ZIP_DEFLATED
