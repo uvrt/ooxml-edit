@@ -1,76 +1,26 @@
 # ooxml-edit
 
+[![CI](https://github.com/uvrt/ooxml-edit/actions/workflows/ci.yml/badge.svg)](https://github.com/uvrt/ooxml-edit/actions/workflows/ci.yml)
+
 The format-neutral half of an Office Open XML *editor*: the OPC package read and written
 back losslessly, parts added, copied, removed and reaped, schema-ordered insertion, undo and
-redo with batches, and durable ids stamped into an extension list. What a `.pptx` editor,
-a `.docx` editor and an `.xlsx` editor all need, and nothing any one of them needs alone.
-
-Beside that core, two optional subpackages:
-[`ooxml_edit.charts`](#ooxml_editcharts-optional) edits what a deck and a Word document
-embed alike: charts with their embedded workbooks, and SmartArt diagrams;
-[`ooxml_edit.tools`](#ooxml_edittools-optional) is the plumbing of an agent tool layer the
-editors build their tools on.
+redo with batches, and durable ids stamped into an extension list. What a `.pptx`, a
+`.docx` and an `.xlsx` editor all need, and nothing any one of them needs alone.
 
 Depends on **lxml**, and only on lxml. Python 3.10+.
 
-## Why it exists
-
-pptx-agent edits PowerPoint decks; docx-agent will edit Word documents. Below the
-vocabulary they are the same program: open a ZIP of XML parts, change a few of them, put a
-new child where the schema says it goes, remove a part only once nothing refers to it, undo
-any of it to the exact bytes that were there, and write everything that was not touched back
-as the bytes that were read. pptx-agent had already separated that layer from its
-PresentationML, and kept it separate with a test. This package is that layer, so that the
-second editor depends on it instead of copying it.
-
-It was extracted from pptx-agent **with its git history**: `git log` on any module shows
-how it came to be, from the commit that first separated it.
-
-## How it relates to ooxml-common
-
-[ooxml-common](https://github.com/uvrt/ooxml-common) and ooxml-edit are both format-neutral
-OOXML packages, and they do different jobs:
-
-| | ooxml-common | ooxml-edit |
-| --- | --- | --- |
-| Does | **reads and renders**: the OPC container read, units, fonts and text metrics, DrawingML and charts drawn as SVG | **edits losslessly**: parts and relationships changed, written back byte for byte where untouched, every change undoable |
-| Used by | the renderers, [pptx2svg](https://github.com/uvrt/pptx2svg) and [docx2svg](https://github.com/uvrt/docx2svg) | the editors, pptx-agent and docx-agent |
-| Runtime dependencies | none: the standard library only | lxml |
-
-Neither depends on the other. An editor that also renders installs both, through its
-renderer; a renderer never needs this package.
-
-## Why lxml
-
-ooxml-common keeps to the standard library because a renderer only reads. An editor writes
-back what it read, and the standard library's `xml.etree` cannot do that: it renames
-namespace prefixes to `ns0`, `ns1`... and drops declarations it believes unused. In OOXML
-prefixes are load-bearing -- `mc:Ignorable="a14 p14"` names *prefixes*, not URIs -- so a
-part rewritten that way is silently corrupt. lxml writes back what it parsed, prefixes and
-declarations included, apart from CRLF line ends becoming LF, which the XML specification
-requires. That is the whole reason for the dependency.
-
-## What is in it
-
-| Module | What it is |
-| --- | --- |
-| `ooxml_edit.opc` | `OpcPackage`: parts as original bytes plus lazily parsed trees; content types, and `content_types_with` for a copy written with a part retyped while the open package stays as it is; relationships, internal and external; adding, replacing, removing and copying parts; `release` and `reap`, which remove a part only once it is proved unreferenced from anywhere in the package, and leave no empty relationships part and no unused `Default` behind, as Word writes none; packages inside the package (`open_embedded`, `replace_embedded`); snapshots for undo; saving with entry order, timestamps and compression kept, optionally with derived parts written in place (`replacements`); `changed_parts` and `opened` |
-| `ooxml_edit.xml` | The namespace registry and `qn`; attribute helpers; `register_child_order` and `insert_in_order`, which put a new child where its parent's schema sequence requires, with rank groups for repeating choices, and append a detached child where no sequence is known; `replace_choice`; `remove`, which keeps the whitespace around what it removes |
-| `ooxml_edit.history` | `History`: undo, redo and nested batches over anything with `snapshot` and `restore`; a failed batch rolls back; `version` numbers every state, never reusing a number, and undo and redo restore it, so a cache keyed by version is never stale |
-| `ooxml_edit.stamp` | `ExtensionStamp`: an id frozen into an `extLst`/`ext` extension, which Office keeps when it does not know the URI |
-
-The losslessness rule, which everything else rests on:
-
 > A part that was never parsed is written back as the exact bytes that were read.
 
-Only a part whose tree was changed, and marked so with `mark_dirty`, is serialized again.
-Undo snapshots hold only those parts, and parts written as raw bytes, so undoing anything
-gives back the original bytes, and redoing it gives back the edited ones.
+## Install
 
-## Using it
+Not on PyPI yet. From GitHub or a checkout:
 
-A format layer registers its namespaces and the child sequences of the elements it inserts
-into, and usually subclasses `OpcPackage` with its own entry points:
+```sh
+pip install "ooxml-edit @ git+https://github.com/uvrt/ooxml-edit@main"
+pip install -e '.[dev]'     # from a checkout, with pytest
+```
+
+## Example
 
 ```python
 from ooxml_edit.history import History
@@ -92,141 +42,28 @@ history.undo()                            # the original bytes again
 package.save("out.zip")
 ```
 
-## What is deliberately not in it
+## What it covers
 
-- **Any one format.** No PresentationML, WordprocessingML or SpreadsheetML: no tag, part
-  path, content type or relationship type of one format. `tests/test_neutrality.py` checks
-  the source for them mechanically, and checks that importing the package registers only the
-  packaging namespaces every format shares.
-- **DrawingML and charts, in the core.** A deck and a Word document carry the same chart
-  parts and the same DrawingML, but editing them is a vocabulary, not a package operation.
-  They live in the optional `ooxml_edit.charts` subpackage, which the core never imports.
-- **Rendering.** That is the renderers', on ooxml-common.
-- **Any one format's tools.** `ooxml_edit.tools` is plumbing only; pptx-agent and
-  docx-agent define their tools on it, in their own packages.
+- **Core** (`ooxml_edit.opc`, `.xml`, `.history`, `.stamp`): lossless OPC packages,
+  parts and relationships, safe removal (`release`/`reap`), embedded packages,
+  schema-ordered insertion, undo/redo with batches and versions, durable ids.
+  See [docs/CORE.md](docs/CORE.md).
+- **`ooxml_edit.charts`** (optional): charts with their embedded workbooks, new charts from
+  data, and SmartArt diagrams, edited the same way in a deck or a Word document.
+  See [docs/CHARTS.md](docs/CHARTS.md).
+- **`ooxml_edit.tools`** (optional): the plumbing of an agent tool layer -- tool
+  definitions for the Anthropic and OpenAI APIs, sessions, refs and batches.
+  See [docs/TOOLS.md](docs/TOOLS.md) and [docs/TOOLS-ROADMAP.md](docs/TOOLS-ROADMAP.md).
 
-## `ooxml_edit.charts` (optional)
+Not in it: any one format's vocabulary (no PresentationML, WordprocessingML or
+SpreadsheetML -- `tests/test_neutrality.py` checks this), rendering (that is
+[ooxml-common](https://github.com/uvrt/ooxml-common)'s), and any one format's tools.
+Why, and how it relates to ooxml-common: [docs/DESIGN.md](docs/DESIGN.md).
 
-A chart part, the workbook behind it and a SmartArt diagram's data model are the same
-markup wherever they are embedded, so the editing is here once, for every format. It is
-optional and imported explicitly -- `import ooxml_edit.charts` -- and importing the core
-registers none of its vocabulary. It still needs nothing but lxml.
+## Status
 
-| Module | What it is |
-| --- | --- |
-| `charts.host` | `GraphicHost`: where a chart or diagram lives, as the format layer sees it -- the package, the part whose relationships name it, the frame `c:chart` or `dgm:relIds` sits under (at any depth), the format's undo step, an address, and the words for messages (the application whose Edit Data opens the workbook, what the document is called), with an optional `lang`, title template and `look` (the application's new-chart sizes, for new titles and data labels); `chart_part(host)`, `diagram_parts(host)` |
-| `charts.create` | `add_chart(package, part, kind, categories, series, ...)`: a new chart from data -- clustered or stacked column and bar, line, pie, scatter, with a title, axis titles, the legend position and a number format -- written with its embedded workbook so the caches and Edit Data agree, and related to `part`; the format adds only its frame around `NewChart.graphic()`. It looks as PowerPoint's or Word's new chart of that type looks in the document's theme (`POWERPOINT_LOOK`, `WORD_LOOK`, measured on Office for Mac 16); Office's chart-style parts are not written |
-| `charts.chart` | `Chart(resolve)` and `Series`: chart types, categories, series names and values, titles, axis titles and the legend, read and edited; data labels with a number format and the gap width of bars (`set_data_labels`, `set_gap_width`); categories and series added and removed (a series added gets a `c16:uniqueId`, as Word and PowerPoint give one on saving, chosen deterministically). `workbook_values()` reads back what Edit Data shows for each series' name and values and for the categories, with their formulas, to check the workbook against the cache. Every edit writes the caches (`ptCount`, `pt idx`) and the workbook cells together, moves the cells and rewrites the formulas when the shape of the data changes, keeps per-point formatting on its point and a table over the data in step -- one undo step each. A chart whose workbook is linked, an OLE object or missing is edited in its cache only, with a `ChartDataWarning`; a workbook laid out so that insertion cannot follow is refused with `ChartDataError` before anything changes |
-| `charts.workbook` | The embedded `.xlsx`, edited cell by cell inside the package: numbers, shared or inline strings, cells in order, `dimension` and `spans`, tables that grow, shrink and are named after their headers, a formula a value replaces removed with the calculation chain |
-| `charts.diagram` | `Diagram(resolve, on_inexact_drawing="drop", notify=None)` and `DiagramNode`: node text, nodes added and removed. A node's new points and connection get ids made from the edit (`uuid5`), so the same additions give the same bytes. The cached drawing is patched exactly where it can be -- the shape that shows a node is found through its `presOf` connection -- and otherwise dropped (PowerPoint lays the diagram out again from its data, measured), kept stale, or the edit refused, as the host chooses |
-| `charts.dmltext` | DrawingML text rewritten in place, keeping mixed formatting character by character -- what a chart title, a diagram node and a text box share |
-| `charts.model` | A chart's and a diagram's content as JSON-ready data: `chart_model`, `diagram_model`, `canonical_chart` and `canonical_diagram` to validate untrusted input, and `apply_chart_model` and `apply_diagram_model` to bring the document there through the edits; refusals are `ChartModelError` |
-| `charts.namespaces` | The `a:`, `c:`, `dgm:`, `dsp:` and `x:` namespaces and the child orders of every element the edits insert into, DrawingML runs and paragraphs included |
-
-A format layer builds a `GraphicHost` each time a chart is resolved, so a `Chart` survives
-undo:
-
-```python
-from ooxml_edit.charts import Chart, GraphicHost
-from ooxml_edit.history import History
-from ooxml_edit.opc import OpcPackage
-
-package = OpcPackage.open("in.zip")
-history = History(package)
-
-def host() -> GraphicHost:
-    frame = find_the_frame(package.tree("doc/main.xml"))   # the format's own lookup
-    return GraphicHost(package=package, part="doc/main.xml", frame=frame,
-                       edit=history.batch, address="chart 1", application="the editor")
-
-chart = Chart(host)
-chart.series[0].set_value(2, 4285)            # cache and workbook cell
-chart.add_category("Q4", [4400, 530])         # cells, formulas and table follow
-chart.set_title("Revenue")
-chart.set_data_labels(True, number_format='"€"#,##0.0"m"')
-chart.set_gap_width(60)                       # wider columns, room for the labels
-history.undo()                                # the original bytes, workbook included
-```
-
-The registry of child orders is last-wins: the subpackage owns the sequences of the DrawingML
-text, chart and diagram elements, so a format layer should not register its own copies of
-them.
-
-## `ooxml_edit.tools` (optional)
-
-The shared plumbing of an agent tool layer: an application imports a format library's
-tools, and a model edits documents only through them -- no code execution, no raw XML, no
-file system. Format-neutral and held to the core's rules by `tests/test_neutrality.py`;
-standard library only, and no provider SDK. The plan it implements is
-[docs/TOOLS-ROADMAP.md](docs/TOOLS-ROADMAP.md) (phase T0).
-
-| Module | What it is |
-| --- | --- |
-| `tools.registry` | `Tool`, `ToolGroup`, the `@tool` decorator, and the parameter helpers (`string`, `integer`, `number`, `boolean`, `array`, `obj`) that build each tool's schema; a definition outside the common strict subset fails when the tool is made |
-| `tools.schema` | the common strict subset both providers accept, its checker, and the call validator, which also enforces what the subset cannot say (numeric bounds, lengths, "exactly one of") |
-| `tools.adapters` | definitions for the Anthropic Messages API (strict on as many tools as the per-request limits allow, writing tools first; optional deferred loading and caching), the OpenAI Responses API (all required, optional ones nullable; optional namespaces and tool search) and Chat Completions; results as `tool_result` blocks, `function_call_output` items, or tool messages plus a user message with the images; checkers for each provider's documented rules. Plain dicts |
-| `tools.results` | the result envelope, error codes with `valid_options`, image token estimates, truncation and paging |
-| `tools.session` | `Session`: documents opened from bytes (`d1`), inputs registered as blobs (`b1`), outputs handed to the application as bytes; a re-entrant lock per document, taken in a fixed order across documents; versions (`History.version`) and version-keyed caches; an injected clock |
-| `tools.limits` | size limits, magic-byte checks, image sizes read from headers, and a zip-bomb guard |
-| `tools.worker` | a process pool for rendering and layout whose deadlines are kept: a worker past its deadline is killed and the call reports `timeout` |
-| `tools.logs`, `tools.prompts` | call records with argument digests, not content; the shared system-prompt fragment (mechanics only, no house style) |
-| `tools.shared` | the one definition of each tool every format shares (open, new, save, close, undo, find, replace, render, check, charts, SmartArt, properties, reading an input's text) and the generic `batch`; a library adds its handler with `@shared.handler("render", kind=...)`, and lists `shared.SESSION_TOOLS`, whose handlers serve every kind. The one module that names formats, in its descriptions only |
-
-```python
-from ooxml_edit.tools import Toolbox
-
-toolbox = Toolbox(LIBRARY_TOOLS, formats=[LIBRARY_FORMAT])   # from a format library
-session = toolbox.session(clock=fixed_clock)
-d1 = session.open(document_bytes, name="report.pptx")        # "d1"
-b1 = session.add_blob(logo_bytes, name="logo.png")             # "b1"
-
-tools = toolbox.definitions("anthropic")                       # or "openai-responses"
-results = toolbox.dispatch_many(session, calls)                # [(name, arguments), ...]
-message = toolbox.render_results("anthropic", list(zip(ids, results)))
-
-for out in session.take_outputs():                             # files a tool saved
-    store(out.name, out.data)
-```
-
-Calls on one document run one at a time in the order the model emitted them; calls on
-different documents run concurrently. A mutating call is one undo step, and a failed one
-changes nothing. Saving refuses new validation problems unless the application (never the
-model) passes `allow_new_problems=True`.
-
-**Refs and batches.** A creating call may name what it makes (`"ref": "step1"`); a later
-call writes `$step1` wherever its tool takes a target, and the dispatcher puts the address
-in. The `batch` tool runs many calls in one round trip -- in order, all or none, one undo
-step per document, the facts (`checks`) computed once at the end -- and names the failing op
-and its valid options when one fails. Its ops' arguments are free-form objects, so `batch`
-is the one tool never sent strict: each op is validated by the dispatcher against its own
-tool's schema instead of by constrained decoding.
-
-**Loading tools and the prompt.** Every tool is in one group; the `core` group is always
-loaded, the others on demand. What `definitions()` sends by default:
-
-| Call | Sends |
-| --- | --- |
-| `definitions("anthropic")` | every tool; the non-core ones `defer_loading`, with the BM25 tool-search tool, and `cache_control` on the last core tool. For models with tool search (Sonnet 5.5, Opus 5.5, Haiku 4.5) |
-| `definitions("anthropic", groups=["…"])` | the core and the named groups, all loaded: for a model without tool search, or an application that knows the task |
-| `definitions("openai-responses")` | the core as functions, each other group a `namespace` with `defer_loading`, and `{"type": "tool_search"}` |
-| `definitions("openai-chat", groups=["…"])` | the core and the named groups (Chat Completions has no tool search); `toolbox.allowed_tools([...], provider=...)` narrows a turn's calls without changing the cached `tools` |
-
-`defer=` overrides the default either way. On Claude, `strict: true` goes to as many tools
-as the per-request limits allow (20 tools, 24 optional parameters), in the order each
-format lists in `DocumentFormat.strict_first` (or `Toolbox(strict_first=...)`), then
-writing tools before reading ones. `toolbox.system_prompt(extra=...)` gives the shared
-fragment (`tools.prompts.SYSTEM`: planning, addresses and refs, batching, results and
-checks, rendering, saving, units), each format's fragment, then the application's own
-guidance: house style and design rules belong there, never in the shipped fragments.
-
-## Install
-
-Not on PyPI yet. From a checkout:
-
-```sh
-pip install -e .            # + lxml
-pip install -e '.[dev]'     # + pytest
-```
+Version 0.10.0, used by pptx-agent and docx-agent. Not on PyPI. Changes:
+[CHANGELOG.md](CHANGELOG.md).
 
 ## Tests
 
@@ -239,7 +76,16 @@ python -m pytest -m provider     # online checks; need ANTHROPIC_API_KEY (and
 The tests build the small packages they need (`tests/synthetic.py`, and
 `tests/charts_synthetic.py` for charts of every kind, their workbooks and SmartArt); no
 Office document is committed here. Chart edits are checked against the embedded workbook
-by an independent reader, `tests/xlsx.py`, rather than by the code that wrote it.
+by an independent reader, `tests/xlsx.py`. See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Family
+
+- [pptx2svg](https://github.com/uvrt/pptx2svg) -- renders PowerPoint (`.pptx`) slides to SVG and PNG.
+- [docx2svg](https://github.com/uvrt/docx2svg) -- renders Word (`.docx`) documents to SVG, page by page.
+- [ooxml-common](https://github.com/uvrt/ooxml-common) -- the format-neutral reading, DrawingML, fonts and text metrics both renderers share.
+- [ooxml-edit](https://github.com/uvrt/ooxml-edit) (this repo) -- lossless, undoable editing of OOXML packages, shared by both agent layers.
+- [pptx-agent](https://github.com/uvrt/pptx-agent) -- an AI-editable PowerPoint layer: inspect, edit, re-render.
+- [docx-agent](https://github.com/uvrt/docx-agent) -- an AI-editable Word layer: inspect, edit (optionally as tracked changes), re-render.
 
 ## Licence
 
