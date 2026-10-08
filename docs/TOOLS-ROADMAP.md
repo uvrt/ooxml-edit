@@ -8,6 +8,8 @@ This is the working plan for the **tool layer** over pptx-agent and docx-agent. 
 
 **The post-T4 round is done** (ooxml-edit 0.10.0; see "Post-T4" under Phases): PowerPoint's comments (`ppt_comments`), the layout tools and `ppt_draw` out of the tool set (their library calls stay), per-edit layout facts with exact fixes, a decision for every tool no model called, and `GUIDANCE.md` and `SUPPORTED.md` beside each format's tools.
 
+**Radar charts are done** (ooxml-edit 0.11.0; see "Radar charts" under Phases): `edit_chart` `add` with `chart_type: "radar"`, as PowerPoint and Word insert one, with goldens p13 and w14.
+
 ---
 
 ## Decisions already made
@@ -1192,6 +1194,33 @@ Every new golden replays to the same bytes and passes its check; PowerPoint expo
 
 - The cores did not change, so the 5,500 budget holds as before. The guards on every definition fell to 10,500 (decks) and 11,400 (Word). The deck system prompt (shared plus deck fragment) fell from about 1,101 to 1,017 offline tokens.
 - **Strict sets moved** with the removals: decks `replace_text`, `set_properties`, `ppt_arrange`, `ppt_add_slide`, `ppt_draft_slides`, `ppt_manage_slides`; Word `replace_text`, `word_set_text`, `edit_smartart`, `word_insert_markdown`, `word_set_tracking`, `word_changes`, `word_template`. The provider-marked online test ("every field arrives") was not re-run (no API calls this round); run it before the next trial.
+
+### Radar charts (S) — done in ooxml-edit 0.11.0
+
+**Measured** on Office for Mac 16 by UI scripting Insert > Chart > Radar, in PowerPoint (a blank slide) and in Word (a new document). Each probe was saved once and read back. PowerPoint's and Word's charts are the same except for text sizes and the chart-area frame, which are the existing `POWERPOINT_LOOK` and `WORD_LOOK`.
+- **Plot:** `c:radarChart` with `radarStyle` `marker`, `varyColors` 0, and no data labels.
+- **Series:** a 2.25 pt round-capped line in the next accent, no fill, `c:marker/c:symbol none` (so lines only, although the style says "marker"), and no `c:smooth`.
+- **Category axis (the spokes and their labels):** the column chart's: line at 15% of the text colour, no gridlines, `tickLblPos nextTo`.
+- **Value axis (the rings):** gridlines at 15%, no axis line, `crossBetween between`.
+- **Title and legend:** an automatic title, and **the legend at the top**, where the other kinds have it at the bottom.
+
+**Library.** `add_chart(kind="radar")`. `legend="default"` is the new default and gives Office's position for the kind, so the agents pass it when the model gives no `position`.
+
+**Tools.** `radar` is in `edit_chart`'s `chart_type` enum; the description is unchanged.
+
+**Left out.** Radar with markers and filled radar: "Radar" in Insert > Chart has no submenu, the ribbon's subtype gallery is not in the accessibility tree (T4), and neither application's AppleScript has a chart class. So neither subtype was measured, and neither is offered.
+
+**Goldens**, each 7-8 calls and 17/17 on its check:
+- **p13** (decks): a slide with a radar chart of three vendors on six criteria from a CSV.
+- **w14-supplier-radar** (Word): a radar figure with a caption after the paragraph that announces it.
+
+**Office:** PowerPoint and Word exported both outputs unprompted and drew the radar. Copies with data labels shown printed exactly the CSV's values, series by series, in the nl locale (`4,5 3,9 ...`).
+
+**Renderers.** pptx2svg and docx2svg both draw the created radar: the same polygon rings, the series lines in the accents, the category labels at the spoke ends, value labels 0-5 up the first spoke, and the legend at the top. Neither application draws visible spokes, and neither renderer does. Gaps, not fixed here:
+- Both renderers draw the radar's category, tick and legend text near black, where Office draws it at `tx1` 65%. This is the gap T4 noted for tick labels, and on a radar it covers every label.
+- In docx2svg, the radar's labels look slightly larger, relative to the plot, than in Word's PDF.
+
+**Budgets:** the cores are unchanged (`edit_chart` is deferred): decks 3,352 offline (about 4,961 counted), Word 2,384 (about 3,528). Every definition rose by 3 offline tokens (decks 10,221 -> 10,224, Word 11,080 -> 11,083), inside the guards (10,500 and 11,400), which stay.
 
 
 ## Open decisions

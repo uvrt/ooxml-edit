@@ -2,6 +2,12 @@
 
 Versions are those in `pyproject.toml`; none is published to PyPI yet.
 
+## 0.11.0 -- 2026-10-08
+- `add_chart` makes a radar chart (`kind="radar"`, `edit_chart`'s `chart_type`), as
+  PowerPoint and Word insert one (measured): lines in the accents, the column chart's axes.
+- `legend="default"` (now the default) puts the legend where Office does: at the bottom,
+  a radar chart's at the top.
+
 ## 0.10.0 -- 2026-10-08
 - SmartArt model ids are made from the edit, so the same additions give the same bytes.
 - `list_documents` removed from the shared tools.

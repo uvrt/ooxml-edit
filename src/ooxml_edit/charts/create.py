@@ -20,7 +20,7 @@ theme, measured on Office for Mac 16 (Insert > Chart, each type's first subtype,
 read back; ``docs`` of the libraries list the facts): theme accents in order with Office's
 colour cycle, no chart-area fill or line in PowerPoint and a background fill with a light
 border in Word, light grey gridlines and axis lines, labels in the theme's minor face at 65%
-of the text colour, the legend at the bottom.  Only the sizes of text differ between the two
+of the text colour, the legend at the bottom (a radar chart's at the top).  Only the sizes of text differ between the two
 applications (:data:`POWERPOINT_LOOK`, :data:`WORD_LOOK`).  Everything is written as theme
 references (``schemeClr``, ``+mn-lt``), so the chart follows the document's theme.  Office's
 chart-style and colour-style parts (``style1.xml``, ``colors1.xml``) are not written: they
@@ -69,10 +69,20 @@ CHART_KINDS: dict[str, tuple[str, str | None, str | None]] = {
     "line": ("line", None, "standard"),
     "pie": ("pie", None, None),
     "scatter": ("scatter", None, None),
+    "radar": ("radar", None, None),
 }
 
 #: Legend positions, as ``c:legendPos`` spells them.
 LEGEND_POSITIONS = {"bottom": "b", "right": "r", "top": "t", "left": "l", "top_right": "tr"}
+
+#: ``legend="default"``: where Office puts a new chart's legend -- at the bottom, but at the
+#: top of a radar chart (measured).
+DEFAULT_LEGEND = "default"
+
+
+def default_legend(kind: str) -> str:
+    """The legend position Office gives a new chart of ``kind``."""
+    return "top" if kind == "radar" else "bottom"
 
 #: Office's colour cycle for series (and a pie's slices): the six accents, then the six again
 #: in each of these variations (Office's "Colorful palette 1", the colour style of a new
@@ -377,7 +387,7 @@ def _series(kind: str, index: int, name: str | None, values: list, labels: list,
     if plot == "bar":
         ser.append(_sp(_fill(color), _no_line()))
         ser.append(_val("c:invertIfNegative", 0))
-    elif plot == "line":
+    elif plot in ("line", "radar"):
         ser.append(_sp(_e("a:ln", {"w": "28575", "cap": "rnd"}, _fill(color), _e("a:round"))))
         ser.append(_e("c:marker", None, _val("c:symbol", "none")))
     elif plot == "scatter":
@@ -443,6 +453,8 @@ def _axes(kind: str, ids: tuple[str, str], look: ChartLook, lang: str | None,
         y.append(_val("c:crossBetween", "midCat"))
         axes = [(x, "category", False), (y, "value", True)]
     else:
+        # A radar's category axis is its spokes, its value axis the rings (the gridlines):
+        # the same elements as a column chart's, measured.
         horizontal = direction == "bar"
         category = _axis_common("c:catAx", first, second, "l" if horizontal else "b", look,
                                 lang, gridlines=False, line=15000, format_code="General")
@@ -463,7 +475,7 @@ def _axes(kind: str, ids: tuple[str, str], look: ChartLook, lang: str | None,
 
 
 def chart_space(kind: str, categories: Sequence, series: Sequence, *, title: str | None = None,
-                axis_titles: dict[str, str] | None = None, legend: str | None = "bottom",
+                axis_titles: dict[str, str] | None = None, legend: str | None = DEFAULT_LEGEND,
                 number_format: str | None = None, look: ChartLook = POWERPOINT_LOOK,
                 lang: str | None = "en-US", seed: str = "", workbook_rel: str = "rId1"
                 ) -> Element:
@@ -477,8 +489,11 @@ def chart_space(kind: str, categories: Sequence, series: Sequence, *, title: str
         raise ChartDataError("axis titles are for the 'category' and 'value' axes")
     if plot_kind == "pie" and titles:
         raise ChartDataError("a pie chart has no axes to title")
+    if legend == DEFAULT_LEGEND:
+        legend = default_legend(kind)
     if legend is not None and legend not in LEGEND_POSITIONS:
-        raise ChartDataError(f"legend {legend!r}; one of {', '.join(LEGEND_POSITIONS)} or None")
+        raise ChartDataError(f"legend {legend!r}; one of {', '.join(LEGEND_POSITIONS)}, "
+                             f"{DEFAULT_LEGEND!r} or None")
     first, second, tail = _ids(f"{seed}\n{kind}\n{len(data)}")
 
     space = _e("c:chartSpace", None, nsmap={"c": C_NS, "a": A_NS, "r": R_NS})
@@ -506,6 +521,9 @@ def chart_space(kind: str, categories: Sequence, series: Sequence, *, title: str
         plot = _e("c:lineChart", None, _val("c:grouping", grouping), _val("c:varyColors", 0))
     elif plot_kind == "pie":
         plot = _e("c:pieChart", None, _val("c:varyColors", 1))
+    elif plot_kind == "radar":
+        # Office's "marker" style with each series' marker off: lines only (measured).
+        plot = _e("c:radarChart", None, _val("c:radarStyle", "marker"), _val("c:varyColors", 0))
     else:
         plot = _e("c:scatterChart", None, _val("c:scatterStyle", "lineMarker"),
                   _val("c:varyColors", 0))
@@ -680,7 +698,7 @@ def _charts_folder(part: str) -> str:
 
 def add_chart(package, part: str, kind: str, categories: Sequence, series: Sequence, *,
               title: str | None = None, axis_titles: dict[str, str] | None = None,
-              legend: str | None = "bottom", number_format: str | None = None,
+              legend: str | None = DEFAULT_LEGEND, number_format: str | None = None,
               look: ChartLook = POWERPOINT_LOOK, lang: str | None = "en-US") -> NewChart:
     """Write a new chart into ``package`` and relate it to ``part`` (the part whose
     relationships the frame's ``r:id`` resolves in) -- everything but the frame, which the format adds around
@@ -689,7 +707,8 @@ def add_chart(package, part: str, kind: str, categories: Sequence, series: Seque
     ``kind`` is one of :data:`CHART_KINDS`; ``categories`` the category labels (a scatter
     chart's x values); ``series`` a list of ``{"name", "values"}``, one value per category,
     ``None`` for a blank.  ``title`` and ``axis_titles`` (``{"category": ..., "value":
-    ...}``) are text; ``legend`` a position from :data:`LEGEND_POSITIONS` or ``None``;
+    ...}``) are text; ``legend`` a position from :data:`LEGEND_POSITIONS`, ``None`` for none
+    or ``"default"`` for Office's (the bottom; a radar chart's top);
     ``number_format`` an Excel format code for the values (``#,##0.0``).  ``look`` is the
     application's (:data:`POWERPOINT_LOOK`, :data:`WORD_LOOK`); ``lang`` goes on the text.
 
@@ -716,7 +735,7 @@ def add_chart(package, part: str, kind: str, categories: Sequence, series: Seque
     return NewChart(part=chart_name, workbook=book_name, rel_id=rel_id)
 
 
-__all__ = ["ACCENTS", "CHART_KINDS", "ChartLook", "LEGEND_POSITIONS", "NewChart",
-           "POWERPOINT_LOOK", "VARIATIONS", "WORD_LOOK", "add_chart", "chart_data",
-           "chart_space", "chart_workbook", "series_color", "text_properties",
-           "title_element", "title_text"]
+__all__ = ["ACCENTS", "CHART_KINDS", "ChartLook", "DEFAULT_LEGEND", "LEGEND_POSITIONS",
+           "NewChart", "POWERPOINT_LOOK", "VARIATIONS", "WORD_LOOK", "add_chart", "chart_data",
+           "chart_space", "chart_workbook", "default_legend", "series_color",
+           "text_properties", "title_element", "title_text"]
