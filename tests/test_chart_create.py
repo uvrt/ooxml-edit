@@ -102,7 +102,7 @@ def test_adding_a_chart_is_undone_to_the_original_bytes():
     assert document.to_bytes() == cs.package()
 
 
-@pytest.mark.parametrize("kind", ["column", "line", "stacked_bar"])
+@pytest.mark.parametrize("kind", ["column", "line", "stacked_bar", "radar"])
 def test_the_existing_edits_work_on_a_new_chart(kind):
     document, chart = new(kind)
     chart.add_category("Q5", [16.0, 12.5, 9.1])
@@ -138,6 +138,53 @@ def test_office_s_measured_look():
     assert '<c:grouping val="stacked"/>' in stacked and '<c:overlap val="100"/>' in stacked
 
 
+def test_office_s_measured_radar():
+    """PowerPoint's and Word's Insert > Chart > Radar (Office for Mac 16): lines in the
+    "marker" style with the markers off, the column chart's axes, the legend at the top."""
+    space = chart_space("radar", QUARTERS, REGIONS, look=POWERPOINT_LOOK)
+    plot = space.find(f"{C}chart/{C}plotArea/{C}radarChart")
+    assert [etree.QName(child).localname for child in plot] == [
+        "radarStyle", "varyColors", "ser", "ser", "ser", "dLbls", "axId", "axId"]
+    assert plot.find(f"{C}radarStyle").get("val") == "marker"
+    for index, series in enumerate(plot.findall(f"{C}ser")):
+        line = series.find(f"{C}spPr/{A}ln")
+        assert (line.get("w"), line.get("cap")) == ("28575", "rnd")
+        assert line.find(f"{A}solidFill/{A}schemeClr").get("val") == f"accent{index + 1}"
+        assert series.find(f"{C}spPr/{A}solidFill") is None
+        assert series.find(f"{C}marker/{C}symbol").get("val") == "none"
+        assert series.find(f"{C}smooth") is None
+    category, value = space.find(f"{C}chart/{C}plotArea/{C}catAx"), \
+        space.find(f"{C}chart/{C}plotArea/{C}valAx")
+    assert category.find(f"{C}majorGridlines") is None
+    assert category.find(f"{C}spPr/{A}ln").get("w") == "9525"
+    assert value.find(f"{C}majorGridlines") is not None
+    assert value.find(f"{C}spPr/{A}ln/{A}noFill") is not None
+    assert value.find(f"{C}crossBetween").get("val") == "between"
+    assert space.find(f"{C}chart/{C}legend/{C}legendPos").get("val") == "t"
+    word = chart_space("radar", QUARTERS, REGIONS, look=WORD_LOOK)
+    assert word.find(f"{C}spPr/{A}solidFill/{A}schemeClr").get("val") == "bg1"
+
+
+@pytest.mark.parametrize("kind, position", [("radar", "t"), ("line", "b"), ("pie", "b")])
+def test_the_default_legend_is_office_s_for_the_kind(kind, position):
+    categories, series = data_for(kind)
+    space = chart_space(kind, categories, series)
+    assert space.find(f"{C}chart/{C}legend/{C}legendPos").get("val") == position
+    placed = chart_space(kind, categories, series, legend="right")
+    assert placed.find(f"{C}chart/{C}legend/{C}legendPos").get("val") == "r"
+    assert chart_space(kind, categories, series, legend=None).find(
+        f"{C}chart/{C}legend") is None
+
+
+def test_data_labels_on_a_radar_chart():
+    document, chart = new("radar")
+    chart.set_data_labels(True, number_format="0.0")
+    assert all(entry["shown"] for entry in chart.data_labels)
+    assert not chart_order_violations(document.package.read(chart.part))
+    cs.assert_valid(document.to_bytes())
+    assert chart.chart_type == "radar" and chart.gap_width is None
+
+
 def test_the_colour_cycle_follows_office_after_six_series():
     assert series_color(0).get("val") == "accent1"
     seventh = series_color(6)
@@ -154,6 +201,7 @@ def test_a_chart_with_no_title_says_so():
 
 @pytest.mark.parametrize("kind, categories, series, message", [
     ("donut", QUARTERS, REGIONS, "chart type"),
+    ("radar_filled", QUARTERS, REGIONS, "chart type"),
     ("column", [], REGIONS, "at least one category"),
     ("column", QUARTERS, [], "at least one series"),
     ("column", QUARTERS, [{"name": "A", "values": [1, 2]}], "2 values for 4"),

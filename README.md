@@ -62,7 +62,7 @@ Why, and how it relates to ooxml-common: [docs/DESIGN.md](docs/DESIGN.md).
 
 ## Status
 
-Version 0.10.0, used by pptx-agent and docx-agent. Not on PyPI. Changes:
+Version 0.11.0, used by pptx-agent and docx-agent. Not on PyPI. Changes:
 [CHANGELOG.md](CHANGELOG.md).
 
 ## Tests

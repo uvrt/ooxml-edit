@@ -48,7 +48,8 @@ from .registry import (CORE, Param, Tool, ToolGroup, array, boolean, build_schem
 from .results import Result, ToolError, page_text
 
 #: ``edit_chart``'s chart types for ``add`` (``ooxml_edit.charts.create``'s kinds).
-CHART_TYPES = ("column", "stacked_column", "bar", "stacked_bar", "line", "pie", "scatter")
+CHART_TYPES = ("column", "stacked_column", "bar", "stacked_bar", "line", "pie", "scatter",
+               "radar")
 
 #: The group of the shared tools that are not core: loaded on demand.
 MISC = "shared_misc"
