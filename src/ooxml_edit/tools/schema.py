@@ -55,7 +55,13 @@ SUBSET_KEYWORDS = frozenset({
 })
 
 #: Keywords a validation schema may add for the dispatcher; never sent to a provider.
-BOUND_KEYWORDS = frozenset({"minimum", "maximum", "minLength", "maxLength", "maxItems"})
+#: ``orInteger`` (on a string, a whole number) lets the dispatcher take a whole number of at
+#: least that value in the string's place, kept a number: an address that may also be a
+#: position (``2``, or an id such as ``"n:257"``) is a string to a strict
+#: decoder -- the subset has no unions -- while a call written without one, or before the
+#: change, still passes its number.
+BOUND_KEYWORDS = frozenset({"minimum", "maximum", "minLength", "maxLength", "maxItems",
+                            "orInteger"})
 
 #: Words that make a property name a file-system path.  The tool layer has no paths: inputs
 #: are blob handles, outputs go to the application.
@@ -159,6 +165,9 @@ def _check_node(node: Any, where: str, depth: int, problems: list[str], enum_tot
             problems.append(f"{where}: {key} on a {kind}")
     if "maxItems" in node and kind != "array":
         problems.append(f"{where}: maxItems on a {kind}")
+    if "orInteger" in node and (kind != "string" or isinstance(node["orInteger"], bool)
+                                or not isinstance(node["orInteger"], int)):
+        problems.append(f"{where}: orInteger must be a whole number, on a string")
 
     if kind == "object":
         if depth > MAX_DEPTH:
@@ -386,7 +395,11 @@ def _validate(node: Mapping[str, Any], value: Any, where: str) -> Any:
         items = node.get("items") or {}
         return [_validate(items, item, f"{where}[{index}]") for index, item in enumerate(value)]
     if kind == "string":
+        if "orInteger" in node and not isinstance(value, (str, bool)) and isinstance(value, (int, float)):
+            return _validate({"type": "integer", "minimum": node["orInteger"]}, value, where)
         if not isinstance(value, str):
+            if "orInteger" in node:
+                raise CallError(f"{label} must be a whole number or a string", where)
             raise CallError(f"{label} must be a string", where)
         if "enum" in node and value not in node["enum"]:
             raise CallError(f"{label} is {value!r}; not one of the allowed values", where,

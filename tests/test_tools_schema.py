@@ -7,6 +7,7 @@ import pytest
 from ooxml_edit.tools import (CallError, SubsetError, Tool, array, boolean, build_schema,
                               canonical, check_subset, integer, number, obj, string, tool,
                               validate_call)
+from ooxml_edit.tools import shared
 from ooxml_edit.tools.schema import is_path_name, subset_problems, walk_properties
 
 import tools_toys
@@ -221,3 +222,41 @@ def test_example_arguments_give_every_property_and_pass_the_canonical_schema():
     assert arguments == {"doc": "doc 1", "mode": "a", "day": "2026-10-07",
                          "rows": [{"w": 2.5, "n": 2}], "on": True}
     assert validate_call(item.canonical, arguments) == arguments
+
+
+# -- a string that a whole number may stand in for (orInteger) ----------------------------------
+
+
+def test_an_address_or_a_number_is_a_string_to_the_provider_and_either_to_the_dispatcher():
+    schema = build_schema({"slides": array(string(or_integer=1), "Numbers or ids.", optional=True)})
+    assert subset_problems(schema, allow_bounds=True) == []
+    sent = canonical(schema)
+    assert sent["properties"]["slides"]["items"] == {"type": "string"}
+    assert subset_problems(sent) == []
+    assert validate_call(schema, {"slides": [2, "s:257", "$intro", 3.0]}) == {
+        "slides": [2, "s:257", "$intro", 3]}
+    for bad, message in ((0, "at least 1"), (2.5, "whole number"), (True, "a whole number or a string"),
+                         (None, "a whole number or a string")):
+        with pytest.raises(CallError) as caught:
+            validate_call(schema, {"slides": [bad]})
+        assert message in caught.value.message and caught.value.field == "slides[0]"
+
+
+def test_or_integer_belongs_on_a_string():
+    wrong = {"type": "object", "additionalProperties": False, "required": ["n"],
+             "properties": {"n": {"type": "integer", "description": "N.", "orInteger": 1}}}
+    assert any("orInteger" in p for p in subset_problems(wrong, allow_bounds=True))
+    assert any("outside the subset" in p for p in subset_problems(wrong))
+
+
+def test_render_and_check_take_slide_ids_while_pages_stay_numbers():
+    for name in ("render", "check"):
+        tool = shared.definition(name)
+        items = tool.canonical["properties"]["slides"]["items"]
+        assert items == {"type": "string"}
+        assert tool.canonical["properties"]["pages"]["items"]["type"] == "integer"
+        assert "slides[]" in tool.refs
+        assert validate_call(tool.schema, {"doc": "d1", "slides": [1, "s:257"]})["slides"] == [1, "s:257"]
+        with pytest.raises(CallError) as caught:
+            validate_call(tool.schema, {"doc": "d1", "pages": ["p:3"]})
+        assert caught.value.message == "pages[0] must be a number"

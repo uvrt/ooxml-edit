@@ -90,6 +90,12 @@ class Call:
         self.entry = primary
         self.result = Result()
         self.context = context or CallContext()
+        #: The documents whose locks the dispatcher holds for this call, taken once each
+        #: (:meth:`unlocked` may let them go); empty inside a batch.
+        self.held: list[DocumentEntry] = []
+        #: The version of the primary document the result describes, when the handler
+        #: worked on a snapshot (:meth:`unlocked`); ``None``: the version after the call.
+        self.version_used: int | None = None
 
     @property
     def in_batch(self) -> bool:
@@ -180,6 +186,47 @@ class Call:
         image = Image(data, width, height, media_type, label)
         self.result.images.append(image)
         return image
+
+    @property
+    def may_unlock(self) -> bool:
+        """Whether :meth:`unlocked` lets the documents' locks go: a reading call outside a
+        batch.  A handler that will work unlocked takes its snapshot first."""
+        return bool(self.held) and not self.context.batch and not self.changing
+
+    @contextmanager
+    def unlocked(self) -> Iterator[bool]:
+        """Let the call's document locks go for slow work on a snapshot -- rasterising, a
+        layout -- and take them back after; yields whether they were let go.
+
+        Take the snapshot first, under the lock: the bytes (``to_bytes()``), the version
+        (:attr:`DocumentEntry.version`), ids and anything else the work needs.  Inside, read
+        nothing from the live document: another call may be changing it -- an edit to
+        one part while another rasterises does not wait.  After, the locks are held again;
+        cache what was made under the snapshot's version, which the result reports
+        (:attr:`version_used`, set here to the version when the locks were let go).
+
+        Inside a batch, or in a changing call, the locks stay held (the work is part of an
+        undo step or of a run of ops) and this yields ``False``."""
+        if self.entry is not None and self.version_used is None:
+            self.version_used = self.entry.version
+        if not self.may_unlock:
+            yield False
+            return
+        held = sorted(self.held, key=lambda entry: doc_order(entry.doc_id))
+        for entry in reversed(held):
+            entry.lock.release()
+        try:
+            yield True
+        finally:
+            for entry in held:
+                entry.lock.acquire()
+
+    def run_unlocked(self, fn: Callable[..., Any], *args: Any, timeout: float | None = None,
+                     **kwargs: Any) -> Any:
+        """:meth:`run` inside :meth:`unlocked`: ``fn`` gets a snapshot (bytes), never the
+        live document."""
+        with self.unlocked():
+            return self.run(fn, *args, timeout=timeout, **kwargs)
 
     def run(self, fn: Callable[..., Any], *args: Any, timeout: float | None = None,
             **kwargs: Any) -> Any:
@@ -421,7 +468,8 @@ class Toolbox:
             result = Result.failure(self.map_exception(exc))
         if primary is not None:
             result.doc = primary.doc_id
-            result.version = primary.version
+            if result.version is None:      # a snapshot's (Call.unlocked), else the latest
+                result.version = primary.version
         result.tool = name
         result.duration = time.perf_counter() - started
         self._record(session, name, doc_ids, clean, result, entries)
@@ -500,6 +548,7 @@ class Toolbox:
         with collect_warnings() as caught:
             arguments = self._with_refs(tool, arguments, entries, primary, context)
             call = Call(self, session, tool, arguments, entries, primary, context)
+            call.held = list(entries.values())   # dispatch() holds each once
             if changing and primary is not None:
                 with primary.batch():
                     returned = handler(call, **arguments)
@@ -507,6 +556,8 @@ class Toolbox:
             else:
                 returned = handler(call, **arguments)
             result = _as_result(returned, call.result)
+            if call.version_used is not None:
+                result.version = call.version_used
             if changing and result.ok:
                 self._keep_refs(entries, context, [primary.doc_id] if primary else [])
                 if primary is not None:
