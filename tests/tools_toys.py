@@ -202,11 +202,13 @@ def toy_ppt_set_title(call, doc, page, text, key=None):
       kind="pptx", group="toy_render")
 def toy_ppt_render(call, doc, page, width=1280, stall=0):
     entry = call.entry
+    version = entry.version                  # the snapshot: this version's bytes
     key = ("page", page, width)
-    hit = entry.render_cache.get((entry.version, key))
+    hit = entry.render_cache.get((version, key))
     if hit is None:
-        hit = call.run(render_page, call.document.to_bytes(), page, width, stall)
-        entry.render_cache.put((entry.version, key), hit)
+        data = call.document.to_bytes()
+        hit = call.run_unlocked(render_page, data, page, width, stall)
+        entry.render_cache.put((version, key), hit)
     data, w, h = hit
     call.image(data, w, h, label=f"page {page}")
     return Result(summary=f"Rendered page {page}")

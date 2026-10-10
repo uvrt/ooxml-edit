@@ -2,7 +2,23 @@
 
 Versions are those in `pyproject.toml`; none is published to PyPI yet.
 
-## Unreleased
+## 0.14.0 -- unreleased
+- `render` and `check` let the document's lock go for their slow part: the handler takes a
+  snapshot under the lock (bytes, version, ids), the worker rasterises or measures it with
+  the lock released, and the lock is taken back to cache the result under the snapshot's
+  version, which the result reports. An edit to another slide of the same deck no longer
+  waits for a render (production feedback: parallel loops serialised on renders; the
+  `a6` repro's edit went from waiting for the whole render to about its own time with
+  worker processes). New `Call.unlocked()`, `Call.may_unlock`, `Call.run_unlocked()` and
+  `Call.version_used`; inside a batch and in changing calls the lock stays held. Worker
+  pool and in-process fallback alike (`tests/test_tools_unlocked.py`); in-process, a
+  rasteriser that holds the GIL still delays other threads (`docs/TOOLS.md`).
+- `render`'s and `check`'s `slides` take slide ids and refs (`s:257`, `$intro`) as well
+  as numbers, as every other deck address does: the items are strings to the provider
+  and the dispatcher still takes a number, through the validation-only keyword
+  `orInteger` (`string(or_integer=1)`). The tools declare `slides[]` as a ref target.
+  Pages stay numbers. The core grows by 12 estimated tokens per format (deck 3,398, about
+  5,029 counted; Word 2,429), within the 5,500 budget.
 - Python 3.14 and 3.15: CI runs the suite on both, on Linux, macOS and Windows, and the
   classifiers declare them. `requires-python` stays `>=3.10`. Python 3.14 made
   `forkserver` Linux's default start method (`fork` before); the worker pool names `spawn`

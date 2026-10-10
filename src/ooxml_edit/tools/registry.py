@@ -61,13 +61,18 @@ def _param(schema: dict[str, Any], optional: bool, **bounds: Any) -> Param:
 
 def string(description: str | None = None, *, enum: Sequence[str] | None = None,
            format: str | None = None, min_length: int | None = None,
-           max_length: int | None = None, optional: bool = False) -> Param:
+           max_length: int | None = None, or_integer: int | None = None,
+           optional: bool = False) -> Param:
+    """A string; with ``or_integer``, the dispatcher also takes a whole number of at least
+    that in its place (``orInteger``, :data:`~.schema.BOUND_KEYWORDS`): the provider is sent
+    a plain string."""
     schema = _described("string", description)
     if enum is not None:
         schema["enum"] = list(enum)
     if format is not None:
         schema["format"] = format
-    return _param(schema, optional, minLength=min_length, maxLength=max_length)
+    return _param(schema, optional, minLength=min_length, maxLength=max_length,
+                  orInteger=or_integer)
 
 
 def integer(description: str | None = None, *, minimum: int | None = None,

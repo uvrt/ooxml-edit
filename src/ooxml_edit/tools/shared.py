@@ -67,6 +67,14 @@ def _slides(what: str) -> Param:
     return array(integer(minimum=1), f"Decks: slide numbers from 1{what}.", optional=True)
 
 
+def _slide_addresses(what: str) -> Param:
+    """``render``'s and ``check``'s slides: a number, or an address -- ``s:<id>`` or a ``$ref``
+    -- which stays the same slide while other calls add or move slides.  A string to the
+    provider (the subset has no unions); a number still passes (``orInteger``)."""
+    return array(string(or_integer=1), f"Decks: slide numbers from 1, or ids (s:256, $ref){what}.",
+                 optional=True)
+
+
 def _pages(what: str) -> Param:
     return array(integer(minimum=1), f"Documents: page numbers from 1{what}.", optional=True)
 
@@ -201,24 +209,25 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
          "Render slides or pages to PNG to look at them, at most 4 per call. Images cost "
          "tokens; the result states how many.",
          {"doc": _DOC,
-          "slides": _slides(", at most 4"),
+          "slides": _slide_addresses(", at most 4"),
           "pages": _pages(", at most 4"),
           "width": integer("Pixels, 200-2576. Default 1280 (slides), 1000 (pages).",
                            minimum=200, maximum=2576, optional=True)},
-         batchable=False),
+         batchable=False, refs=("slides[]",)),
     # S9
     Spec("check",
          "Facts as the document will show: text that does not fit, collisions, validation "
          "problems, and on request design facts. Facts, not verdicts.",
          {"doc": _DOC,
-          "slides": _slides(". Default all"),
+          "slides": _slide_addresses(". Default all"),
           "pages": _pages(". Default all"),
           "include": array(string(enum=[
               "fit", "collisions", "facts", "design", "validate", "reflow", "fields", "app"]),
               "Default: fit, collisions, validate (decks); validate, reflow, fields "
               "(documents).", optional=True),
           "boxes": boolean("Decks: also text boxes that overlap where their text does not. "
-                           "Default false.", optional=True)}),
+                           "Default false.", optional=True)},
+         refs=("slides[]",)),
     # S10, S11: edit_chart reads too
     Spec("edit_chart",
          "Add, read or change a chart. add: a new chart from data, styled as Office inserts "

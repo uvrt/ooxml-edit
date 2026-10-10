@@ -81,6 +81,44 @@ served. A runaway render therefore delays later ones, each of which still times 
 own deadline. Where that matters, run the toolbox in a process that may start children --
 Celery's `--pool=threads` or `solo`, or a non-daemonic service -- and keep the pool.
 
+**Rendering without holding the document.** A call holds its documents' locks while its
+handler runs, so calls on one document run one at a time. A render used to hold them while
+it rasterised -- one to three seconds a slide -- and parallel loops on one deck waited for
+each other's renders. Now `render` takes a snapshot under the lock -- the document's bytes,
+its version (`History.version`), the ids and numbers it labels the images with -- lets the
+lock go while the worker (or, with `workers=0` or in the in-process fallback, a thread)
+rasterises those bytes, and takes the lock back to cache each image under the snapshot's
+version. `check` does the same for its slow part: a deck's fit and collision facts and
+validation are measured on a copy opened from the snapshot's bytes, a Word document's
+reflow is laid out from them (its `validate` and `fields` are read under the lock, from
+the same version). So an edit to slide 2 does not wait for a render of slide 1. The
+result describes the snapshot: its `version` is the one drawn or checked, which an edit
+made meanwhile has moved past; a later render or check of the new version draws afresh,
+while one of a version undone back to is a cache hit. Undo and history are untouched: a
+render or check makes no step. Inside a `batch` the lock stays held (a check there is one
+op of the run), as in any changing call. A handler does this with `call.unlocked()` (a
+context manager; it yields whether the locks were let go, `call.may_unlock` says so in
+advance, and `call.version_used` is the version the result then reports) or
+`call.run_unlocked(fn, *args)`, and must read nothing from the live document inside. One
+limit is the rasteriser's: resvg-py holds the GIL for the whole of its native rasterise
+(measured: no other thread ran for 0.7 s of a 0.8 s slide), so in-process (`workers=0`) an
+edit no longer waits for the lock but still waits for that call to return; with worker
+processes it waits for neither.
+
+**Slides by id.** `render`'s and `check`'s `slides` take what every other deck address
+takes: a slide number from 1, the slide's id (`s:257`), or a `$ref` to one -- so a loop
+that read a slide's id renders that slide even after another loop added or moved slides.
+To the provider the items are strings (the subset has no unions; a strict decoder writes a
+number as `"2"`, read as a position); the dispatcher still takes a number
+(`string(or_integer=1)`, the validation-only keyword `orInteger`). Each image is labelled
+with both, `slide 3 (s:257)`, and `check` lists the slides it covered by id. Anything else
+-- a shape's address, `256.2` -- is refused (`invalid_arguments` on `slides[0]`, listing the
+ids), as is an id the deck does not have (`not_found`). A document's `pages` stay numbers:
+`"1"` is refused by the dispatcher, `pages[0] must be a number` (`invalid_arguments`); its
+`slides`, read as pages, take numbers (or digit strings) only, and an id there is refused
+naming `pages`. The core grew by 12 estimated tokens per format (deck 3,398, about 5,029
+counted by the 1.48 proxy, within the 5,500 budget; Word 2,429, about 3,595).
+
 **Fonts.** An application that keeps licensed faces in a folder of its own names it once:
 `Toolbox(..., font_dirs=["/srv/app/fonts"])`, the default of every session the toolbox
 makes, or `toolbox.session(font_dirs=[...])` for one session. The folders are searched
@@ -96,7 +134,9 @@ the work it runs in a worker process -- which does not see the session, nor an e
 variable set after the pool started -- and keys its render and check caches with it. A
 format applies it to a document as the document joins the session
 (`DocumentFormat.configure(document, session)`, called for opened, created and adopted
-documents alike).
+documents alike). The renderers walk the folders once per process and check them with one
+stat per folder per measurement (ooxml-common 0.10, `refresh_font_dirs()` for what a
+folder's time does not show): a slow mount no longer costs a walk per measurement.
 
 **OpenAI images.** On the Responses API a result's images go inside its
 `function_call_output` by default: `output` is then a list of `input_text` and
