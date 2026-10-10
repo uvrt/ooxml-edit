@@ -54,7 +54,7 @@ from .logs import CallRecord, digest, log_call, logger, shape
 from .registry import CORE, Tool, ToolGroup, merge_tools
 from .results import Image, Result, ToolError
 from .schema import CallError, validate_call
-from .session import Clock, DocumentEntry, DocumentFormat, Output, Session, doc_order
+from .session import Clock, DocumentEntry, DocumentFormat, Output, Session, doc_order, font_dirs_of
 from .worker import WorkerPool
 
 
@@ -152,6 +152,12 @@ class Call:
     def limits(self) -> Limits:
         return self.session.limits
 
+    @property
+    def font_dirs(self) -> tuple[str, ...] | None:
+        """The session's font folders (:attr:`Session.font_dirs`): pass them to work run in
+        a worker process, which does not see the session."""
+        return self.session.font_dirs
+
     def now(self) -> Any:
         return self.session.now()
 
@@ -223,6 +229,10 @@ class _OpFailed(Exception):
         self.error = error
 
 
+#: :meth:`Toolbox.session`'s ``font_dirs`` when not given: the toolbox's own.
+_TOOLBOX_DEFAULT: Any = object()
+
+
 class Toolbox:
     """The tools of one or more libraries, ready for a provider and a session."""
 
@@ -232,12 +242,18 @@ class Toolbox:
                  start_method: str = "spawn", log_arguments: bool = False,
                  error_map: Mapping[type[BaseException], Any] | None = None,
                  strict_first: Sequence[str] | None = None,
-                 runner: Any = None) -> None:
+                 runner: Any = None, font_dirs: Any = None) -> None:
         """``workers`` worker processes render and lay out (``0``: in-process, in threads,
         for a process that may not start children; a daemonic one falls back to that by
         itself).  ``runner`` replaces the pool: anything with ``run(fn, *args, timeout=...,
         **kwargs)`` and ``close()`` -- an :class:`~.worker.InProcess`, or the application's
-        own executor."""
+        own executor.
+
+        ``font_dirs`` -- the application's own font folders, searched before the operating
+        system's for every render and measurement -- is the default of the sessions this
+        toolbox makes (:meth:`session` overrides it per session).  ``None`` leaves it to
+        the renderers: ``OOXML_FONT_DIRS``, then the system's folders.  It is never a tool
+        argument: the model neither sees nor sets it."""
         self.tools: dict[str, Tool] = merge_tools(tools)
         self.formats: dict[str, DocumentFormat] = {fmt.kind: fmt for fmt in formats}
         #: Claude's strict priority: the application's order, else each format's in turn.
@@ -249,6 +265,8 @@ class Toolbox:
         #: The validate gate's override: the application's to set, never the model's.
         self.allow_new_problems = allow_new_problems
         self.log_arguments = log_arguments
+        #: The default :attr:`Session.font_dirs` of the sessions this toolbox makes.
+        self.font_dirs: tuple[str, ...] | None = font_dirs_of(font_dirs)
         self._workers = workers
         self._start_method = start_method
         self._pool: Any = runner
@@ -267,9 +285,14 @@ class Toolbox:
     # -- sessions and definitions ------------------------------------------------------------
 
     def session(self, *, clock: Clock | None = None, limits: Limits | None = None,
-                on_output: Callable[[Output], None] | None = None) -> Session:
+                on_output: Callable[[Output], None] | None = None,
+                font_dirs: Any = _TOOLBOX_DEFAULT) -> Session:
+        """A new session.  ``font_dirs`` replaces the toolbox's :attr:`font_dirs` for this
+        session (``None``: the renderers' default; ``[]``: no folders of the
+        application's, ``OOXML_FONT_DIRS`` not read either)."""
         return Session(self.formats.values(), clock=clock, limits=limits or self.limits,
-                       on_output=on_output)
+                       on_output=on_output,
+                       font_dirs=self.font_dirs if font_dirs is _TOOLBOX_DEFAULT else font_dirs)
 
     def tool(self, name: str) -> Tool:
         if name not in self.tools:

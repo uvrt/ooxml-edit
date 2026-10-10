@@ -10,6 +10,13 @@ Concurrency.  A document is an lxml tree mutated in place, so every call on it h
 entry's re-entrant lock.  Calls on different documents run concurrently.  A call on several
 documents takes their locks in :func:`doc_order`, so two such calls cannot deadlock.  The
 session's own maps have a lock of their own, never held while a document lock is awaited.
+
+Fonts.  :attr:`Session.font_dirs` is the application's own font folders, for every render
+and every measurement of text the session's documents make: application configuration,
+never a tool argument.  ``None`` (the default) leaves it to the renderers, which read
+``OOXML_FONT_DIRS`` and the operating system's folders.  A format applies it to each
+document that joins the session (:attr:`DocumentFormat.configure`), and passes it on to
+the work it runs in a worker process.
 """
 
 from __future__ import annotations
@@ -23,7 +30,7 @@ import uuid
 from collections import OrderedDict
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
-from os import PathLike
+from os import PathLike, fspath
 from typing import Any, Callable, Hashable, Iterable, Iterator, Sequence
 
 from .limits import LimitError, Limits, check_declared_type, check_image, check_package
@@ -83,6 +90,10 @@ class DocumentFormat:
     #: Called after a scoped undo or redo restored parts behind the document's back, so it
     #: drops what it caches (what its own ``undo`` does after the history's).
     restored: Callable[[Any], None] | None = None
+    #: Called with ``(document, session)`` when a document joins a session -- opened,
+    #: created or adopted -- before anything is measured: the format applies the
+    #: session's settings to it (:attr:`Session.font_dirs`).
+    configure: Callable[[Any, "Session"], None] | None = None
 
 
 class LRU:
@@ -156,6 +167,9 @@ class DocumentEntry:
     source: str
     document: Any
     size: int = 0
+    #: The session's :attr:`~Session.font_dirs` (``None``: the renderers' own default),
+    #: for a format's ``checks``, which get the entry alone.
+    font_dirs: tuple[str, ...] | None = None
     baseline_problems: list[Any] = field(default_factory=list)
     tracking: dict[str, Any] | None = None
     lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
@@ -249,13 +263,36 @@ def doc_order(doc_id: str) -> tuple[int, str]:
     return (int(match.group(1)) if match else 1 << 62, doc_id)
 
 
+def font_dirs_of(font_dirs: Any) -> tuple[str, ...] | None:
+    """``font_dirs`` as a session keeps it: ``None`` as given (the renderers' default),
+    otherwise a tuple of path strings -- one path, or a sequence of them; picklable, so it
+    crosses into a worker process, and hashable, so it can key a cache."""
+    if font_dirs is None:
+        return None
+    if isinstance(font_dirs, (str, PathLike)):
+        font_dirs = [font_dirs]
+    out = []
+    for path in font_dirs:
+        if not isinstance(path, (str, PathLike)):
+            raise TypeError(f"font_dirs takes paths, not {type(path).__name__}")
+        out.append(fspath(path))
+    return tuple(out)
+
+
 class Session:
-    """The documents, blobs and outputs of one conversation."""
+    """The documents, blobs and outputs of one conversation.
+
+    ``font_dirs`` is the application's own font folders for every render and measurement
+    of the session's documents (see the module's notes); ``None`` leaves the renderers'
+    default -- ``OOXML_FONT_DIRS``, then the operating system's folders.
+    """
 
     def __init__(self, formats: Iterable[DocumentFormat] = (), *, clock: Clock | None = None,
                  limits: Limits | None = None, on_output: Callable[[Output], None] | None = None,
-                 session_id: str | None = None) -> None:
+                 session_id: str | None = None, font_dirs: Any = None) -> None:
         self.id = session_id or uuid.uuid4().hex[:12]
+        #: The application's own font folders, as path strings; ``None``: the default.
+        self.font_dirs: tuple[str, ...] | None = font_dirs_of(font_dirs)
         self.clock: Clock = clock or utc_now
         self.created_at = self.clock()
         self.limits = limits or Limits()
@@ -291,13 +328,15 @@ class Session:
         if kind not in self.formats:
             raise ValueError(f"no format {kind!r} is registered; one of {sorted(self.formats)}")
         fmt = self.formats[kind]
+        if fmt.configure is not None:
+            fmt.configure(document, self)
         baseline = list(fmt.problems(document)) if fmt.problems else []
         with self._lock:
             self._room_for_document(size)
             doc_id = f"d{next(self._doc_numbers)}"
             self.documents[doc_id] = DocumentEntry(
                 doc_id=doc_id, kind=kind, name=name, source=source, document=document,
-                size=size, baseline_problems=baseline,
+                size=size, baseline_problems=baseline, font_dirs=self.font_dirs,
                 render_cache=LRU(self.limits.render_cache_size),
                 check_cache=LRU(self.limits.check_cache_size))
             entry = self.documents[doc_id]

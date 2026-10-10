@@ -2,7 +2,16 @@
 
 Versions are those in `pyproject.toml`; none is published to PyPI yet.
 
-## Unreleased
+## 0.13.0 -- 2026-10-10
+- The application's font folders: `Toolbox(font_dirs=[...])` is the default of its
+  sessions, `toolbox.session(font_dirs=...)` overrides it per session (`None`: the
+  renderers' default, `OOXML_FONT_DIRS` then the system's folders; `[]`: none, the
+  variable not read). It is `Session.font_dirs`, copied to every `DocumentEntry`
+  (`entry.font_dirs`, for a format's `checks`) and readable as `call.font_dirs`, for the
+  work a handler sends to a worker process. `DocumentFormat.configure(document, session)`
+  is called when a document joins a session (opened, created or adopted), so a format can
+  apply the setting to it. Application configuration only: no tool definition, schema or
+  prompt changes.
 - OpenAI Responses: an offline round-trip test (`tests/test_tools_responses_roundtrip.py`)
   with synthetic fixtures modelled on a production user's live Azure OpenAI run (every
   task completed): deferred calls by bare `name` with a `namespace` field, server-side
