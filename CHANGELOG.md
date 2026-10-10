@@ -2,6 +2,14 @@
 
 Versions are those in `pyproject.toml`; none is published to PyPI yet.
 
+## Unreleased
+- Python 3.14 and 3.15: CI runs the suite on both, on Linux, macOS and Windows, and the
+  classifiers declare them. `requires-python` stays `>=3.10`. Python 3.14 made
+  `forkserver` Linux's default start method (`fork` before); the worker pool names `spawn`
+  itself, so nothing changes, and a test now runs the pool and a toolbox -- a render, the
+  font folders handed to a worker, an exception -- under every start method the platform
+  has.
+
 ## 0.13.0 -- 2026-10-10
 - The application's font folders: `Toolbox(font_dirs=[...])` is the default of its
   sessions, `toolbox.session(font_dirs=...)` overrides it per session (`None`: the

@@ -7,7 +7,7 @@ pip install -e '.[dev]'
 python -m pytest -q
 ```
 
-CI runs the suite on Linux, macOS and Windows with Python 3.10 to 3.13. The online checks
+CI runs the suite on Linux, macOS and Windows with Python 3.10 to 3.15. The online checks
 (`-m provider`) call a model provider's API and skip without its key; they never run on CI.
 
 ## What does not go in the repository
