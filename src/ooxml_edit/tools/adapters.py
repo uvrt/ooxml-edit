@@ -406,12 +406,25 @@ def openai_responses_items(results: Sequence[tuple[str, Result]], *,
     return items
 
 
-def openai_input_problems(items: Sequence[Mapping[str, Any]]) -> list[str]:
-    """Where Responses input items answering tool calls break the documented shapes: an
-    output that is not a string or a list of ``input_text``, ``input_image`` and
+#: Items of a Responses ``output`` that go back in the next ``input`` as they came (with
+#: ``store=False``, a reasoning item's ``encrypted_content`` with it): the adapters never
+#: make them, and :func:`openai_input_problems` lets them pass.  A ``tool_search_call`` with
+#: ``execution: "server"`` was run by the API, its ``tool_search_output`` follows it, and
+#: neither is dispatched; a ``function_call`` from a deferred namespace carries the bare
+#: tool ``name`` and the group in ``namespace`` (OpenAI's tool-search guide).
+OPENAI_MODEL_ITEMS = frozenset({"reasoning", "function_call", "tool_search_call",
+                                "tool_search_output"})
+
+
+def openai_input_problems(items: Sequence[Any]) -> list[str]:
+    """Where a Responses ``input`` breaks the documented shapes of what answers tool calls:
+    an output that is not a string or a list of ``input_text``, ``input_image`` and
     ``input_file``; an image without ``image_url`` or ``file_id``; a ``detail`` outside
-    :data:`OPENAI_DETAILS`; a user message with other content.  Offline: what a real
-    request accepts is the API's to say (no Responses image test runs online yet)."""
+    :data:`OPENAI_DETAILS`; an image in a message that is not the user's.  The whole next
+    input may be passed: the model's own items (:data:`OPENAI_MODEL_ITEMS`), a message
+    whose content is a string and an assistant's ``output_text`` pass, as do SDK objects
+    (anything with ``model_dump``).  Offline: what a real request accepts is the API's to
+    say."""
     problems: list[str] = []
 
     def image(where: str, part: Mapping[str, Any]) -> None:
@@ -423,7 +436,11 @@ def openai_input_problems(items: Sequence[Mapping[str, Any]]) -> list[str]:
 
     for index, item in enumerate(items):
         where = f"item {index}"
+        if not isinstance(item, Mapping) and hasattr(item, "model_dump"):
+            item = item.model_dump(exclude_none=True)
         kind = item.get("type", "message" if "role" in item else None)
+        if kind in OPENAI_MODEL_ITEMS:
+            continue
         if kind == "function_call_output":
             if not item.get("call_id"):
                 problems.append(f"{where}: no call_id")
@@ -439,13 +456,21 @@ def openai_input_problems(items: Sequence[Mapping[str, Any]]) -> list[str]:
                 elif part.get("type") not in ("input_text", "input_file"):
                     problems.append(f"{where}: {part.get('type')!r} cannot be in an output")
         elif kind == "message":
-            if item.get("role") != "user":
-                problems.append(f"{where}: images go back in a user message")
-            for part in item.get("content") or ():
+            content = item.get("content")
+            if isinstance(content, str):
+                continue
+            user = item.get("role") == "user"
+            allowed = ("input_text", "input_file") if user else ("input_text", "output_text",
+                                                                 "refusal")
+            for part in content or ():
                 if part.get("type") == "input_image":
-                    image(where, part)
-                elif part.get("type") != "input_text":
-                    problems.append(f"{where}: {part.get('type')!r} in a user message")
+                    if user:
+                        image(where, part)
+                    else:
+                        problems.append(f"{where}: images go back in a user message")
+                elif part.get("type") not in allowed:
+                    problems.append(f"{where}: {part.get('type')!r} cannot be in a "
+                                    f"{item.get('role')!r} message")
         else:
             problems.append(f"{where}: unexpected item type {kind!r}")
     return problems

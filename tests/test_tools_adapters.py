@@ -331,8 +331,10 @@ def test_responses_image_options_are_checked():
         adapters.results_for("openai-chat", [], images="output")
     bad = [{"type": "function_call_output", "call_id": "c", "output": [
                {"type": "input_image", "detail": "medium"}, {"type": "output_text"}]},
-           {"type": "message", "role": "assistant", "content": [{"type": "image_url"}]},
-           {"type": "reasoning"}]
+           {"type": "message", "role": "assistant", "content": [
+               {"type": "input_image", "image_url": "data:image/png;base64,AA=="}]},
+           {"type": "message", "role": "user", "content": [{"type": "image_url"}]},
+           {"type": "mystery"}]
     problems = adapters.openai_input_problems(bad)
     assert len(problems) == 6, problems
 
