@@ -2,6 +2,19 @@
 
 Versions are those in `pyproject.toml`; none is published to PyPI yet.
 
+## Unreleased
+- OpenAI Responses: an offline round-trip test (`tests/test_tools_responses_roundtrip.py`)
+  with synthetic fixtures modelled on a production user's live Azure OpenAI run (every
+  task completed): deferred calls by bare `name` with a `namespace` field, server-side
+  `tool_search_call` / `tool_search_output` passed back unchanged and never dispatched,
+  reasoning items with `encrypted_content` under `store=False`, both image placements and
+  each `detail`, over a three-turn loop with real dispatch (`docs/TOOLS.md`).
+- `adapters.openai_input_problems` takes the whole next input: the model's own items
+  (`reasoning`, `function_call`, `tool_search_call`, `tool_search_output`), a message
+  whose content is a string, an assistant's `output_text` and SDK objects pass, where
+  before they were reported (or, for a string content, raised).  An image outside a user
+  message is still a problem.
+
 ## 0.12.0 -- 2026-10-08
 - Rendering works in a daemonic process (a Celery prefork worker's child), which may not
   start the worker processes: the pool runs the work in-process there, by itself, and logs

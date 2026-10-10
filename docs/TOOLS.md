@@ -91,8 +91,23 @@ image, labelled with its call, as Chat Completions must; use it where a deployme
 images only in messages (Azure OpenAI's Responses documentation shows string outputs only
 and says nothing about images in them). `detail=` sets each `input_image`'s detail:
 `auto` (the default, as in the API), `low`, `high`, or `original` where the model has it.
-`adapters.openai_input_problems(items)` checks the items' shapes offline. No online test
-sends a Responses image result yet.
+`adapters.openai_input_problems(items)` checks the items' shapes offline; it takes the
+whole next input, letting the model's own items (`reasoning`, `function_call`,
+`tool_search_call`, `tool_search_output`) pass.
+
+**Responses status.** A production user ran both agent libraries live on Azure OpenAI's
+Responses API (October 2026: the v1 endpoint through the plain OpenAI client, the default
+`definitions("openai-responses")`, `store=False` with
+`include=["reasoning.encrypted_content"]`, `images="output"` and `images="message"`), and
+every task completed. What they reported is in an offline round-trip test
+(`tests/test_tools_responses_roundtrip.py`, synthetic fixtures, no network): a deferred
+group's `function_call` carries the bare tool `name` plus a separate `namespace`, and
+`dispatch` takes the bare name; hosted tool search returns `tool_search_call`
+(`execution: "server"`) and `tool_search_output`, which go back in the next input
+unchanged and are never dispatched; reasoning items keep their `encrypted_content`. The
+documented loop -- `items += response.output`, dispatch only `function_call` items, then
+`render_results` -- needs nothing more. This repository's own online tests still run on
+Claude only.
 
 **Undo with several writers.** `undo` steps back through one history per document: the
 latest change, whoever made it. An application that runs a loop per slide on one deck,
