@@ -170,6 +170,12 @@ def worker_pid() -> int:
     return os.getpid()
 
 
+def fonts_seen(font_dirs) -> tuple[int, object]:
+    """What a renderer in a worker is handed as its font folders, and the worker's pid."""
+    import os
+    return os.getpid(), font_dirs
+
+
 # -- the toy tools -----------------------------------------------------------------------------
 
 

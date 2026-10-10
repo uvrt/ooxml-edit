@@ -2,6 +2,17 @@
 
 Versions are those in `pyproject.toml`; none is published to PyPI yet.
 
+## 0.13.0 -- 2026-10-10
+- The application's font folders: `Toolbox(font_dirs=[...])` is the default of its
+  sessions, `toolbox.session(font_dirs=...)` overrides it per session (`None`: the
+  renderers' default, `OOXML_FONT_DIRS` then the system's folders; `[]`: none, the
+  variable not read). It is `Session.font_dirs`, copied to every `DocumentEntry`
+  (`entry.font_dirs`, for a format's `checks`) and readable as `call.font_dirs`, for the
+  work a handler sends to a worker process. `DocumentFormat.configure(document, session)`
+  is called when a document joins a session (opened, created or adopted), so a format can
+  apply the setting to it. Application configuration only: no tool definition, schema or
+  prompt changes.
+
 ## 0.12.0 -- 2026-10-08
 - Rendering works in a daemonic process (a Celery prefork worker's child), which may not
   start the worker processes: the pool runs the work in-process there, by itself, and logs

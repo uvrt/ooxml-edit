@@ -81,6 +81,23 @@ served. A runaway render therefore delays later ones, each of which still times 
 own deadline. Where that matters, run the toolbox in a process that may start children --
 Celery's `--pool=threads` or `solo`, or a non-daemonic service -- and keep the pool.
 
+**Fonts.** An application that keeps licensed faces in a folder of its own names it once:
+`Toolbox(..., font_dirs=["/srv/app/fonts"])`, the default of every session the toolbox
+makes, or `toolbox.session(font_dirs=[...])` for one session. The folders are searched
+before the operating system's, for every render and every measurement of text -- `render`,
+`check`, the facts `save_document` and each changing call return. It is application
+configuration: no tool takes it and no definition or prompt mentions it, so the token
+budget is unchanged. `None` (the default) leaves the renderers' own default, which reads
+`OOXML_FONT_DIRS` (`os.pathsep`-separated) and then the system's folders; `[]` means no
+folders of the application's, the variable not read either. The session keeps it as
+`session.font_dirs` (path strings), copies it to each document's entry
+(`entry.font_dirs`), and offers it to handlers as `call.font_dirs`: a format passes it to
+the work it runs in a worker process -- which does not see the session, nor an environment
+variable set after the pool started -- and keys its render and check caches with it. A
+format applies it to a document as the document joins the session
+(`DocumentFormat.configure(document, session)`, called for opened, created and adopted
+documents alike).
+
 **OpenAI images.** On the Responses API a result's images go inside its
 `function_call_output` by default: `output` is then a list of `input_text` and
 `input_image`, which OpenAI's function-calling guide documents ("For functions that return
