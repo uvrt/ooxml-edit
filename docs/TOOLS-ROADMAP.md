@@ -532,7 +532,7 @@ The ids of removed items (LP2–LP6, LW4) are retired, not reused; P14 and LP16 
 | S7 | `replace_text` | replace everywhere, or exactly once | `doc`, `find`, `replace`, `scope`, `expect` (`one`/`all`), `regex` | count, addresses | docx `replace`/`anchor().replace`; pptx `find_text` + `resolve().text` | pptx: TL now, **LP11** `deck.replace()` later |
 | S8 | `render` | PNG of slides or pages | `doc`, `slides`/`pages`, `width` (≤2576) | images + sizes + token estimate | `render_png` | worker deadline; **LR4**, **LR5** |
 | S9 | `check` | facts "as Office shows it" | `doc`, `scope`, `include` (fit, collisions, facts, design, validate, reflow, fields), `boxes?` (box-overlap mode) | a report with addresses; no verdicts | `overflows`, `collisions(boxes=)`, slide facts, design facts, `validate`, `layout().compare` | LP15, LP19, LP24, LW1 |
-| S10 | `edit_chart` | add a chart from data; read a chart; data, titles, legend, data labels, gap width | `target`, `action` (read, add, set_values, set_value, add_category, remove_category, rename_category, add_series, remove_series, rename_series, set_title, set_axis_title, set_legend, show_data_labels, hide_data_labels, set_gap_width), add: `chart_type`, `categories`, `data[]` {name, values}, `box` (decks) or `width` (documents), `number_format`, `ref`; `series?`, `category?`, `values?`, `value?`, `text?`, `position?` | read: type, categories, series, number formats, workbook values; add: the new chart, its address (decks) or drawing id and paragraph (documents); otherwise the chart's state after the edit | `ooxml_edit.charts.Chart`, `add_chart` (both libraries adapt them); `read` runs as a read (`Tool.reads`) | S11 `read_chart` folded in (T5b); P18, P19 and W28 folded in (T4) |
+| S10 | `edit_chart` | add a chart from data; read a chart; data, titles, legend, data labels, gap width; axis scales, gridlines, series and point colours and markers, series type, chart text, point labels (round 3) | `target`, `action` (read, add, set_values, set_value, add_category, remove_category, rename_category, add_series, remove_series, rename_series, set_title, set_axis_title, set_legend, show_data_labels, hide_data_labels, set_gap_width, set_axis_scale, set_gridlines, format_series, format_point, set_series_type, set_text_style, set_point_labels), add: `chart_type`, `categories`, `data[]` {name, values, type?, size?}, `box` (decks) or `width` (documents), `number_format`, `ref`, `axis?` + `scale?`, `gridlines?`; `series?`, `category?`, `values?`, `value?`, `text?`, `position?`, `axis?`, `scale?`, `gridlines?`, `style?`, `part?`, `labels?`, `cells?`, `secondary?` | read: type, categories, series, number formats, scales, series formats, point labels, workbook values; add: the new chart, its address (decks) or drawing id and paragraph (documents); otherwise the chart's state after the edit | `ooxml_edit.charts.Chart`, `add_chart` (both libraries adapt them); `read` runs as a read (`Tool.reads`) | S11 `read_chart` folded in (T5b); P18, P19 and W28 folded in (T4) |
 | S12 | `edit_smartart` | node text, add or remove nodes | `target`, `action`, `node`, `text`, `parent?` | nodes | `Diagram.set_text/add_node/remove_node/add_child` | — |
 | S13 | `set_properties` | metadata | `title?`, `author?`, `language?`, `subject?` | properties | pptx `title`/`author`/`language`; docx `set_properties` | — |
 | S14 | `batch` | several calls as one: in order, all or none, one undo step | `ops[]` {tool, arguments} | each op's summary and data; checks once at the end | the dispatcher | core; non-strict (D14) |
@@ -576,7 +576,7 @@ With the shared tools, that is **35 definitions** reachable for a deck after T5b
 - **LP1 `pptx_agent.edit.arrange`: `align(shapes, edge, to)` and `distribute(shapes, axis, to, gap=None)`** (M). Done in T3.
   - These match PowerPoint's Align and Distribute: relative to the selection or the slide. They use `drawn_bounds` for rotated shapes and move groups as one; the whole call is one undo step.
 - **LP7 `slide.add_chart(type, categories, series, left, top, width, height, title=…)`,** on LE3 (M). Done in T4.
-- **LP8 chart formatting in `ooxml_edit.charts`** (M–L). Done in T4 for what a task uses: data labels on/off with a number format (`Chart.set_data_labels`), and the gap width (`set_gap_width`; p9 needs it, since at PowerPoint's default 219 its labels are wider than their columns). Left out, because no task uses them: series colour by theme colour (a new chart already takes the theme's accents in order, which is what p9's "theme colours" asks), and the value axis's min, max and major unit.
+- **LP8 chart formatting in `ooxml_edit.charts`** (M–L). Done in T4 for what a task uses: data labels on/off with a number format (`Chart.set_data_labels`), and the gap width (`set_gap_width`; p9 needs it, since at PowerPoint's default 219 its labels are wider than their columns). Left out, because no task uses them: series colour by theme colour (a new chart already takes the theme's accents in order, which is what p9's "theme colours" asks), and the value axis's min, max and major unit. Round 3 added the rest from production feedback (G1-G4, below).
 - **LP9 layout and master editing** (L). Trial 2's N17: template branding beyond the theme. Deferred (D8).
 - **LP11 `Document.replace(find, replace, slides=, regex=)`** (S): parity with docx.
 - **LP14 `LabelError.candidates`** (S): structured candidates for `valid_options`.
@@ -1222,6 +1222,26 @@ Every new golden replays to the same bytes and passes its check; PowerPoint expo
 
 **Budgets:** the cores are unchanged (`edit_chart` is deferred): decks 3,352 offline (about 4,961 counted), Word 2,384 (about 3,528). Every definition rose by 3 offline tokens (decks 10,221 -> 10,224, Word 11,080 -> 11,083), inside the guards (10,500 and 11,400), which stay.
 
+
+### Round 3 chart formatting (M) — done in ooxml-edit 0.15.0
+
+Production feedback G1-G4: a 1-5 maturity chart got an automatic 0-4.5 axis, ranked bar charts read bottom-up, no series or point colours, no target markers over columns, no chart text size or gridline control, no labelled effort-against-impact matrix.
+
+**Measured** on Office for Mac 16 (nl UI). The Insert tab's "Grafiek" gallery *is* in the accessibility tree now, as a window per submenu with the subtypes as radio buttons (with a chart selected it changes that chart's type rather than inserting one):
+- **Bubble** (PowerPoint and Word alike, but text sizes and the frame): series filled at 75% of the accent, no line, `invertIfNegative` 0, `bubble3D` 0; `bubbleScale` 100, `showNegBubbles` 0; the scatter's two value axes; workbook x | y | size ("X-waarden", "Y-waarden", "Grootte"); one series: automatic title, no legend.
+- **Filled radar:** `radarStyle filled`, each series filled in its accent, no line, no marker; otherwise the plain radar.
+- **Combination** (Clustered Column - Line, and on a secondary axis): the columns' gap width 150 and no overlap; the line plot (`marker` 1) on the same axis ids; no `c:crosses` on either primary axis; the secondary value axis at the right crossing at max, its category axis deleted.
+- **Gridlines** (Add Chart Element): minor 0.75 pt at 5% of the text colour; a category axis's major as the value axis's.
+- **Reversed categories** (a PowerPoint round trip, PDF and save): `maxMin` alone puts the value axis at the top, and PowerPoint rewrites its `axPos` to `t`; with the value axis crossing at max it stays at the bottom; crossing written on the category axis moves the category axis instead.
+- **Value From Cells** (a round trip): a series' `c15:datalabelsRange` with `showDataLabelsRange` draws the cells; on saving PowerPoint rewrites it as a `c:dLbl` per point holding a `CELLRANGE` field (`[CELLRANGE]`), `c15:dlblFieldTable`, `c15:xForSave` 1 -- the form `set_point_labels(cells=True)` writes.
+
+**Library.** `Chart.set_axis_scale`, `set_gridlines`, `format_series`, `format_point`, `set_series_type`, `set_text_style`, `set_point_labels` and their readers; `add_chart` kinds `radar_filled` and `bubble`, a series' `type`, `category_order`, `gridlines`, `bubble_scale`.
+
+**Tools.** Seven `edit_chart` actions; `scale`, `gridlines`, `style`, `part`, `labels`, `cells`, `secondary`. Budgets: the cores unchanged (deferred); every definition +646 offline (decks 11,113, Word 11,774), the guards raised to 11,200 and 11,850 rather than squeeze the descriptions.
+
+**Golden** p15 (decks): a maturity gap chart (columns in `tx2`, Procure highlighted, diamond target markers, 0-5 by 1, no gridlines, 10 pt) and an effort-against-impact bubble matrix labelled R1-R6 from the workbook, 10 calls, 28/28.
+
+**Office.** PowerPoint and Word open every new construct unprompted, draw it (PDF labels and values as written, nl locale), and keep it on a save.
 
 ## Open decisions
 

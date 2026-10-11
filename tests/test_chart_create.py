@@ -31,6 +31,8 @@ def data_for(kind: str):
         return QUARTERS, REGIONS[:1]
     if kind == "scatter":
         return [1, 2, 3.5, 5], REGIONS[:2]
+    if kind == "bubble":
+        return [1, 2, 3.5, 5], [dict(r, size=[3, 1, 2, 4]) for r in REGIONS[:2]]
     return QUARTERS, REGIONS
 
 
@@ -201,7 +203,9 @@ def test_a_chart_with_no_title_says_so():
 
 @pytest.mark.parametrize("kind, categories, series, message", [
     ("donut", QUARTERS, REGIONS, "chart type"),
-    ("radar_filled", QUARTERS, REGIONS, "chart type"),
+    ("area", QUARTERS, REGIONS, "chart type"),
+    ("bubble", [1, 2, 3, 4], REGIONS, "size"),
+    ("bar", QUARTERS, [{"name": "A", "values": [1, 2, 3, 4], "type": "line"}, *REGIONS], "horizontal bars"),
     ("column", [], REGIONS, "at least one category"),
     ("column", QUARTERS, [], "at least one series"),
     ("column", QUARTERS, [{"name": "A", "values": [1, 2]}], "2 values for 4"),

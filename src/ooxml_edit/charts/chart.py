@@ -63,12 +63,8 @@ _CACHE_OF = {"strRef": "c:strCache", "numRef": "c:numCache",
              "multiLvlStrRef": "c:multiLvlStrCache"}
 
 
-class ChartDataError(ValueError):
-    """A chart edit that cannot be made faithfully -- refused before anything changes."""
-
-
-class ChartDataWarning(UserWarning):
-    """A chart edit reached the chart's cache but not its workbook (none to reach)."""
+from .errors import ChartDataError, ChartDataWarning  # noqa: E402  (re-exported)
+from .styling import KEEP, ChartStyling  # noqa: E402,F401  (KEEP re-exported)
 
 
 # ------------------------------------------------------------------------------------------
@@ -250,6 +246,36 @@ class _Data:
             append_in_order(parent, pt)
 
 
+class _LabelRange(_Data):
+    """A series' Value From Cells labels (``c15:datalabelsRange``): a formula into the
+    workbook and a text cache, like a category range, so they move with the categories."""
+
+    C15 = "http://schemas.microsoft.com/office/drawing/2012/chart"
+
+    def __init__(self, element: Element) -> None:
+        self.container = None
+        self.ref = None
+        extensions = element.find(qn("c:extLst"))
+        for ext in [] if extensions is None else extensions.findall(qn("c:ext")):
+            node = ext.find(f"{{{self.C15}}}datalabelsRange")
+            if node is not None:
+                self.container = ext
+                self.ref = node
+                break
+
+    @property
+    def kind(self) -> str | None:
+        return None if self.ref is None else "labelRange"
+
+    @property
+    def formula(self) -> Element | None:
+        return None if self.ref is None else self.ref.find(f"{{{self.C15}}}f")
+
+    @property
+    def cache(self) -> Element | None:
+        return None if self.ref is None else self.ref.find(f"{{{self.C15}}}dlblRangeCache")
+
+
 def _idx(pt: Element) -> int:
     try:
         return int(pt.get("idx", "-1"))
@@ -282,11 +308,14 @@ class _Series:
         self.values = _Data(element.find(qn("c:val")) if element.find(qn("c:val")) is not None
                             else element.find(qn("c:yVal")))
         self.sizes = _Data(element.find(qn("c:bubbleSize")))
+        self.labels = _LabelRange(element)
 
     @property
     def point_sources(self) -> list[_Data]:
-        """Every source with one entry per category (a name has one, full stop)."""
-        return [d for d in (self.categories, self.values, self.sizes) if d.ref is not None]
+        """Every source with one entry per category (a name has one, full stop) -- a
+        series' Value From Cells labels too."""
+        return [d for d in (self.categories, self.values, self.sizes, self.labels)
+                if d.ref is not None]
 
     @property
     def order(self) -> int:
@@ -458,7 +487,7 @@ def _line_of(sheet_range: SheetRange, down: bool) -> tuple[int, int, int]:
 # ------------------------------------------------------------------------------------------
 
 
-class Chart:
+class Chart(ChartStyling):
     """The chart a :class:`~.host.GraphicHost` holds.  ``resolve`` is called afresh on every
     call, so a ``Chart`` survives undo.
 
@@ -1126,6 +1155,14 @@ class Chart:
     def _delete_series_cells(self, block: _Block, series: list[_Series],
                              doomed: _Series) -> None:
         sheet = block.sheet
+        labels = doomed.labels.range
+        if labels is not None:
+            line, start, length = _line_of(labels, block.down)
+            for position in range(start, start + length):
+                sheet.clear(block.cell(line, position))
+            header = self._header(block, series)
+            if header is not None and header == start - 1:
+                sheet.clear(block.cell(line, header))
         own = doomed.values.range
         if own is None:
             return

@@ -10,6 +10,9 @@ whichever Office document embeds them, so the editing lives here once:
   the chart's caches and its embedded workbook together, in one undo step;
 * :mod:`.create` -- :func:`add_chart`: a new chart from data, its workbook written to
   match, in the look PowerPoint or Word gives a new chart; the format adds only its frame;
+* :mod:`.styling` -- the look, on :class:`Chart`: axis scales, gridlines, colours and markers,
+  combination charts, chart text and point labels (:mod:`.format` writes the pieces,
+  :mod:`.actions` maps the shared tool's arguments);
 * :mod:`.workbook` -- the embedded ``.xlsx``, edited cell by cell: shared and inline strings,
   tables, formulas and the calculation chain kept in step;
 * :mod:`.diagram` -- :class:`Diagram`: SmartArt node text, and nodes added and removed, with
@@ -29,6 +32,8 @@ from .namespaces import A_NS, C_NS, DGM_NS, DSP_NS, SML_NS
 from .host import GraphicHost, chart_part, diagram_parts
 from .workbook import Workbook, Worksheet
 from .chart import Chart, ChartDataError, ChartDataWarning, Series, chart_model, workbook_part
+from .errors import FormatError
+from .styling import KEEP
 from .create import (CHART_KINDS, POWERPOINT_LOOK, WORD_LOOK, ChartLook, NewChart,
                      add_chart)
 from .diagram import Diagram, DiagramDrawingError, DiagramNode, diagram_model
@@ -43,7 +48,7 @@ from .model import (
 __all__ = [
     "A_NS", "C_NS", "CHART_KINDS", "DGM_NS", "DSP_NS", "POWERPOINT_LOOK", "SML_NS",
     "WORD_LOOK", "ChartLook", "NewChart", "add_chart",
-    "Chart", "ChartDataError", "ChartDataWarning", "ChartModelError", "Diagram",
+    "Chart", "ChartDataError", "ChartDataWarning", "FormatError", "KEEP", "ChartModelError", "Diagram",
     "DiagramDrawingError", "DiagramNode", "GraphicHost", "Series", "Workbook", "Worksheet",
     "apply_chart_model", "apply_diagram_model", "canonical_chart", "canonical_diagram",
     "chart_model", "chart_part", "diagram_model", "diagram_parts", "workbook_part",
