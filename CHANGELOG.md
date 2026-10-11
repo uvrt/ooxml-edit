@@ -2,6 +2,48 @@
 
 Versions are those in `pyproject.toml`; none is published to PyPI yet.
 
+## 0.15.0 -- unreleased
+- Chart formatting (production feedback round 3, G1-G4), on `Chart` from the new
+  `charts.styling` (with `charts.format`, `charts.actions` and `charts.errors`):
+  - `set_axis_scale(axis, minimum=, maximum=, major_unit=, minor_unit=, number_format=,
+    reverse=)` -- left out: kept, `None`: automatic again; `axis` is `category`/`value` or
+    `x`/`y` (the horizontal and vertical axis). `reverse=True` writes `c:orientation
+    val="maxMin"` and crosses the other axis at its maximum (`c:crosses val="max"`): measured
+    in PowerPoint 16, `maxMin` alone moves the value axis to the top and PowerPoint rewrites
+    its `axPos`. `axis_scale(axis)`, `scales`, `axis_names()` read them back.
+  - `set_gridlines(axis, major=, minor=)` in Office's style (major 15%, minor 5% of the text
+    colour, measured).
+  - `format_series(series, fill=, line=, line_width=, dash=, marker=, marker_size=,
+    marker_fill=, marker_line=)` and `format_point(series, category, ...)` (a `c:dPt` that
+    starts from the series' look, kept on its point as categories move), with the colour
+    specifications a deck's shapes take (`tx2`, `accent1 lumMod=60% lumOff=40%`, `1F4E79`;
+    `None` none); `series_format()` reads them.
+  - `set_series_type(series, "line" | "column", secondary_axis=False)`: a column series
+    drawn as a line on the same axes (or on a secondary value axis, built as PowerPoint's
+    "Clustered Column - Line on Secondary Axis", measured), and back; horizontal bars are
+    refused (PowerPoint cannot combine them with a line).
+  - `set_text_style(part=None | "title" | "axis_titles" | "axis_labels" | "data_labels" |
+    "legend", font=, size=, bold=, color=)` and `text_style(part)`.
+  - `set_point_labels(series, labels, position=, show_value=False, cells=False)`: one
+    `c:dLbl` with its own text per point; `cells=True` writes the labels into a workbook
+    column after the data and links them as PowerPoint's "Value From Cells" writes them
+    (`c15:datalabelsRange`, `CELLRANGE` fields, `c15:xForSave`; measured by a PowerPoint
+    round trip), kept in step when categories are added or removed. `point_labels()` reads
+    them; positions are checked against what each chart type takes.
+- `add_chart`: the kinds `radar_filled` and `bubble` (measured on Insert > Chart in
+  PowerPoint and Word: a filled radar's series filled, no line or marker; a bubble's at 75%
+  opacity with no line, `bubbleScale` 100, the workbook x | y | size), a column series'
+  `"type": "line"` (Office's combination chart, measured: gap width 150, no overlap, the line
+  plot on the same axes, no `c:crosses`), `category_order="reversed"`, `gridlines=False` and
+  `bubble_scale`. The workbook's shared-string `count` now counts every reference.
+- `edit_chart`: the actions `set_axis_scale`, `set_gridlines`, `format_series`,
+  `format_point`, `set_series_type`, `set_text_style` and `set_point_labels`; the types
+  `radar_filled` and `bubble`; the parameters `scale`, `gridlines`, `style`, `part`,
+  `labels`, `cells` and `secondary`; label positions in `position`; `add` takes `axis` with
+  `scale` and `gridlines`, and `data` a series' `type` and `size`. `read` adds `types`,
+  `scales`, `series_format` and `point_labels`. The tool stays deferred and non-strict; the
+  deck's and the document's every-definition estimates grow by 646 tokens, the cores not.
+
 ## 0.14.0 -- unreleased
 - `render` and `check` let the document's lock go for their slow part: the handler takes a
   snapshot under the lock (bytes, version, ids), the worker rasterises or measures it with

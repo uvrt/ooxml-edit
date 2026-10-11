@@ -69,8 +69,17 @@ CHART_KINDS: dict[str, tuple[str, str | None, str | None]] = {
     "line": ("line", None, "standard"),
     "pie": ("pie", None, None),
     "scatter": ("scatter", None, None),
-    "radar": ("radar", None, None),
+    "radar": ("radar", None, "marker"),
+    "radar_filled": ("radar", None, "filled"),
+    "bubble": ("bubble", None, None),
 }
+
+#: The kinds whose series may be drawn as a line instead (a combination chart): columns.
+#: PowerPoint cannot combine horizontal bars with a line.
+COMBO_KINDS = ("column", "stacked_column")
+
+#: The kinds whose categories are numbers -- x values.
+XY_KINDS = ("scatter", "bubble")
 
 #: Legend positions, as ``c:legendPos`` spells them.
 LEGEND_POSITIONS = {"bottom": "b", "right": "r", "top": "t", "left": "l", "top_right": "tr"}
@@ -82,7 +91,7 @@ DEFAULT_LEGEND = "default"
 
 def default_legend(kind: str) -> str:
     """The legend position Office gives a new chart of ``kind``."""
-    return "top" if kind == "radar" else "bottom"
+    return "top" if kind in ("radar", "radar_filled") else "bottom"
 
 #: Office's colour cycle for series (and a pie's slices): the six accents, then the six again
 #: in each of these variations (Office's "Colorful palette 1", the colour style of a new
@@ -163,21 +172,54 @@ def _number(value: Any, what: str) -> "int | float | None":
     return value
 
 
-def chart_data(kind: str, categories: Sequence, series: Sequence) -> tuple[list, list[dict]]:
-    """Check a new chart's data and return it as ``(categories, [{"name", "values"}])``.
+def chart_data(kind: str, categories: Sequence | None, series: Sequence
+               ) -> tuple[list, list[dict]]:
+    """Check a new chart's data and return it as ``(categories, [{"name", "values", "type",
+    "size"}])``.
 
-    ``categories`` are text labels (numbers are allowed and kept numeric); a scatter chart's
-    are its x values, numbers.  Each series is ``{"name": str, "values": [number | None]}``
-    (or a ``(name, values)`` pair), one value per category; ``None`` is a blank."""
+    ``categories`` are text labels (numbers are allowed and kept numeric); a scatter or
+    bubble chart's are its x values, numbers.  Each series is ``{"name": str, "values":
+    [number | None]}`` (or a ``(name, values)`` pair), one value per category; ``None`` is a
+    blank.  A column chart's series may say ``"type": "line"`` (a combination chart); a
+    bubble chart's give ``"size"``, one bubble size per point -- or ``{"name", "x", "y",
+    "size"}`` with ``categories`` ``None``, every series over the same x values."""
     if kind not in CHART_KINDS:
         raise ChartDataError(f"chart type {kind!r}; one of {', '.join(CHART_KINDS)}")
+    entries = []
+    for index, entry in enumerate(series):
+        if isinstance(entry, dict):
+            allowed = {"name", "values", "type"} | ({"size", "x", "y"} if kind == "bubble" else set())
+            if set(entry) - allowed:
+                raise ChartDataError(f"series {index}: unknown key "
+                                     f"{sorted(set(entry) - allowed)[0]!r}; a series is "
+                                     f"{{{', '.join(repr(k) for k in sorted(allowed))}}}")
+            entry = dict(entry)
+            if "y" in entry:
+                if "values" in entry:
+                    raise ChartDataError(f"series {index}: give values or y, not both")
+                entry["values"] = entry.pop("y")
+            if "values" not in entry:
+                raise ChartDataError(f"series {index} has no values")
+        else:
+            name, values = entry
+            entry = {"name": name, "values": values}
+        entries.append(entry)
+    if kind == "bubble" and categories is None:
+        xs = [entry.get("x") for entry in entries]
+        if not entries or any(x is None for x in xs):
+            raise ChartDataError("a bubble chart needs x values: categories, or x in each series")
+        if any(list(x) != list(xs[0]) for x in xs):
+            raise ChartDataError("a bubble chart's series share their x values")
+        categories = list(xs[0])
+    elif categories is None:
+        raise ChartDataError("a chart needs categories")
     labels = list(categories)
     if not labels:
         raise ChartDataError("a chart needs at least one category")
     for index, label in enumerate(labels):
-        if kind == "scatter":
+        if kind in XY_KINDS:
             if label is None or isinstance(label, str):
-                raise ChartDataError(f"x value {index}: {label!r} is not a number (a scatter "
+                raise ChartDataError(f"x value {index}: {label!r} is not a number (a {kind} "
                                      f"chart's categories are its x values)")
             _number(label, f"x value {index}")
         elif not isinstance(label, str):
@@ -185,27 +227,57 @@ def chart_data(kind: str, categories: Sequence, series: Sequence) -> tuple[list,
             if label is None:
                 raise ChartDataError(f"category {index} has no label")
     out = []
-    for index, entry in enumerate(series):
-        if isinstance(entry, dict):
-            if set(entry) - {"name", "values"} or "values" not in entry:
-                raise ChartDataError(f"series {index} is {{\"name\", \"values\"}}")
-            name, values = entry.get("name"), entry["values"]
-        else:
-            name, values = entry
+    for index, entry in enumerate(entries):
+        name, values = entry.get("name"), entry["values"]
         if name is not None and not isinstance(name, str):
             raise ChartDataError(f"series {index}: the name is text")
         values = [_number(v, f"series {index} value {k}") for k, v in enumerate(values)]
         if len(values) != len(labels):
             raise ChartDataError(f"series {index} has {len(values)} values for "
                                  f"{len(labels)} categories")
-        out.append({"name": name, "values": values})
+        if "x" in entry and list(entry["x"]) != labels:
+            raise ChartDataError(f"series {index}: x values differ from the categories")
+        kind_of = entry.get("type") or None
+        if kind_of not in (None, "column", "line"):
+            raise ChartDataError(f"series {index}: type {kind_of!r}; 'line' or 'column'")
+        if kind_of == "line" and kind not in COMBO_KINDS:
+            raise ChartDataError(
+                f"series {index}: only a column chart draws a series as a line"
+                + ("; PowerPoint cannot combine horizontal bars with a line" if "bar" in kind
+                   else ""))
+        if kind_of == "column":
+            if kind not in COMBO_KINDS:
+                raise ChartDataError(f"series {index}: type 'column' is for a column chart")
+            kind_of = None
+        size = None
+        if kind == "bubble":
+            if entry.get("size") is None:
+                raise ChartDataError(f"series {index}: a bubble chart's series give size, one "
+                                     f"per point")
+            size = [_number(v, f"series {index} size {k}") for k, v in enumerate(entry["size"])]
+            if len(size) != len(labels):
+                raise ChartDataError(f"series {index} has {len(size)} sizes for "
+                                     f"{len(labels)} points")
+            if any(v is not None and v < 0 for v in size):
+                raise ChartDataError(f"series {index}: a bubble size is 0 or more")
+        out.append({"name": name, "values": values, "type": kind_of, "size": size})
     if not out:
         raise ChartDataError("a chart needs at least one series")
     if kind == "pie" and len(out) > 1:
         raise ChartDataError("a pie chart shows one series")
     if len(out) > 255:
         raise ChartDataError("at most 255 series")
+    if out and all(entry["type"] == "line" for entry in out):
+        raise ChartDataError("every series is a line: make it a line chart")
     return labels, out
+
+
+def data_columns(kind: str, data: Sequence[dict]) -> list[tuple[int, int | None]]:
+    """``(values column, sizes column)`` of each series in the workbook, 1-based: the
+    values beside the categories (column A), a bubble chart's sizes right of its values."""
+    if kind == "bubble":
+        return [(2 + 2 * k, 3 + 2 * k) for k in range(len(data))]
+    return [(2 + k, None) for k in range(len(data))]
 
 
 # ------------------------------------------------------------------------------------------
@@ -375,11 +447,15 @@ def _unique_id(index: int, tail: str) -> Element:
     return _e("c:extLst", None, ext)
 
 
-def _series(kind: str, index: int, name: str | None, values: list, labels: list,
-            format_code: str, tail: str) -> Element:
-    plot = CHART_KINDS[kind][0]
+def _series(kind: str, index: int, entry: dict, labels: list, format_code: str, tail: str,
+            column: int, size_column: int | None) -> Element:
+    """A new ``c:ser``: series ``index`` of a ``kind`` chart, its values in workbook column
+    ``column`` (a bubble chart's sizes in ``size_column``), drawn as Office draws it."""
+    plot, _, style = CHART_KINDS[kind]
+    if entry.get("type") == "line":
+        plot = "line"
+    name, values = entry["name"], entry["values"]
     count = len(labels)
-    column = index + 2
     ser = _e("c:ser", None, _val("c:idx", index), _val("c:order", index))
     if name is not None:
         ser.append(_e("c:tx", None, _str_ref(_formula(column, 1), [name])))
@@ -387,6 +463,9 @@ def _series(kind: str, index: int, name: str | None, values: list, labels: list,
     if plot == "bar":
         ser.append(_sp(_fill(color), _no_line()))
         ser.append(_val("c:invertIfNegative", 0))
+    elif plot == "radar" and style == "filled":
+        # Office's filled radar: the area in the series colour, no line, no marker (measured).
+        ser.append(_sp(_fill(color), _no_line()))
     elif plot in ("line", "radar"):
         ser.append(_sp(_e("a:ln", {"w": "28575", "cap": "rnd"}, _fill(color), _e("a:round"))))
         ser.append(_e("c:marker", None, _val("c:symbol", "none")))
@@ -394,18 +473,28 @@ def _series(kind: str, index: int, name: str | None, values: list, labels: list,
         ser.append(_sp(_e("a:ln", {"w": "19050", "cap": "rnd"}, _e("a:noFill"), _e("a:round"))))
         ser.append(_e("c:marker", None, _val("c:symbol", "circle"), _val("c:size", 5),
                       _sp(_fill(color), _e("a:ln", {"w": "9525"}, _fill(series_color(index))))))
+    elif plot == "bubble":
+        # Office's bubble: the series colour at 75% opacity, no line (measured).
+        translucent = series_color(index)
+        translucent.append(_val("a:alpha", 75000))
+        ser.append(_sp(_fill(translucent), _no_line()))
+        ser.append(_val("c:invertIfNegative", 0))
     elif plot == "pie":
         for point in range(count):
             ser.append(_e("c:dPt", None, _val("c:idx", point), _val("c:bubble3D", 0),
                           _sp(_fill(series_color(point)),
                               _e("a:ln", {"w": "19050"}, _fill(scheme("lt1"))))))
     values_formula = _formula(column, 2, count + 1)
-    if plot == "scatter":
+    if plot in ("scatter", "bubble"):
         ser.append(_e("c:xVal", None, _num_ref(_formula(1, 2, count + 1), labels, "General")))
         ser.append(_e("c:yVal", None, _num_ref(values_formula, values, format_code)))
     else:
         ser.append(_e("c:cat", None, _category_ref(labels, count)))
         ser.append(_e("c:val", None, _num_ref(values_formula, values, format_code)))
+    if plot == "bubble":
+        ser.append(_e("c:bubbleSize", None, _num_ref(_formula(size_column, 2, count + 1),
+                                                     entry["size"], "General")))
+        ser.append(_val("c:bubble3D", 0))
     if plot in ("line", "scatter"):
         ser.append(_val("c:smooth", 0))
     ser.append(_unique_id(index, tail))
@@ -444,7 +533,7 @@ def _axes(kind: str, ids: tuple[str, str], look: ChartLook, lang: str | None,
           format_code: str, titles: dict[str, str]) -> list[Element]:
     plot, direction, _ = CHART_KINDS[kind]
     first, second = ids
-    if plot == "scatter":
+    if plot in ("scatter", "bubble"):
         x = _axis_common("c:valAx", first, second, "b", look, lang, gridlines=True,
                          line=25000, format_code="General")
         x.append(_val("c:crossBetween", "midCat"))
@@ -474,15 +563,33 @@ def _axes(kind: str, ids: tuple[str, str], look: ChartLook, lang: str | None,
     return [axis for axis, _, _ in axes]
 
 
-def chart_space(kind: str, categories: Sequence, series: Sequence, *, title: str | None = None,
-                axis_titles: dict[str, str] | None = None, legend: str | None = DEFAULT_LEGEND,
-                number_format: str | None = None, look: ChartLook = POWERPOINT_LOOK,
-                lang: str | None = "en-US", seed: str = "", workbook_rel: str = "rId1"
-                ) -> Element:
+def _options(kind: str, category_order: str, gridlines: bool, bubble_scale: int | None) -> None:
+    if category_order not in ("normal", "reversed"):
+        raise ChartDataError("category_order is 'normal' or 'reversed'")
+    if category_order == "reversed" and kind == "pie":
+        raise ChartDataError("a pie chart has no category axis to reverse")
+    if not isinstance(gridlines, bool):
+        raise ChartDataError("gridlines is true or false")
+    if bubble_scale is not None:
+        if kind != "bubble":
+            raise ChartDataError("bubble_scale is for a bubble chart")
+        if isinstance(bubble_scale, bool) or not isinstance(bubble_scale, int) \
+                or not 0 <= bubble_scale <= 300:
+            raise ChartDataError("bubble_scale is a whole percentage, 0-300")
+
+
+def chart_space(kind: str, categories: Sequence | None, series: Sequence, *,
+                title: str | None = None, axis_titles: dict[str, str] | None = None,
+                legend: str | None = DEFAULT_LEGEND, number_format: str | None = None,
+                look: ChartLook = POWERPOINT_LOOK, lang: str | None = "en-US", seed: str = "",
+                workbook_rel: str = "rId1", category_order: str = "normal",
+                gridlines: bool = True, bubble_scale: int | None = None) -> Element:
     """The ``c:chartSpace`` of a new chart (see :func:`add_chart`).  ``workbook_rel`` is the
     id of the chart part's relationship to its workbook."""
     labels, data = chart_data(kind, categories, series)
+    _options(kind, category_order, gridlines, bubble_scale)
     plot_kind, direction, grouping = CHART_KINDS[kind]
+    combo = any(entry["type"] == "line" for entry in data)
     format_code = number_format or "General"
     titles = dict(axis_titles or {})
     if set(titles) - {"category", "value"}:
@@ -522,24 +629,33 @@ def chart_space(kind: str, categories: Sequence, series: Sequence, *, title: str
     elif plot_kind == "pie":
         plot = _e("c:pieChart", None, _val("c:varyColors", 1))
     elif plot_kind == "radar":
-        # Office's "marker" style with each series' marker off: lines only (measured).
-        plot = _e("c:radarChart", None, _val("c:radarStyle", "marker"), _val("c:varyColors", 0))
+        # Office's "marker" style with each series' marker off: lines only; "filled" for a
+        # filled radar (measured).
+        plot = _e("c:radarChart", None, _val("c:radarStyle", grouping), _val("c:varyColors", 0))
+    elif plot_kind == "bubble":
+        plot = _e("c:bubbleChart", None, _val("c:varyColors", 0))
     else:
         plot = _e("c:scatterChart", None, _val("c:scatterStyle", "lineMarker"),
                   _val("c:varyColors", 0))
-    for index, entry in enumerate(data):
-        plot.append(_series(kind, index, entry["name"], entry["values"], labels, format_code,
-                            tail))
+    lines = _e("c:lineChart", None, _val("c:grouping", "standard"), _val("c:varyColors", 0))
+    for index, (entry, (column, sizes)) in enumerate(zip(data, data_columns(kind, data))):
+        (lines if entry["type"] == "line" else plot).append(
+            _series(kind, index, entry, labels, format_code, tail, column, sizes))
     plot.append(_no_labels(pie=plot_kind == "pie"))
     if plot_kind == "bar":
         stacked = grouping == "stacked"
         # Clustered: Office's 219 (columns) and 182 (bars), measured; overlap -27 for columns.
         # Stacked: overlap 100 is what stacking needs; the gap width 150 is the schema's default.
-        plot.append(_val("c:gapWidth", 150 if stacked else (219 if direction == "col" else 182)))
+        # Columns with a line: 150 and no overlap (Office's combination chart, measured).
+        plot.append(_val("c:gapWidth", 150 if stacked or combo
+                         else (219 if direction == "col" else 182)))
         if stacked:
             plot.append(_val("c:overlap", 100))
-        elif direction == "col":
+        elif direction == "col" and not combo:
             plot.append(_val("c:overlap", -27))
+    elif plot_kind == "bubble":
+        plot.append(_val("c:bubbleScale", 100 if bubble_scale is None else bubble_scale))
+        plot.append(_val("c:showNegBubbles", 0))
     elif plot_kind == "line":
         plot.append(_val("c:smooth", 0))
     elif plot_kind == "pie":
@@ -548,8 +664,34 @@ def chart_space(kind: str, categories: Sequence, series: Sequence, *, title: str
         plot.append(_val("c:axId", first))
         plot.append(_val("c:axId", second))
     plot_area.append(plot)
+    if combo:
+        # The line plot shares the columns' axes (Office's combination chart, measured).
+        lines.append(_no_labels())
+        lines.append(_val("c:marker", 1))
+        lines.append(_val("c:smooth", 0))
+        lines.append(_val("c:axId", first))
+        lines.append(_val("c:axId", second))
+        plot_area.append(lines)
     if plot_kind != "pie":
-        for axis in _axes(kind, (first, second), look, lang, format_code, titles):
+        axes = _axes(kind, (first, second), look, lang, format_code, titles)
+        if combo:  # Office writes a combination chart's axes without c:crosses (measured)
+            for axis in axes:
+                for node in axis.findall(f"{{{C_NS}}}crosses"):
+                    axis.remove(node)
+        if not gridlines:
+            for axis in axes:
+                for node in axis.findall(f"{{{C_NS}}}majorGridlines"):
+                    axis.remove(node)
+        if category_order == "reversed":
+            # As PowerPoint's "Categories in reverse order", with the value axis kept where
+            # it was by crossing it at the maximum category (measured).
+            axes[0].find(f"{{{C_NS}}}scaling/{{{C_NS}}}orientation").set("val", "maxMin")
+            crosses = axes[1].find(f"{{{C_NS}}}crosses")
+            if crosses is None:
+                crosses = _val("c:crosses", "max")
+                axes[1].find(f"{{{C_NS}}}crossAx").addnext(crosses)
+            crosses.set("val", "max")
+        for axis in axes:
             plot_area.append(axis)
     plot_area.append(_none_sp())
     chart.append(plot_area)
@@ -585,16 +727,20 @@ _PKG_RELS = "http://schemas.openxmlformats.org/package/2006/relationships"
 _DOC_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 
 
-def chart_workbook(kind: str, categories: Sequence, series: Sequence, *,
+def chart_workbook(kind: str, categories: Sequence | None, series: Sequence, *,
                    number_format: str | None = None) -> bytes:
     """The ``.xlsx`` behind a new chart: ``Sheet1`` with the categories in column A from row
-    2, each series' name in row 1 and its values below, shared strings, and the number format
-    on the value cells.  Written with the standard library and nothing of Office's."""
+    2, each series' name in row 1 and its values below (a bubble chart's sizes in the next
+    column, headed "Size", as Office lays a bubble chart out), shared strings, and the number
+    format on the value cells.  Written with the standard library and nothing of Office's."""
     labels, data = chart_data(kind, categories, series)
     strings: list[str] = []
     index_of: dict[str, int] = {}
 
+    references = [0]
+
     def shared(text: str) -> int:
+        references[0] += 1
         if text not in index_of:
             index_of[text] = len(strings)
             strings.append(text)
@@ -604,10 +750,13 @@ def chart_workbook(kind: str, categories: Sequence, series: Sequence, *,
     value_style = ' s="1"' if custom else ""
     rows = []
     header = []
-    for column, entry in enumerate(data, start=2):
+    columns = data_columns(kind, data)
+    for entry, (column, sizes) in zip(data, columns):
         if entry["name"] is not None:
             header.append(f'<c r="{column_letters(column)}1" t="s"><v>{shared(entry["name"])}</v></c>')
-    last_column = column_letters(len(data) + 1)
+        if sizes is not None:
+            header.append(f'<c r="{column_letters(sizes)}1" t="s"><v>{shared("Size")}</v></c>')
+    last_column = column_letters(max(c if s is None else s for c, s in columns))
     if header:
         rows.append(f'<row r="1">{"".join(header)}</row>')
     for row, label in enumerate(labels, start=2):
@@ -616,11 +765,14 @@ def chart_workbook(kind: str, categories: Sequence, series: Sequence, *,
             cells.append(f'<c r="A{row}" t="s"><v>{shared(label)}</v></c>')
         else:
             cells.append(f'<c r="A{row}"><v>{number_text(label)}</v></c>')
-        for column, entry in enumerate(data, start=2):
+        for entry, (column, sizes) in zip(data, columns):
             value = entry["values"][row - 2]
             if value is not None:
                 cells.append(f'<c r="{column_letters(column)}{row}"{value_style}>'
                              f'<v>{number_text(value)}</v></c>')
+            size = None if sizes is None else entry["size"][row - 2]
+            if size is not None:
+                cells.append(f'<c r="{column_letters(sizes)}{row}"><v>{number_text(size)}</v></c>')
         rows.append(f'<row r="{row}">{"".join(cells)}</row>')
     first_row = 1 if header else 2
     dimension = f"A{first_row}:{last_column}{len(labels) + 1}"
@@ -632,7 +784,7 @@ def chart_workbook(kind: str, categories: Sequence, series: Sequence, *,
     preserve = ' xml:space="preserve"'
     sst = "".join(f"<si><t{preserve if s != s.strip() else ''}>{escape(s)}</t></si>"
                   for s in strings)
-    shared_strings = (f'<sst xmlns="{_SML}" count="{len(strings)}" uniqueCount="{len(strings)}">'
+    shared_strings = (f'<sst xmlns="{_SML}" count="{references[0]}" uniqueCount="{len(strings)}">'
                       f'{sst}</sst>')
     formats = (f'<numFmts count="1"><numFmt numFmtId="164" formatCode={quoteattr(number_format)}/>'
                f'</numFmts>' if custom else "")
@@ -696,17 +848,24 @@ def _charts_folder(part: str) -> str:
     return f"{top}/charts" if "/" in part.strip("/") else "charts"
 
 
-def add_chart(package, part: str, kind: str, categories: Sequence, series: Sequence, *,
+def add_chart(package, part: str, kind: str, categories: Sequence | None, series: Sequence, *,
               title: str | None = None, axis_titles: dict[str, str] | None = None,
               legend: str | None = DEFAULT_LEGEND, number_format: str | None = None,
-              look: ChartLook = POWERPOINT_LOOK, lang: str | None = "en-US") -> NewChart:
+              look: ChartLook = POWERPOINT_LOOK, lang: str | None = "en-US",
+              category_order: str = "normal", gridlines: bool = True,
+              bubble_scale: int | None = None) -> NewChart:
     """Write a new chart into ``package`` and relate it to ``part`` (the part whose
     relationships the frame's ``r:id`` resolves in) -- everything but the frame, which the format adds around
     :meth:`NewChart.graphic`.
 
     ``kind`` is one of :data:`CHART_KINDS`; ``categories`` the category labels (a scatter
-    chart's x values); ``series`` a list of ``{"name", "values"}``, one value per category,
-    ``None`` for a blank.  ``title`` and ``axis_titles`` (``{"category": ..., "value":
+    or bubble chart's x values); ``series`` a list of ``{"name", "values"}``, one value per
+    category, ``None`` for a blank -- with ``"type": "line"`` for a series of a column chart
+    drawn as a line (Office's combination chart), and a bubble chart's ``"size"`` (or
+    ``{"name", "x", "y", "size"}``, ``categories`` ``None``) -- see :func:`chart_data`.
+    ``category_order="reversed"`` puts the first category at the top of a bar chart (at the
+    right of a column chart), the value axis staying where it was; ``gridlines=False`` draws
+    none; ``bubble_scale`` is the bubbles' size in percent of Office's default (100).  ``title`` and ``axis_titles`` (``{"category": ..., "value":
     ...}``) are text; ``legend`` a position from :data:`LEGEND_POSITIONS`, ``None`` for none
     or ``"default"`` for Office's (the bottom; a radar chart's top);
     ``number_format`` an Excel format code for the values (``#,##0.0``).  ``look`` is the
@@ -717,12 +876,19 @@ def add_chart(package, part: str, kind: str, categories: Sequence, series: Seque
     is written.
     """
     labels, data = chart_data(kind, categories, series)
+    _options(kind, category_order, gridlines, bubble_scale)
+    data = [{key: value for key, value in entry.items() if value is not None or key == "name"}
+            for entry in data]
+    for entry in data:
+        entry.setdefault("values", [])
     folder = _charts_folder(part)
     chart_name = package.unused_part_name(f"{folder}/chart{{n}}.xml")
     embeddings = posixpath.join(posixpath.dirname(folder), "embeddings")
     book_name = package.unused_part_name(f"{embeddings}/Microsoft_Excel_Worksheet{{n}}.xlsx")
     space = chart_space(kind, labels, data, title=title, axis_titles=axis_titles, legend=legend,
-                        number_format=number_format, look=look, lang=lang, seed=chart_name)
+                        number_format=number_format, look=look, lang=lang, seed=chart_name,
+                        category_order=category_order, gridlines=gridlines,
+                        bubble_scale=bubble_scale)
     book = chart_workbook(kind, labels, data, number_format=number_format)
     package.add_part(book_name, book, CT_XLSX)
     package.add_part(chart_name, serialize(space), CT_CHART, override=True)
@@ -735,7 +901,7 @@ def add_chart(package, part: str, kind: str, categories: Sequence, series: Seque
     return NewChart(part=chart_name, workbook=book_name, rel_id=rel_id)
 
 
-__all__ = ["ACCENTS", "CHART_KINDS", "ChartLook", "DEFAULT_LEGEND", "LEGEND_POSITIONS",
+__all__ = ["ACCENTS", "CHART_KINDS", "COMBO_KINDS", "XY_KINDS", "data_columns", "ChartLook", "DEFAULT_LEGEND", "LEGEND_POSITIONS",
            "NewChart", "POWERPOINT_LOOK", "VARIATIONS", "WORD_LOOK", "add_chart", "chart_data",
            "chart_space", "chart_workbook", "default_legend", "series_color",
            "text_properties", "title_element", "title_text"]

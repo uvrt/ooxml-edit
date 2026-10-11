@@ -49,6 +49,12 @@ _AXIS_HEAD = ("c:axId", "c:scaling", "c:delete", "c:axPos", "c:majorGridlines",
               "c:minorGridlines", "c:title", "c:numFmt", "c:majorTickMark", "c:minorTickMark",
               "c:tickLblPos", "c:spPr", "c:txPr", "c:crossAx", ("c:crosses", "c:crossesAt"))
 
+_PLOT_TAGS = ("c:areaChart", "c:area3DChart", "c:lineChart", "c:line3DChart", "c:stockChart",
+              "c:radarChart", "c:scatterChart", "c:pieChart", "c:pie3DChart",
+              "c:doughnutChart", "c:barChart", "c:bar3DChart", "c:ofPieChart",
+              "c:surfaceChart", "c:surface3DChart", "c:bubbleChart")
+_AXIS_TAGS = ("c:valAx", "c:catAx", "c:dateAx", "c:serAx")
+
 #: The chart part (``CT_ChartSpace`` and below).
 CHART_CHILD_ORDER: dict[str, tuple] = {
     "c:chart": ("c:title", "c:autoTitleDeleted", "c:pivotFmts", "c:view3D", "c:floor",
@@ -85,6 +91,28 @@ CHART_CHILD_ORDER: dict[str, tuple] = {
     "c:multiLvlStrCache": ("c:ptCount", "c:lvl", "c:extLst"),
     "c:lvl": ("c:pt", "c:extLst"),
     "c:rich": _TEXT_ORDER,
+    "c:tx": ("c:strRef", "c:rich", "c:v"),
+    "c:scaling": ("c:logBase", "c:orientation", "c:max", "c:min", "c:extLst"),
+    "c:dPt": ("c:idx", "c:invertIfNegative", "c:marker", "c:bubble3D", "c:explosion", "c:spPr",
+              "c:pictureOptions", "c:extLst"),
+    "c:dLbl": ("c:idx", "c:delete", "c:layout", "c:tx", "c:numFmt", "c:spPr", "c:txPr",
+               "c:dLblPos", "c:showLegendKey", "c:showVal", "c:showCatName", "c:showSerName",
+               "c:showPercent", "c:showBubbleSize", "c:separator", "c:extLst"),
+    "c:marker": ("c:symbol", "c:size", "c:spPr", "c:extLst"),
+    "c:lineChart": ("c:grouping", "c:varyColors", "c:ser", "c:dLbls", "c:dropLines",
+                    "c:hiLowLines", "c:upDownBars", "c:marker", "c:smooth", "c:axId",
+                    "c:extLst"),
+    "c:radarChart": ("c:radarStyle", "c:varyColors", "c:ser", "c:dLbls", "c:axId", "c:extLst"),
+    "c:scatterChart": ("c:scatterStyle", "c:varyColors", "c:ser", "c:dLbls", "c:axId",
+                       "c:extLst"),
+    "c:bubbleChart": ("c:varyColors", "c:ser", "c:dLbls", "c:bubble3D", "c:bubbleScale",
+                      "c:showNegBubbles", "c:sizeRepresents", "c:axId", "c:extLst"),
+    "c:plotArea": ("c:layout", _PLOT_TAGS, _AXIS_TAGS, "c:dTable", "c:spPr", "c:extLst"),
+    # CT_ShapeProperties, as a chart element's c:spPr holds it.
+    "c:spPr": ("a:xfrm", ("a:custGeom", "a:prstGeom"),
+               ("a:noFill", "a:solidFill", "a:gradFill", "a:blipFill", "a:pattFill",
+                "a:grpFill"), "a:ln", ("a:effectLst", "a:effectDag"), "a:scene3d", "a:sp3d",
+               "a:extLst"),
 }
 
 #: The diagram data model and the cached drawing's text.

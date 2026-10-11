@@ -49,7 +49,7 @@ from .results import Result, ToolError, page_text
 
 #: ``edit_chart``'s chart types for ``add`` (``ooxml_edit.charts.create``'s kinds).
 CHART_TYPES = ("column", "stacked_column", "bar", "stacked_bar", "line", "pie", "scatter",
-               "radar")
+               "radar", "radar_filled", "bubble")
 
 #: The group of the shared tools that are not core: loaded on demand.
 MISC = "shared_misc"
@@ -231,8 +231,9 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
     # S10, S11: edit_chart reads too
     Spec("edit_chart",
          "Add, read or change a chart. add: a new chart from data, styled as Office inserts "
-         "one. read: type, data, formats, and what Edit Data holds. Other actions change data, "
-         "titles, legend, data labels or gap width; values and workbook change together.",
+         "one. read: type, data, formats, scales, and what Edit Data holds. Other actions "
+         "change data, titles, legend, labels, axes, colours, series type, text or gridlines; "
+         "values and workbook change together.",
          {"doc": _DOC,
           "target": string("The chart; add: decks the slide, documents the paragraph to "
                            "follow. Or $ref."),
@@ -240,10 +241,15 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
               "read", "add", "set_values", "set_value", "add_category", "remove_category",
               "rename_category", "add_series", "remove_series", "rename_series", "set_title",
               "set_axis_title", "set_legend", "show_data_labels", "hide_data_labels",
-              "set_gap_width"]),
-          "chart_type": string("add: the kind of chart.", enum=list(CHART_TYPES), optional=True),
+              "set_gap_width", "set_axis_scale", "set_gridlines", "format_series",
+              "format_point", "set_series_type", "set_text_style", "set_point_labels"]),
+          "chart_type": string("add: the kind of chart; set_series_type: line or column.",
+                               enum=list(CHART_TYPES), optional=True),
           "categories": array(string(), "add: category labels, in order.", optional=True),
-          "data": array(obj({"name": string(), "values": array(number())}),
+          "data": array(obj({"name": string(), "values": array(number()),
+                             "type": string("line: drawn as a line (column charts).",
+                                            enum=["column", "line"], optional=True),
+                             "size": array(number(), "Bubble sizes.", optional=True)}),
                         "add: each series' name and one value per category.", optional=True),
           "box": obj({"x": number(), "y": number(), "w": number(), "h": number()},
                      "add, decks: the frame, pt.", optional=True),
@@ -254,14 +260,48 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
           "series": string("Series name, or number from 0.", optional=True),
           "category": string("Category label, or number from 0.", optional=True),
           "values": array(number(), "One per category (set_values, add_series) or per "
-                          "series (add_category); add: scatter x values.", optional=True),
+                          "series (add_category); add: scatter and bubble x values.",
+                          optional=True),
           "value": number("set_value: the value; set_gap_width: percent of a bar's width.",
                           optional=True),
           "text": string("New name, label or title; add: the chart title.", optional=True),
-          "axis": string("set_axis_title: which axis.", enum=["category", "value"],
-                         optional=True),
-          "position": string("set_legend, add: legend position; none hides it.",
-                             enum=["right", "left", "top", "bottom", "none"],
+          "axis": string("set_axis_title, set_axis_scale, set_gridlines; add with scale.",
+                         enum=["category", "value", "x", "y"], optional=True),
+          "scale": obj({"min": number(optional=True), "max": number(optional=True),
+                        "major_unit": number(optional=True), "minor_unit": number(optional=True),
+                        "number_format": string(optional=True),
+                        "reverse": boolean("Categories top-down.", optional=True),
+                        "auto": array(string(enum=["min", "max", "major_unit", "minor_unit",
+                                                   "number_format"]),
+                                      "Back to automatic.", optional=True)},
+                       "set_axis_scale, add: the axis' scale; keys left out stay.",
+                       optional=True),
+          "gridlines": string("set_gridlines, add: which gridlines.",
+                              enum=["none", "major", "minor", "both"], optional=True),
+          "style": obj({"fill": string(optional=True), "line": string(optional=True),
+                        "line_width": number(optional=True),
+                        "dash": string(enum=["solid", "dash", "dot", "dash_dot", "long_dash"],
+                                       optional=True),
+                        "marker": string(enum=["none", "circle", "diamond", "square",
+                                               "triangle", "dash", "dot", "x", "plus", "star"],
+                                         optional=True),
+                        "marker_size": integer(minimum=2, maximum=72, optional=True),
+                        "marker_fill": string(optional=True), "font": string(optional=True),
+                        "size": number(optional=True), "bold": boolean(optional=True),
+                        "color": string(optional=True)},
+                       "format_series, format_point: fill to marker_fill; set_text_style: "
+                       "font to color. Colours as shapes take them, or none.", optional=True),
+          "part": string("set_text_style: only this text. Default all.",
+                         enum=["title", "axis_titles", "axis_labels", "data_labels",
+                               "legend"], optional=True),
+          "labels": array(string(), "set_point_labels: one per point.", optional=True),
+          "cells": boolean("set_point_labels: also in the workbook (Value From Cells).",
+                           optional=True),
+          "secondary": boolean("set_series_type: on a second value axis.", optional=True),
+          "position": string("set_legend, add: legend position, none hides it; "
+                             "set_point_labels: label position.",
+                             enum=["right", "left", "top", "bottom", "none", "center",
+                                   "inside_end", "inside_base", "outside_end", "best_fit"],
                              optional=True),
           "ref": string("add: ref name for the new chart.", optional=True)},
          group=MISC, mutates=True, refs=("target",), reads=_reading_action),
