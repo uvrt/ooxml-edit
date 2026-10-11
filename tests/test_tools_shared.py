@@ -466,6 +466,30 @@ def test_a_scoped_undo_is_refused_when_entangled_and_where_there_are_no_scopes(t
     assert word.error.code == "invalid_arguments" and "document-wide" in word.error.message
 
 
+def test_a_scoped_undo_refuses_a_change_to_what_every_page_shares():
+    deck = dataclasses.replace(DECK, undo_shared=lambda document: [synthetic.MAIN])
+    with Toolbox(TEXT_TOOLS + DECK_TOOLS, formats=[deck, TEXT], groups=shared.GROUPS) as box:
+        session = box.session(clock=CLOCK)
+        session.open(synthetic.outer_package(), "deck.pptx")      # d1
+        entry = session.entry("d1")
+        with entry.batch():                       # page 1 and the shared part, last of all
+            entry.document.set_title(1, "A")
+            entry.document.insert("x", "end")
+        refused = call(box, session, "undo", doc="d1", scope="1")
+        assert refused.error.code == "entangled" and "other pages show" in refused.error.message
+        assert refused.error.details["shared"] == [synthetic.MAIN]
+        assert call(box, session, "undo", doc="d1").ok          # plain undo takes it back
+        assert call(box, session, "t_title", doc="d1", page="2", text="B").ok
+        assert call(box, session, "undo", doc="d1", scope="2").ok
+
+
+def test_stories_take_a_decks_layouts_and_masters_too():
+    for name in ("find_text", "replace_text"):
+        stories = shared.SPECS[name].params["stories"]
+        assert stories.schema["enum"] == ["body", "all", "layouts", "masters"]
+        assert stories.optional
+
+
 # -- reading an input's text ---------------------------------------------------------------------
 
 

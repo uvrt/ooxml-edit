@@ -87,6 +87,11 @@ class DocumentFormat:
     #: format undoes document-wide only (as a format whose one body part every edit
     #: shares should).  The document's history must have ``undo_in`` and ``redo_in``.
     undo_scope: Callable[[Any, str], Iterable[str]] | None = None
+    #: Parts every undo scope depends on at once -- templates every page is drawn from:
+    #: ``undo_shared(document)`` -> part names.  A scoped undo whose latest step changed one
+    #: is refused as ``entangled`` (it is no one scope's to take back).  ``None``: none.
+    #: A scope that should find such a step lists the parts in ``undo_scope`` too.
+    undo_shared: Callable[[Any], Iterable[str]] | None = None
     #: Called after a scoped undo or redo restored parts behind the document's back, so it
     #: drops what it caches (what its own ``undo`` does after the history's).
     restored: Callable[[Any], None] | None = None
@@ -397,16 +402,26 @@ class Session:
             if history is None or not hasattr(history, f"{direction}_in"):
                 raise ToolError("refused", f"{doc_id} keeps no history to {direction} by scope")
             parts = list(fmt.undo_scope(entry.document, scope))
+            common = list(fmt.undo_shared(entry.document)) if fmt.undo_shared else []
             done = 0
             try:
                 while done < steps:
-                    step = getattr(history, f"{direction}_in")(parts)
+                    step = (history.undo_in(parts, shared=common) if direction == "undo"
+                            and common else getattr(history, f"{direction}_in")(parts))
                     if step is None:
                         break
                     done += 1
                     entry.scoped_refs(step, undone=direction == "undo")
             except Entangled as exc:
                 if not done:
+                    shared_by_all = sorted(set(exc.shared) & set(common))
+                    if shared_by_all:
+                        raise ToolError(
+                            "entangled", f"the latest change to {scope} also changed "
+                            f"{', '.join(shared_by_all)}, which other pages show too: undo "
+                            "without scope (it reverts the latest changes, whoever made them), "
+                            "or change it back", field="scope",
+                            details={"parts": exc.parts, "shared": exc.shared}) from None
                     raise ToolError(
                         "entangled", f"the latest {'' if direction == 'undo' else 'undone '}"
                         f"change to {scope} shares parts with later changes outside it: "

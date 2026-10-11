@@ -290,6 +290,24 @@ def test_a_step_sharing_a_part_with_a_later_one_is_entangled_and_nothing_changes
     assert _titles(package) == (None, None) and package.tree(MAIN).get("title") is None
 
 
+def test_a_step_that_changed_a_part_every_scope_shares_is_entangled_whatever_followed():
+    package = OpcPackage.open(outer_package())
+    history = History(package)
+    with history.batch():                        # page 1 and the shared part, nothing after it
+        _title(package, PAGE1, "A", history)
+        _title(package, MAIN, "m1", history)
+    before = package.to_bytes(), history.version
+    with pytest.raises(Entangled) as caught:
+        history.undo_in(_page(package, PAGE1), shared=[MAIN])
+    assert caught.value.shared == [MAIN] and "every scope shares" in str(caught.value)
+    assert (package.to_bytes(), history.version) == before
+    # The same step without shared parts named is page 1's to take back.
+    assert history.undo_in(_page(package, PAGE1)).parts == {PAGE1, MAIN}
+    # A step that changed only the page is not held up by shared parts it never touched.
+    _title(package, PAGE2, "B", history)
+    assert history.undo_in(_page(package, PAGE2), shared=[MAIN]).parts == {PAGE2}
+
+
 def test_a_scoped_redo_is_refused_once_its_parts_changed_again():
     package = OpcPackage.open(outer_package())
     history = History(package)
