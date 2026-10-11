@@ -80,7 +80,8 @@ def _pages(what: str) -> Param:
 
 
 _RANGE = string("Documents: only within this block or span (p:A..t:B).", optional=True)
-_STORIES = string("Documents: body (default) or all stories.", enum=["body", "all"],
+_STORIES = string("Documents: body (default) or all stories. Decks: body is the slides; "
+                  "layouts, masters, or all.", enum=["body", "all", "layouts", "masters"],
                   optional=True)
 _CURSOR = string("next_cursor of the previous page.", optional=True)
 

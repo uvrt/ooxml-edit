@@ -2,7 +2,19 @@
 
 Versions are those in `pyproject.toml`; none is published to PyPI yet.
 
-## 0.15.0 -- unreleased
+## 0.16.0 -- unreleased
+- Undo by scope and parts every scope shares (production feedback round 3, G5: a deck's
+  slide masters and layouts, which every slide on them shows): `History.undo_in(scope,
+  shared=...)` raises `Entangled` when the latest step in scope changed a shared part,
+  whatever followed it, and `DocumentFormat.undo_shared(document)` names those parts, so a
+  scoped `undo` refuses such a change (`entangled`, "other pages show it too") while a plain
+  `undo` takes it back.
+- `find_text` and `replace_text`: `stories` takes `layouts` and `masters` too ("Decks: body is
+  the slides; layouts, masters, or all"), so a deck's handler can reach the text on its
+  layouts and masters. An enum and its description only: no new parameter, so the strict
+  set's counts are unchanged.
+
+## 0.15.0
 - Chart formatting (production feedback round 3, G1-G4), on `Chart` from the new
   `charts.styling` (with `charts.format`, `charts.actions` and `charts.errors`):
   - `set_axis_scale(axis, minimum=, maximum=, major_unit=, minor_unit=, number_format=,

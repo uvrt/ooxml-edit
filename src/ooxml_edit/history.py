@@ -27,7 +27,10 @@ step may only be taken out if no later step touched any part it touched -- the s
 but also a part both share, such as the main part when both added pages, or
 ``[Content_Types].xml`` when both added a new kind of part -- otherwise :class:`Entangled`
 is raised and nothing changes.  The later steps are rewritten without the step (their
-snapshots of its parts put back as they were before it), and get new versions.  A scoped
+snapshots of its parts put back as they were before it), and get new versions.  Some parts
+belong to every scope at once -- templates every page is drawn from, say -- and a step that
+changed one is entangled with every other scope by its nature:
+``undo_in(scope, shared=...)`` refuses it whatever came after.  A scoped
 undo is not a step itself: :meth:`redo_in` with the same scope brings it back, as a new step,
 while its parts are still as the undo left them.
 """
@@ -195,13 +198,17 @@ class History:
             raise RuntimeError("no scoped undo inside a batch")
         return package
 
-    def undo_in(self, scope: Collection[str]) -> ScopedStep | None:
+    def undo_in(self, scope: Collection[str], *, shared: Collection[str] = ()
+                ) -> ScopedStep | None:
         """Undo the latest step that touched a part in ``scope``; ``None`` if none did.
 
         Raises :class:`Entangled`, changing nothing, when a later step touched a part that
-        step touched.  The global redo history is dropped, as after any change."""
+        step touched -- or when the step touched a part in ``shared``: a part every scope
+        depends on (a template every page is drawn from), whose change no one scope owns.  The
+        global redo history is dropped, as after any change."""
         package = self._parts_api()
         scope = set(scope)
+        shared = set(shared)
         current = package.snapshot()
         states = [snapshot for snapshot, _ in self._undo] + [current]
         touched = [package.changed_between(states[k], states[k + 1])
@@ -210,6 +217,10 @@ class History:
         if index is None:
             return None
         parts = touched[index]
+        common = parts & shared
+        if common:
+            raise Entangled(f"the latest step in scope changed {', '.join(sorted(common))}, "
+                            "which every scope shares", parts, common)
         shared = set().union(*touched[index + 1:]) & parts if index + 1 < len(touched) else set()
         if shared:
             raise Entangled(f"the latest step in scope also changed {', '.join(sorted(shared))}, "
