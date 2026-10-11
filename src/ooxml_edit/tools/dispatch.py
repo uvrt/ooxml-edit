@@ -290,11 +290,14 @@ class Toolbox:
                  error_map: Mapping[type[BaseException], Any] | None = None,
                  strict_first: Sequence[str] | None = None,
                  runner: Any = None, font_dirs: Any = None) -> None:
-        """``workers`` worker processes render and lay out (``0``: in-process, in threads,
-        for a process that may not start children; a daemonic one falls back to that by
-        itself).  ``runner`` replaces the pool: anything with ``run(fn, *args, timeout=...,
-        **kwargs)`` and ``close()`` -- an :class:`~.worker.InProcess`, or the application's
-        own executor.
+        """``workers`` worker processes render and lay out (:class:`~.worker.WorkerPool`).
+        In a daemonic process, which may not start multiprocessing children, the pool uses
+        ``workers`` subprocess workers instead (:class:`~.worker.SubprocessPool`), by
+        itself; ``0`` runs the work in-process, in threads, whose deadlines bound the wait
+        but cannot stop the work.  ``runner`` replaces the pool: anything with
+        ``run(fn, *args, timeout=..., **kwargs)`` and ``close()`` -- a
+        :class:`~.worker.SubprocessPool`, an :class:`~.worker.InProcess`, a
+        ``WorkerPool(fallback=...)`` of the application's choice, or its own executor.
 
         ``font_dirs`` -- the application's own font folders, searched before the operating
         system's for every render and measurement -- is the default of the sessions this

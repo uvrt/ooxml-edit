@@ -100,10 +100,10 @@ def test_waiting_for_a_busy_pool_counts_against_the_deadline():
         blocker.join(30)
 
 
-# -- in-process: a daemonic parent, workers=0, an injected runner -------------------------------
+# -- a daemonic parent, workers=0, an injected runner -----------------------------------------
 
 
-def _in_a_daemonic_process(fallback: bool, stall: int = 0):
+def _in_a_daemonic_process(fallback, stall: int = 0):
     import multiprocessing
     context = multiprocessing.get_context("spawn")
     queue = context.Queue()
@@ -117,19 +117,31 @@ def _in_a_daemonic_process(fallback: bool, stall: int = 0):
 
 
 def test_in_a_daemonic_process_the_old_pool_fails_as_production_saw():
-    ok, code, _, message = _in_a_daemonic_process(fallback=False)
+    ok, code, _, message, _, _ = _in_a_daemonic_process(fallback=False)
     assert not ok and code == "internal" and "daemonic" in message
 
 
-def test_in_a_daemonic_process_the_pool_renders_in_process():
-    ok, code, in_process, _ = _in_a_daemonic_process(fallback=True)
-    assert (ok, code, in_process) == (True, None, True)
+def test_in_a_daemonic_process_the_pool_renders_in_subprocesses():
+    ok, code, in_process, _, runner, then_ok = _in_a_daemonic_process(fallback=True)
+    assert (ok, code, in_process, runner, then_ok) == (True, None, False, "subprocesses", True)
 
 
-def test_in_a_daemonic_process_a_deadline_still_answers_timeout():
-    ok, code, in_process, message = _in_a_daemonic_process(fallback=True, stall=30)
+def test_in_a_daemonic_process_the_in_process_fallback_is_still_there():
+    ok, code, in_process, _, runner, _ = _in_a_daemonic_process(fallback="in-process")
+    assert (ok, code, in_process, runner) == (True, None, True, "in-process")
+
+
+def test_in_process_a_deadline_still_answers_timeout():
+    ok, code, in_process, message, _, then_ok = _in_a_daemonic_process(fallback="in-process",
+                                                                       stall=30)
     assert (ok, code, in_process) == (False, "timeout", True)
     assert "abandoned" in message
+
+
+def test_a_pool_refuses_an_unknown_fallback():
+    for fallback in ("threads", 1, 0, None):
+        with pytest.raises(ValueError, match="fallback"):
+            WorkerPool(1, fallback=fallback)
 
 
 def test_workers_zero_runs_in_this_process_with_its_deadline():

@@ -24,7 +24,7 @@ import zlib
 from ooxml_edit.history import History
 from ooxml_edit.opc import OpcPackage
 from ooxml_edit.tools import (DocumentFormat, Result, ToolError, ToolGroup, array, boolean,
-                              integer, page_text, string, tool)
+                              integer, page_text, string, tool, worker_task)
 from ooxml_edit.xml import make, qn, register_namespaces
 
 import synthetic
@@ -155,6 +155,7 @@ def png(width: int, height: int, rgb: tuple[int, int, int] = (40, 90, 160)) -> b
             + chunk(b"IEND", b""))
 
 
+@worker_task
 def render_page(data: bytes, number: int, width: int, seconds: float = 0.0) -> tuple[bytes, int, int]:
     """What a renderer does in a worker: open the bytes, draw a page.  ``seconds`` stalls it."""
     document = ToyDocument(data)
@@ -165,11 +166,13 @@ def render_page(data: bytes, number: int, width: int, seconds: float = 0.0) -> t
     return png(width, height), width, height
 
 
+@worker_task
 def worker_pid() -> int:
     import os
     return os.getpid()
 
 
+@worker_task
 def fonts_seen(font_dirs) -> tuple[int, object]:
     """What a renderer in a worker is handed as its font folders, and the worker's pid."""
     import os
@@ -280,6 +283,7 @@ __all__ = ["TOOLS", "FORMATS", "GROUPS", "ToyDocument", "ToyWarning", "ToyLabelE
            "render_page", "worker_pid", "boolean", "array"]
 
 
+@worker_task
 def raise_tool_error() -> None:
     raise ToolError("refused", "not this way", valid_options=["a", "b"])
 
@@ -287,11 +291,13 @@ def raise_tool_error() -> None:
 # -- a daemonic parent (a Celery prefork worker's child, say) ----------------------------------
 
 
-def render_in_a_daemonic_process(queue, fallback: bool = True, stall: int = 0) -> None:
-    """In a daemonic process, which may not start children: a toolbox renders a page.
+def render_in_a_daemonic_process(queue, fallback=True, stall: int = 0) -> None:
+    """In a daemonic process, which may not start multiprocessing children: a toolbox
+    renders a page, then (after a timeout, say) another.
 
-    Puts ``(ok, error code or exception text, in_process)`` on ``queue``.  With
-    ``fallback=False`` the pool behaves as it did before 0.12: ``Process.start`` fails."""
+    Puts ``(ok, error code or exception text, in_process, message, runner, then_ok)`` on
+    ``queue``.  With ``fallback=False`` the pool behaves as it did before 0.12:
+    ``Process.start`` fails."""
     from ooxml_edit.tools import Limits, Toolbox, WorkerPool
 
     try:
@@ -302,7 +308,128 @@ def render_in_a_daemonic_process(queue, fallback: bool = True, stall: int = 0) -
             session.open(synthetic.outer_package(), "deck.pptx")
             result = box.dispatch(session, "toy_ppt_render",
                                   {"doc": "d1", "page": 1, "width": 32, "stall": stall})
+            then = box.dispatch(session, "toy_ppt_render", {"doc": "d1", "page": 2, "width": 32})
             queue.put((result.ok, None if result.ok else result.error.code,
-                       runner.in_process, result.error.message if result.error else ""))
+                       runner.in_process, result.error.message if result.error else "",
+                       runner.runner, then.ok))
     except BaseException as exc:  # noqa: BLE001 -- reported to the test
-        queue.put((False, f"{type(exc).__name__}: {exc}", None, ""))
+        queue.put((False, f"{type(exc).__name__}: {exc}", None, "", None, None))
+
+
+# -- work that holds the GIL, as resvg-py's rasterise does ---------------------------------------
+
+
+@worker_task
+def hold_the_gil(data: bytes, page: int, count: int) -> tuple[bytes, int, int]:
+    """Open the bytes and hold the GIL for ``count`` additions: ``sum(range(...))`` runs in C
+    with no bytecode in between, so no other thread of this process runs meanwhile."""
+    ToyDocument(data).page(page)
+    sum(range(count))
+    return png(16, 9), 16, 9
+
+
+@tool("toy_ppt_spin", "Test only: render a page with a renderer that holds the GIL.",
+      {"doc": string("Document id, e.g. d1."),
+       "page": integer("Page number, from 1.", minimum=1),
+       "count": integer("Additions the renderer makes.", minimum=0)},
+      kind="pptx", group="toy_render")
+def toy_ppt_spin(call, doc, page, count):
+    data = call.document.to_bytes()
+    image, w, h = call.run_unlocked(hold_the_gil, data, page, count)
+    call.image(image, w, h, label=f"page {page}")
+    return Result(summary=f"Rendered page {page}")
+
+
+def concurrency_in_a_daemonic_process(queue, workers: int, count: int) -> None:
+    """In a daemonic process: one GIL-holding render alone, then two at once, then an edit
+    while one runs.  Puts ``{"runner", "pids", "one", "two", "edit", "ok"}`` (seconds) on
+    ``queue``, or ``{"error": text}``."""
+    import threading
+    import time as clock
+
+    from ooxml_edit.tools import Toolbox
+
+    try:
+        with Toolbox(TOOLS + [toy_ppt_spin], formats=FORMATS, workers=workers) as box:
+            session = box.session()
+            session.open(synthetic.outer_package(), "deck.pptx")
+            results: list = []
+
+            def spin(page: int, record: dict | None = None) -> None:
+                started = clock.perf_counter()
+                results.append(box.dispatch(session, "toy_ppt_spin",
+                                            {"doc": "d1", "page": page, "count": count}))
+                if record is not None:
+                    record["done"] = clock.perf_counter() - started
+
+            def both() -> float:
+                started = clock.perf_counter()
+                threads = [threading.Thread(target=spin, args=(page,)) for page in (1, 2)]
+                for thread in threads:
+                    thread.start()
+                for thread in threads:
+                    thread.join()
+                return clock.perf_counter() - started
+
+            both()                                      # starts both workers
+            started = clock.perf_counter()
+            spin(1)
+            one = clock.perf_counter() - started
+            two = both()
+            record: dict = {}
+            render = threading.Thread(target=spin, args=(1, record))
+            render.start()
+            # The edit is asked for once the render is under way.  Timed from when it is
+            # asked for: where the render holds this process's GIL, even the sleep's
+            # return waits for it.
+            pause = min(0.2, one / 5)
+            asked = clock.perf_counter() + pause
+            clock.sleep(pause)
+            edit = box.dispatch(session, "toy_ppt_set_title",
+                                {"doc": "d1", "page": 2, "text": "Edited"})
+            edit_time = clock.perf_counter() - asked
+            render.join()
+            queue.put({"runner": getattr(box.pool, "runner", None), "pids": box.pool.pids(),
+                       "one": one, "two": two, "edit": edit_time, "render": record["done"],
+                       "ok": all(result.ok for result in results) and edit.ok})
+    except BaseException as exc:  # noqa: BLE001 -- reported to the test
+        queue.put({"error": f"{type(exc).__name__}: {exc}"})
+
+
+# -- the subprocess worker's edge cases ---------------------------------------------------------
+
+
+@worker_task
+def noisy(text: str) -> str:
+    """Print to stdout three ways, and read stdin: none of it may reach the protocol."""
+    import os
+    import sys
+    print("noise from print", text)
+    sys.stdout.flush()
+    os.write(1, b"noise from fd 1\n")
+    sys.__stdout__.write("noise from __stdout__\n")
+    sys.__stdout__.flush()
+    return f"{text}|{sys.stdin.read()!r}"
+
+
+class Unpicklable(Exception):
+    """An exception whose arguments do not round-trip: ``__init__`` wants two."""
+
+    def __init__(self, a, b):
+        super().__init__(f"{a} and {b}")
+
+
+@worker_task
+def raise_unpicklable() -> None:
+    raise Unpicklable("one", "two")
+
+
+@worker_task
+def exit_hard() -> None:
+    import os
+    os._exit(3)
+
+
+def not_registered() -> int:
+    import os
+    return os.getpid()
