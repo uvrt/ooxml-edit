@@ -14,7 +14,7 @@ standard library only, and no provider SDK. The plan it implements is
 | `tools.results` | the result envelope, error codes with `valid_options`, image token estimates, truncation and paging |
 | `tools.session` | `Session`: documents opened from bytes (`d1`), inputs registered as blobs (`b1`), outputs handed to the application as bytes; a re-entrant lock per document, taken in a fixed order across documents; versions (`History.version`) and version-keyed caches; an injected clock |
 | `tools.limits` | size limits, magic-byte checks, image sizes read from headers, and a zip-bomb guard |
-| `tools.worker` | a process pool for rendering and layout whose deadlines are kept: a worker past its deadline is killed and the call reports `timeout`; in-process where processes cannot be started (below) |
+| `tools.worker` | worker processes for rendering and layout whose deadlines are kept: a worker past its deadline is killed and the call reports `timeout`; multiprocessing workers by default, subprocess workers where multiprocessing may not start children, in-process on request (below) |
 | `tools.logs`, `tools.prompts` | call records with argument digests, not content; the shared system-prompt fragment (mechanics only, no house style) |
 | `tools.shared` | the one definition of each tool every format shares (open, new, save, close, undo, find, replace, render, check, charts, SmartArt, properties, reading an input's text) and the generic `batch`; a library adds its handler with `@shared.handler("render", kind=...)`, and lists `shared.SESSION_TOOLS`, whose handlers serve every kind. The one module that names formats, in its descriptions only |
 
@@ -65,21 +65,50 @@ fragment (`tools.prompts.SYSTEM`: planning, addresses and refs, batching, result
 checks, rendering, saving, units), each format's fragment, then the application's own
 guidance: house style and design rules belong there, never in the shipped fragments.
 
-**Rendering where processes cannot be started.** Rendering and layout run in worker
-processes so a deadline can be kept by killing one. A daemonic process may not start
-children -- a Celery prefork worker's child is one, and `Process.start` fails there with
-"daemonic processes are not allowed to have children". The pool notices
+**Where the work runs: three runners.** Rendering and layout run in worker processes so
+that a deadline can be kept by killing one, and so that work holding the GIL -- resvg-py's
+native rasterise holds it for all of its 0.7 s on a slide -- does not stop the threads
+serving other calls. There are three runners, all with `run(fn, *args, timeout=...,
+**kwargs)` and `close()`:
+
+| Runner | Used | A deadline |
+| --- | --- | --- |
+| `WorkerPool(n)`: `n` multiprocessing workers (`spawn`) | the default (`Toolbox(workers=2)`) | kills the worker and replaces it; the call reports `timeout` |
+| `SubprocessPool(n)`: `n` workers started with `subprocess` | by itself, in a daemonic process (below); or `Toolbox(runner=SubprocessPool(n))` anywhere | the same: the worker is killed and replaced |
+| `InProcess(n)`: threads of this process | `Toolbox(workers=0)`, `runner=InProcess(n)`, `WorkerPool(fallback="in-process")`, or where no subprocess can be started either | bounds the *wait* only: the call reports `timeout`, the task runs on to its end in the background, keeping its slot |
+
+A daemonic process may not start multiprocessing children -- a Celery prefork worker's child
+is one, and `Process.start` fails there with "daemonic processes are not allowed to have
+children" -- but it may start subprocesses. The pool notices
 (`multiprocessing.current_process().daemon`, or that failure on the first start), logs a
-warning once and runs the work in-process instead; `Toolbox(workers=0)` asks for that
-anywhere, and `Toolbox(runner=...)` takes the application's own executor (anything with
-`run(fn, *args, timeout=..., **kwargs)` and `close()`; `tools.InProcess(size)` is the
-built-in one). In-process the deadline still holds for the *caller*: the call returns
-`timeout` when it passes. It does not hold for the *work*: a thread cannot be killed, so
-the task runs on to its end in the background, keeping its slot (at most `size` run at a
-time, abandoned ones included), and pure-Python work shares the GIL with the calls being
-served. A runaway render therefore delays later ones, each of which still times out on its
-own deadline. Where that matters, run the toolbox in a process that may start children --
-Celery's `--pool=threads` or `solo`, or a non-daemonic service -- and keep the pool.
+warning once and hands the work to a `SubprocessPool` of the same size; `pool.runner` says
+which runs it (`"processes"`, `"subprocesses"`, `"in-process"`). `WorkerPool(fallback=...)`
+chooses: `True` (the default) or `"subprocess"`, `"in-process"` (the behaviour before
+0.17), or `False` (no fallback: the start fails as multiprocessing makes it fail). Measured
+in a daemonic process with work that holds the GIL for 1 s: two such renders at once took
+1.08 s with subprocess workers and 2.08 s in-process, and an edit asked for during a render
+returned in 8 ms with subprocess workers and 831 ms in-process.
+
+A subprocess worker is `python -m ooxml_edit.tools.subworker` (the same `sys.executable`),
+long-lived like a multiprocessing worker: starting one costs about 0.25 s to its first
+reply, and a renderer's imports and first font scan another 0.6 s -- more than a warm render
+(0.33 s on a slide), so a worker serves task after task. It speaks length-prefixed pickles
+over its stdin and stdout, which it first moves to private file descriptors: what a library
+prints, from Python or native code, goes to stderr (shared with the parent), and nothing
+reads the protocol but the worker. The entry point is fixed and takes no code: a message
+names a task by module and qualified name, and the worker runs it only if it is registered
+with `@worker_task` (`ooxml_edit.tools.worker_task`; the mark is the attribute
+`__ooxml_edit_task__ = True`, which a module that should not import the tool layer may set
+itself) -- checked before its arguments are even unpickled. The libraries register their render and layout functions; an application's
+own unregistered function given to `call.run` runs in-process instead, with a warning once.
+Arguments and results follow the multiprocessing pool's rules: a module-level function,
+arguments and result that pickle; an exception comes back as itself, or as a
+`RuntimeError` with its text when it does not unpickle. The worker gets the parent's
+environment and `sys.path` as it starts and nothing later, so everything a task needs that
+may change -- the font folders above all, below -- goes in its arguments. It stops at
+`Toolbox.close()` (or the pool's `close()`), at the parent interpreter's exit, and when the
+parent dies: an idle worker sees its input end; a busy one notices within half a second on
+POSIX (its parent pid changes) and at once on Windows (it waits on the parent's handle).
 
 **Rendering without holding the document.** A call holds its documents' locks while its
 handler runs, so calls on one document run one at a time. A render used to hold them while
@@ -103,7 +132,7 @@ advance, and `call.version_used` is the version the result then reports) or
 limit is the rasteriser's: resvg-py holds the GIL for the whole of its native rasterise
 (measured: no other thread ran for 0.7 s of a 0.8 s slide), so in-process (`workers=0`) an
 edit no longer waits for the lock but still waits for that call to return; with worker
-processes it waits for neither.
+processes, multiprocessing or subprocess, it waits for neither.
 
 **Slides by id.** `render`'s and `check`'s `slides` take what every other deck address
 takes: a slide number from 1, the slide's id (`s:257`), or a `$ref` to one -- so a loop

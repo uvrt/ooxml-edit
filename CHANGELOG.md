@@ -2,7 +2,32 @@
 
 Versions are those in `pyproject.toml`; none is published to PyPI yet.
 
-## 0.16.0 -- unreleased
+## 0.17.0 -- unreleased
+- Subprocess workers (`tools.SubprocessPool`): where multiprocessing may not start children
+  -- a daemonic process such as a Celery prefork worker's child -- `WorkerPool` now hands the
+  work to long-lived workers started with `subprocess` (`python -m
+  ooxml_edit.tools.subworker`) instead of running it in-process. Renders that hold the GIL
+  (resvg-py's rasterise) run in parallel again, an edit does not wait for one, and a
+  deadline kills the worker and replaces it. Measured in a daemonic process with 1 s of
+  GIL-holding work: two at once 1.08 s (in-process 2.08 s), an edit during a render 8 ms
+  (in-process 831 ms).
+  - Length-prefixed pickles over the worker's stdin and stdout, which it moves to private
+    descriptors first, so a library printing to stdout cannot break the protocol (it goes to
+    stderr). The worker gets the parent's `sys.path` and environment at start and nothing
+    later: arguments carry the rest (font folders, as before).
+  - A worker runs only functions registered with `@worker_task` (`tools.worker_task`),
+    named by module and qualified name, checked before the arguments are unpickled; an
+    unregistered function runs in-process, with a warning once. Exceptions come back as
+    themselves, or as a `RuntimeError` with their text when they do not unpickle.
+  - Workers stop at `close()`, at the parent's exit, and when the parent dies (an idle one
+    sees its input end; a busy one notices within 0.5 s on POSIX, at once on Windows).
+  - `WorkerPool(fallback=...)` takes `True`/`"subprocess"` (the new default behaviour),
+    `"in-process"` (the behaviour before) or `False` (no fallback); `pool.runner` says what
+    runs the work. `workers=0` and `InProcess` are unchanged.
+  - Libraries register their worker functions with `@worker_task` (pptx-agent's and
+    docx-agent's renderers do).
+
+## 0.16.0
 - Undo by scope and parts every scope shares (production feedback round 3, G5: a deck's
   slide masters and layouts, which every slide on them shows): `History.undo_in(scope,
   shared=...)` raises `Entangled` when the latest step in scope changed a shared part,
