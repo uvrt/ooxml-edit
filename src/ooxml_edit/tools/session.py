@@ -17,6 +17,16 @@ never a tool argument.  ``None`` (the default) leaves it to the renderers, which
 ``OOXML_FONT_DIRS`` and the operating system's folders.  A format applies it to each
 document that joins the session (:attr:`DocumentFormat.configure`), and passes it on to
 the work it runs in a worker process.
+
+Locale.  :attr:`Session.locale` is the regional settings the session's documents are drawn
+and edited in -- decimal and thousands separators, date order, language, list separator --
+for every render and every measurement, as :attr:`~Session.font_dirs` is: application
+configuration (per user or per client), never a tool argument, and never read from the
+operating system.  The session keeps the object it was given -- an
+:class:`ooxml_common.locales.Locale`, which the application imports -- and checks only that
+it has a locale's attributes (:func:`locale_of`): this package imports nothing of
+ooxml-common, so it stays lxml-only.  Not given, it is :data:`DEFAULT_LOCALE`, en-US with
+:data:`ooxml_common.locales.EN_US`'s values.
 """
 
 from __future__ import annotations
@@ -97,7 +107,7 @@ class DocumentFormat:
     restored: Callable[[Any], None] | None = None
     #: Called with ``(document, session)`` when a document joins a session -- opened,
     #: created or adopted -- before anything is measured: the format applies the
-    #: session's settings to it (:attr:`Session.font_dirs`).
+    #: session's settings to it (:attr:`Session.font_dirs`, :attr:`Session.locale`).
     configure: Callable[[Any, "Session"], None] | None = None
 
 
@@ -175,6 +185,9 @@ class DocumentEntry:
     #: The session's :attr:`~Session.font_dirs` (``None``: the renderers' own default),
     #: for a format's ``checks``, which get the entry alone.
     font_dirs: tuple[str, ...] | None = None
+    #: The session's :attr:`~Session.locale`, for a format's ``checks``, which get the
+    #: entry alone.  ``None`` only for an entry made outside a session.
+    locale: Any = None
     baseline_problems: list[Any] = field(default_factory=list)
     tracking: dict[str, Any] | None = None
     lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
@@ -284,20 +297,77 @@ def font_dirs_of(font_dirs: Any) -> tuple[str, ...] | None:
     return tuple(out)
 
 
+#: The attributes a locale has (:class:`ooxml_common.locales.Locale`'s fields), each a
+#: string: all :func:`locale_of` checks of an object it is given.
+LOCALE_FIELDS = ("decimal_separator", "thousands_separator", "date_order", "language",
+                 "list_separator")
+
+
+@dataclass(frozen=True)
+class DefaultLocale:
+    """en-US, the locale of a session given none, without importing ooxml-common: the
+    values of :data:`ooxml_common.locales.EN_US` and the part of its interface a renderer
+    reads (the fields, :attr:`primary_language`, :meth:`number_text`).  Frozen, hashable
+    and picklable.  An application that has ooxml-common passes its ``EN_US`` or any other
+    :class:`~ooxml_common.locales.Locale` instead; this is only the default."""
+
+    decimal_separator: str = "."
+    thousands_separator: str = ","
+    date_order: str = "mdy"
+    language: str = "en-US"
+    list_separator: str = ","
+
+    @property
+    def primary_language(self) -> str:
+        """The language subtag alone: ``en``."""
+        return self.language.split("-", 1)[0]
+
+    def number_text(self, text: str) -> str:
+        """``text`` as written: en-US separators are Python's own (``1,234.5``)."""
+        return text
+
+
+#: The locale of every session given none: en-US, always -- never the operating system's.
+DEFAULT_LOCALE = DefaultLocale()
+
+
+def locale_of(locale: Any) -> Any:
+    """``locale`` as a session keeps it: ``None`` is :data:`DEFAULT_LOCALE` (en-US);
+    anything else is kept as given -- normally an :class:`ooxml_common.locales.Locale`,
+    which validates its values, is frozen and pickles into a worker process -- once it has
+    the :data:`LOCALE_FIELDS`, each a string.  Raises :class:`TypeError` otherwise.  A
+    language tag alone (``"nl-NL"``) is not a locale: its separators and date order are
+    the application's to state."""
+    if locale is None:
+        return DEFAULT_LOCALE
+    missing = [name for name in LOCALE_FIELDS
+               if not isinstance(getattr(locale, name, None), str)]
+    if missing:
+        raise TypeError(f"locale takes an ooxml_common.locales.Locale (or an object with "
+                        f"string {', '.join(LOCALE_FIELDS)}), not {type(locale).__name__}: "
+                        f"no {', '.join(missing)}")
+    return locale
+
+
 class Session:
     """The documents, blobs and outputs of one conversation.
 
     ``font_dirs`` is the application's own font folders for every render and measurement
     of the session's documents (see the module's notes); ``None`` leaves the renderers'
-    default -- ``OOXML_FONT_DIRS``, then the operating system's folders.
+    default -- ``OOXML_FONT_DIRS``, then the operating system's folders.  ``locale`` is
+    the regional settings of every render and measurement (an
+    :class:`ooxml_common.locales.Locale`); ``None``, the default, is en-US.
     """
 
     def __init__(self, formats: Iterable[DocumentFormat] = (), *, clock: Clock | None = None,
                  limits: Limits | None = None, on_output: Callable[[Output], None] | None = None,
-                 session_id: str | None = None, font_dirs: Any = None) -> None:
+                 session_id: str | None = None, font_dirs: Any = None,
+                 locale: Any = None) -> None:
         self.id = session_id or uuid.uuid4().hex[:12]
         #: The application's own font folders, as path strings; ``None``: the default.
         self.font_dirs: tuple[str, ...] | None = font_dirs_of(font_dirs)
+        #: The regional settings of the session's documents; en-US unless given.
+        self.locale: Any = locale_of(locale)
         self.clock: Clock = clock or utc_now
         self.created_at = self.clock()
         self.limits = limits or Limits()
@@ -342,6 +412,7 @@ class Session:
             self.documents[doc_id] = DocumentEntry(
                 doc_id=doc_id, kind=kind, name=name, source=source, document=document,
                 size=size, baseline_problems=baseline, font_dirs=self.font_dirs,
+                locale=self.locale,
                 render_cache=LRU(self.limits.render_cache_size),
                 check_cache=LRU(self.limits.check_cache_size))
             entry = self.documents[doc_id]

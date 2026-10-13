@@ -55,16 +55,20 @@ from .registry import (CORE, Param, Tool, ToolGroup, array, boolean, build_schem
 from .results import (ERROR_CODES, Image, Result, ToolError, anthropic_image_tokens,
                       openai_image_tokens, page_list, page_text, truncate)
 from .schema import CallError, SubsetError, canonical, check_subset, validate_call
-from .session import Blob, DocumentEntry, DocumentFormat, Output, Session, doc_order
+from .session import (DEFAULT_LOCALE, LOCALE_FIELDS, Blob, DefaultLocale, DocumentEntry,
+                      DocumentFormat, Output, Session, doc_order, locale_of)
 from .worker import InProcess, SubprocessPool, WorkerPool, worker_task
 
 __all__ = [
-    "Blob", "CORE", "Call", "CallContext", "CallError", "CallRecord", "DocumentEntry", "DocumentFormat",
-    "ERROR_CODES", "REF", "Image", "LimitError", "Limits", "Output", "Param", "Result", "SYSTEM",
+    "Blob", "CORE", "Call", "CallContext", "CallError", "CallRecord", "DEFAULT_LOCALE",
+    "DefaultLocale", "DocumentEntry", "DocumentFormat",
+    "ERROR_CODES", "LOCALE_FIELDS", "REF", "Image", "LimitError", "Limits", "Output", "Param",
+    "Result", "SYSTEM",
     "InProcess", "Session", "SubprocessPool", "SubsetError", "Tool", "ToolError", "ToolGroup", "Toolbox",
     "WorkerPool",
     "anthropic_image_tokens", "array", "boolean", "build_schema", "canonical", "check_subset",
-    "collect_warnings", "doc_order", "free_object", "integer", "number", "obj", "openai_image_tokens",
+    "collect_warnings", "doc_order", "free_object", "integer", "locale_of",
+    "number", "obj", "openai_image_tokens",
     "page_list", "page_text", "shared", "string", "system_prompt", "tool", "truncate", "validate_call",
     "worker_task",
 ]

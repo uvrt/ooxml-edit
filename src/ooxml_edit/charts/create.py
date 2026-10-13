@@ -89,6 +89,27 @@ LEGEND_POSITIONS = {"bottom": "b", "right": "r", "top": "t", "left": "l", "top_r
 DEFAULT_LEGEND = "default"
 
 
+class _DefaultLang:
+    """The ``lang`` of :func:`add_chart` and :func:`chart_space` when not given."""
+
+    def __repr__(self) -> str:
+        return "DEFAULT_LANG"
+
+    def __reduce__(self) -> str:
+        return "DEFAULT_LANG"
+
+
+#: ``lang`` not given: the locale's language (:func:`locale_language`).
+DEFAULT_LANG: Any = _DefaultLang()
+
+
+def locale_language(locale: Any) -> str:
+    """The language a new chart's text is in when the caller names none: ``locale``'s
+    ``language`` (an :class:`ooxml_common.locales.Locale`, a session's), else ``en-US``."""
+    language = getattr(locale, "language", None) if locale is not None else None
+    return language if isinstance(language, str) and language else "en-US"
+
+
 def default_legend(kind: str) -> str:
     """The legend position Office gives a new chart of ``kind``."""
     return "top" if kind in ("radar", "radar_filled") else "bottom"
@@ -581,11 +602,15 @@ def _options(kind: str, category_order: str, gridlines: bool, bubble_scale: int 
 def chart_space(kind: str, categories: Sequence | None, series: Sequence, *,
                 title: str | None = None, axis_titles: dict[str, str] | None = None,
                 legend: str | None = DEFAULT_LEGEND, number_format: str | None = None,
-                look: ChartLook = POWERPOINT_LOOK, lang: str | None = "en-US", seed: str = "",
+                look: ChartLook = POWERPOINT_LOOK, lang: Any = DEFAULT_LANG, seed: str = "",
                 workbook_rel: str = "rId1", category_order: str = "normal",
-                gridlines: bool = True, bubble_scale: int | None = None) -> Element:
+                gridlines: bool = True, bubble_scale: int | None = None,
+                locale: Any = None) -> Element:
     """The ``c:chartSpace`` of a new chart (see :func:`add_chart`).  ``workbook_rel`` is the
     id of the chart part's relationship to its workbook."""
+    fallback = locale_language(locale)
+    if lang is DEFAULT_LANG:
+        lang = fallback
     labels, data = chart_data(kind, categories, series)
     _options(kind, category_order, gridlines, bubble_scale)
     plot_kind, direction, grouping = CHART_KINDS[kind]
@@ -605,7 +630,7 @@ def chart_space(kind: str, categories: Sequence | None, series: Sequence, *,
 
     space = _e("c:chartSpace", None, nsmap={"c": C_NS, "a": A_NS, "r": R_NS})
     space.append(_val("c:date1904", 0))
-    space.append(_val("c:lang", lang or "en-US"))
+    space.append(_val("c:lang", lang or fallback))
     space.append(_val("c:roundedCorners", 0))
     alternate = _e("mc:AlternateContent", nsmap={"mc": MC_NS})
     choice = _e("mc:Choice", {"Requires": "c14"}, nsmap={"c14": C14_NS})
@@ -851,9 +876,9 @@ def _charts_folder(part: str) -> str:
 def add_chart(package, part: str, kind: str, categories: Sequence | None, series: Sequence, *,
               title: str | None = None, axis_titles: dict[str, str] | None = None,
               legend: str | None = DEFAULT_LEGEND, number_format: str | None = None,
-              look: ChartLook = POWERPOINT_LOOK, lang: str | None = "en-US",
+              look: ChartLook = POWERPOINT_LOOK, lang: Any = DEFAULT_LANG,
               category_order: str = "normal", gridlines: bool = True,
-              bubble_scale: int | None = None) -> NewChart:
+              bubble_scale: int | None = None, locale: Any = None) -> NewChart:
     """Write a new chart into ``package`` and relate it to ``part`` (the part whose
     relationships the frame's ``r:id`` resolves in) -- everything but the frame, which the format adds around
     :meth:`NewChart.graphic`.
@@ -869,7 +894,12 @@ def add_chart(package, part: str, kind: str, categories: Sequence | None, series
     ...}``) are text; ``legend`` a position from :data:`LEGEND_POSITIONS`, ``None`` for none
     or ``"default"`` for Office's (the bottom; a radar chart's top);
     ``number_format`` an Excel format code for the values (``#,##0.0``).  ``look`` is the
-    application's (:data:`POWERPOINT_LOOK`, :data:`WORD_LOOK`); ``lang`` goes on the text.
+    application's (:data:`POWERPOINT_LOOK`, :data:`WORD_LOOK`); ``lang`` goes on the text
+    and in ``c:lang`` -- the document's language, which the caller reads from it.  Not
+    given, it is ``locale.language`` (``locale`` an :class:`ooxml_common.locales.Locale`,
+    or anything with a ``language``: a session's :attr:`~ooxml_edit.tools.Session.locale`),
+    else ``en-US``; ``None`` writes no ``lang`` on the text and the same fallback in
+    ``c:lang``.
 
     Not an undo step of its own: call it inside the format's edit, as its frame is added.
     Raises :class:`~.chart.ChartDataError` for data that cannot be charted, before anything
@@ -887,6 +917,7 @@ def add_chart(package, part: str, kind: str, categories: Sequence | None, series
     book_name = package.unused_part_name(f"{embeddings}/Microsoft_Excel_Worksheet{{n}}.xlsx")
     space = chart_space(kind, labels, data, title=title, axis_titles=axis_titles, legend=legend,
                         number_format=number_format, look=look, lang=lang, seed=chart_name,
+                        locale=locale,
                         category_order=category_order, gridlines=gridlines,
                         bubble_scale=bubble_scale)
     book = chart_workbook(kind, labels, data, number_format=number_format)
@@ -901,7 +932,8 @@ def add_chart(package, part: str, kind: str, categories: Sequence | None, series
     return NewChart(part=chart_name, workbook=book_name, rel_id=rel_id)
 
 
-__all__ = ["ACCENTS", "CHART_KINDS", "COMBO_KINDS", "XY_KINDS", "data_columns", "ChartLook", "DEFAULT_LEGEND", "LEGEND_POSITIONS",
+__all__ = ["ACCENTS", "CHART_KINDS", "COMBO_KINDS", "XY_KINDS", "data_columns", "ChartLook", "DEFAULT_LANG", "DEFAULT_LEGEND",
+           "LEGEND_POSITIONS", "locale_language",
            "NewChart", "POWERPOINT_LOOK", "VARIATIONS", "WORD_LOOK", "add_chart", "chart_data",
            "chart_space", "chart_workbook", "default_legend", "series_color",
            "text_properties", "title_element", "title_text"]
