@@ -13,6 +13,7 @@ standard library only, and no provider SDK. The plan it implements is
 | `tools.adapters` | definitions for the Anthropic Messages API (strict on as many tools as the per-request limits allow, writing tools first; optional deferred loading and caching), the OpenAI Responses API (all required, optional ones nullable; optional namespaces and tool search) and Chat Completions; results as `tool_result` blocks, `function_call_output` items (images inside them, or in a user message after them), or tool messages plus a user message with the images; checkers for each provider's documented rules. Plain dicts |
 | `tools.results` | the result envelope, error codes with `valid_options`, image token estimates, truncation and paging |
 | `tools.session` | `Session`: documents opened from bytes (`d1`), inputs registered as blobs (`b1`), outputs handed to the application as bytes; a re-entrant lock per document, taken in a fixed order across documents; versions (`History.version`) and version-keyed caches; an injected clock |
+| `tools.datasets` | `Dataset` (columns, rows, opaque sources per value) and `DatasetEntry` (its id, source document and version, `stale`): what a call keeps for the session under `d:<id>` (below) |
 | `tools.limits` | size limits, magic-byte checks, image sizes read from headers, and a zip-bomb guard |
 | `tools.worker` | worker processes for rendering and layout whose deadlines are kept: a worker past its deadline is killed and the call reports `timeout`; multiprocessing workers by default, subprocess workers where multiprocessing may not start children, in-process on request (below) |
 | `tools.logs`, `tools.prompts` | call records with argument digests, not content; the shared system-prompt fragment (mechanics only, no house style) |
@@ -46,6 +47,61 @@ step per document, the facts (`checks`) computed once at the end -- and names th
 and its valid options when one fails. Its ops' arguments are free-form objects, so `batch`
 is the one tool never sent strict: each op is validated by the dispatcher against its own
 tool's schema instead of by constrained decoding.
+
+**Datasets.** A call that derives figures from a document -- counts, sums, groups -- may
+keep them for the session as a `Dataset`: columns, rows, and beside every value its
+sources, opaque strings (cell addresses, say) that the tool layer stores and hands on but
+never reads. Any later call, on any document of any format, names it `d:<id>` wherever its
+tool declares a dataset argument (`Tool.datasets`, paths written as for `Tool.refs`). The
+dispatcher checks the id first -- an unknown one is `not_found` with the known ids as
+`valid_options` -- and leaves the value as written, so `d:by_region[total]` or
+`d:by_region/North/total` reach the handler whole, which reads the entry with
+`call.dataset(value)`:
+
+```python
+from ooxml_edit.tools import Dataset, Result, string, tool
+
+@tool("lib_derive", "...", {"doc": string("..."), "id": string("...")})
+def derive(call, doc, id):
+    figures = compute(call.document)          # the library's own work
+    address = call.define_dataset(id, Dataset(
+        ("region", "total"), [("North", 3.68), ("South", 0.13)],
+        sources=[[("A2:A3",), ("C2:C3",)], [("A4",), ("C4",)]], keys=1))
+    return Result(summary=f"Derived {address}")   # the result lists "datasets": ["d:..."]
+
+@tool("lib_table", "...", {"doc": string("..."), "from": string("A dataset, d:<id>.")},
+      mutates=True, datasets=("from",))
+def table(call, doc, **arguments):
+    entry = call.dataset(arguments["from"])   # entry.dataset, entry.stale, entry.doc
+    ...
+```
+
+A dataset is session state, not document content: it outlives `close_document`, undo never
+removes it, and defining one is not an undo step (a reading call may define one; a failed
+call or batch defines none; an existing id is replaced). It records its source document and
+that document's version as the defining call left it, and is never refreshed: once the
+source changes it is `stale`, and a call naming it gets a warning. Stale is a comparison of
+versions while the source is open -- and a history gives equal versions to equal content
+only -- so:
+
+| What happens to the source | The dataset |
+| --- | --- |
+| a change | stale |
+| undo back to the version it was derived from | current again (nothing recomputed: the source is in that state again) |
+| redo of the change | stale again |
+| undo to before it was derived | stale |
+| a scoped undo | stale (the document is in a state that never existed: a new version) |
+| a change to a document without a history | stale for good (its count only goes up) |
+| closed | frozen as it was at that moment, for good |
+| changed by a later op of the batch that derived it | stale for good (the state it came from had no version) |
+
+A dataset derived from another (`define_dataset(..., source=entry)`) inherits that one's
+source and version, and goes stale with it. `Limits.max_datasets` (50) bounds a session and
+`Limits.max_dataset_cells` (50,000 values; sources not counted) one dataset; the
+application may forget one with `session.drop_dataset(address)` (no tool does). Datasets
+stay in the session and are never sent to worker processes; a handler that needs one there
+passes the `Dataset`, which pickles when its `detail` does. No shared definition takes a
+dataset yet (consumers come with O3), so the deck and Word cores are unchanged.
 
 **Loading tools and the prompt.** Every tool is in one group; the `core` group is always
 loaded, the others on demand. What `definitions()` sends by default:

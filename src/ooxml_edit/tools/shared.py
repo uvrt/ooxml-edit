@@ -101,7 +101,7 @@ class Spec:
                  group: str = CORE, mutates: bool = False, exactly_one: tuple = (),
                  documents: Any = ("doc",), route: str | None = None, strict: bool = True,
                  batchable: bool = True, composite: bool = False,
-                 refs: tuple[str, ...] = (),
+                 refs: tuple[str, ...] = (), datasets: tuple[str, ...] = (),
                  reads: Callable[[Mapping[str, Any]], bool] | None = None) -> None:
         self.name = name
         self.description = description
@@ -115,6 +115,7 @@ class Spec:
         self.batchable = batchable
         self.composite = composite
         self.refs = refs
+        self.datasets = datasets
         self.reads = reads
 
     def make(self, handlers: Mapping[str | None, Callable[..., Any]]) -> Tool:
@@ -123,7 +124,7 @@ class Spec:
                     group=self.group, mutates=self.mutates, documents=self.documents,
                     exactly_one=self.exactly_one, route=self.route, strict=self.strict,
                     batchable=self.batchable, composite=self.composite, refs=self.refs,
-                    reads=self.reads)
+                    datasets=self.datasets, reads=self.reads)
 
     @property
     def schema(self) -> dict[str, Any]:
@@ -404,8 +405,11 @@ def _open_document(call: Any, blob: str) -> Result:
 
 
 def _close_document(call: Any, doc: str) -> Result:
-    call.session.close(doc)
-    return Result(summary=f"Closed {doc}", removed=[doc])
+    kept = call.session.close(doc)
+    if not kept:
+        return Result(summary=f"Closed {doc}", removed=[doc])
+    return Result(summary=f"Closed {doc}; the datasets derived from it stay: "
+                  f"{', '.join(kept)}", removed=[doc], data={"datasets": kept})
 
 
 def _undo(call: Any, doc: str, steps: int = 1, redo: bool = False,

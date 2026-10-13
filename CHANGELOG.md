@@ -2,6 +2,47 @@
 
 Versions are those in `pyproject.toml`; none is published to PyPI yet.
 
+## 0.20.0 -- unreleased
+- Datasets (`tools.datasets`): a session-level store of tables of values a call derived,
+  named `d:<id>` by later calls on any document of any format, so no figure is retyped
+  between documents. Format-neutral: the first producer is a workbook library's derive
+  tool; the consumers (charts, tables) come later.
+  - `Dataset(columns, rows, sources=None, keys=0, types=None, detail=None)`: an immutable
+    value -- rows as tuples in column order (mappings are taken too), and per value its
+    sources, opaque strings the tool layer stores and never reads; `keys` the leading
+    columns that name a row; `types` a free label per column; `detail` whatever the
+    producer keeps for itself. Pickles when `detail` does.
+  - `call.define_dataset(id, dataset, source=...)` keeps it once the call succeeds (a
+    failed call or batch defines none; a reading call may define one); an existing id is
+    replaced. `source` is the call's document by default, another document, a dataset (it
+    inherits that one's source and version), or `None`. The result lists it
+    (`Result.datasets`, `"datasets": ["d:by_region"]`).
+  - `Tool.datasets` (and `@tool(datasets=...)`, `Spec(datasets=...)`) declares the
+    argument paths that may hold `d:<id>`, as `Tool.refs` declares ref targets; the
+    dispatcher checks the id before the handler runs -- unknown is `not_found` with the
+    known ids as `valid_options` and the argument's path as `field` -- and leaves the value
+    as written: what follows the id (`[column]`, `/key/column`) is the format's to read.
+    The handler gets the entry with `call.dataset(value)`.
+  - `session.datasets` (by id), `session.dataset(address)`, `session.dataset_ids()`,
+    `session.drop_dataset(address)` (the application's; no tool), and `datasets` in
+    `session.describe()` when there are any.
+  - Each `DatasetEntry` records its source document's handle, kind, name and version (the
+    version as the defining call left it), outlives `close_document` (whose result lists
+    the datasets that stay), and is `stale` -- never refreshed -- once its source changes.
+    Stale is a version comparison while the source is open, so undoing the change makes it
+    current again and redo stale again (a history gives equal versions to equal content
+    only); a scoped undo leaves it stale (a new version); a document without a history only
+    counts up. Closing the source freezes it as it is. A dataset derived in a `batch`
+    before a later op changed its source is stale for good. A call that names a stale
+    dataset gets a warning saying so.
+  - `Limits.max_datasets` (50 per session) and `Limits.max_dataset_cells` (50,000 values
+    per dataset; sources not counted), each a `limit` error.
+  - Datasets stay in the session: nothing sends them to worker processes.
+  - No shared definition takes a dataset yet, and the system prompt is unchanged: the deck
+    and Word cores are byte-identical to 0.19.0's (deck 3,504 estimated, about 5,186 by the
+    1.48 proxy; Word 2,535, about 3,752).
+- The neutrality test also forbids "spreadsheet" and "sheet" in the core and the tool layer.
+
 ## 0.19.0 -- unreleased
 - The application's locale: `Toolbox(..., locale=...)` and `toolbox.session(locale=...)`
   take an `ooxml_common.locales.Locale` -- decimal and thousands separators, date order,
