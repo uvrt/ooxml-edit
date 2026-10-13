@@ -2,6 +2,19 @@
 
 Versions are those in `pyproject.toml`; none is published to PyPI yet.
 
+## 0.21.0 -- unreleased
+- `tools.strict_problems(definitions)`: OpenAI's documented strict-mode rules over a whole
+  `tools` list -- this library's definitions and an application's own, mixed -- before the
+  first call, since one bad definition makes the API refuse every request. Takes `Tool`
+  objects (checked as the Responses adapter sends them), Responses items and Chat
+  Completions definitions; each `StrictProblem` names the tool, a JSON path into the list
+  (`$[3].parameters.properties.at`) and the problem. Exported from `ooxml_edit.tools`;
+  documented in docs/TOOLS.md, "Checking definitions before the first call".
+- `adapters.openai_problems` is now that check as text, and finds more: `anyOf`, `oneOf`,
+  `allOf`, `enum` or `not` at the root (it found `anyOf` only), `oneOf` anywhere, problems
+  inside `anyOf` branches and `$defs`, and names the properties missing from `required`
+  and an `additionalProperties` that is missing. Every adapter's output still passes.
+
 ## 0.20.0 -- unreleased
 - Datasets (`tools.datasets`): a session-level store of tables of values a call derived,
   named `d:<id>` by later calls on any document of any format, so no figure is retyped

@@ -271,6 +271,33 @@ documented loop -- `items += response.output`, dispatch only `function_call` ite
 `render_results` -- needs nothing more. This repository's own online tests still run on
 Claude only.
 
+**Checking definitions before the first call.** One definition outside OpenAI's strict
+subset makes the API refuse the whole request (a 400, whichever tool the model wanted), so
+an application that adds tools of its own checks the full list once, before it sends any:
+
+```python
+from ooxml_edit.tools import strict_problems
+
+tools = toolbox.definitions("openai-responses") + MY_TOOLS   # ours and theirs, one list
+for problem in strict_problems(tools):
+    print(problem)    # $[41].parameters (lookup): 'anyOf' at the root; the root must be a plain object
+```
+
+`strict_problems(definitions)` takes `Tool` objects (checked as the Responses adapter sends
+them), Responses items (`function`, `namespace`, `tool_search`) and Chat Completions
+definitions, mixed. Each `StrictProblem` has the `tool`'s name, a JSON `path` into the list
+given and a `message`. It reports a root that is not a plain object (`anyOf`, `oneOf`,
+`allOf`, `enum` or `not` there); an object with a property missing from `required` or with
+`additionalProperties` missing or not `false`; keywords strict mode does not take (`allOf`,
+`oneOf`, `not`, `if`/`then`/`else`, `dependent*`, `patternProperties`, `minLength`,
+`maxLength`, `unevaluatedProperties`) and formats it does not list; a nullable enum without
+`null`; `strict` not stated; a name OpenAI refuses; and more than 5000 properties, 10
+levels or 1000 enum values in a tool. `anyOf` branches and `$defs` are checked too; a
+function sent `strict: false` (`batch`) is held to its name and an object root only. The
+rules are the documented ones, checked offline: a deployment may still refuse something
+they allow. `adapters.openai_problems(definitions, chat=...)` is the same check with
+plain-text results, which the tests hold every adapter's output to.
+
 **Undo with several writers.** `undo` steps back through one history per document: the
 latest change, whoever made it. An application that runs a loop per slide on one deck,
 in parallel, can have one loop's undo revert another's edit. Three ways out:

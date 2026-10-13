@@ -18,7 +18,8 @@ Results become ``tool_result`` blocks (Anthropic), ``function_call_output`` item
 Responses) or a tool message plus a user message carrying the images (Chat Completions,
 whose tool messages are text only).  Nothing here imports a provider SDK, and the checkers
 (:func:`anthropic_problems`, :func:`openai_problems`) state each provider's documented strict
-rules so a test can hold the output to them.
+rules so a test can hold the output to them; :func:`strict_problems` is the public form of
+the OpenAI one, for an application's own definitions as well as these.
 
 Provider facts, from the official documentation as of 2026-10-06:
 
@@ -28,8 +29,10 @@ Provider facts, from the official documentation as of 2026-10-06:
 * A tool with ``defer_loading`` cannot carry ``cache_control``; at least one tool must not be
   deferred (platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool).
 * OpenAI strict mode: every property required, ``additionalProperties: false``, a root object
-  that is not ``anyOf``; no ``allOf``/``not``/``if``/``dependent*``; 5000 properties, 10
-  levels, 1000 enum values (developers.openai.com/api/docs/guides/structured-outputs).
+  that is not ``anyOf``; no ``allOf``/``not``/``if``/``dependent*`` (``oneOf`` is not among
+  the supported keywords); ``minItems``/``maxItems`` supported except on fine-tuned models;
+  5000 properties, 10 levels, 1000 enum values
+  (developers.openai.com/api/docs/guides/structured-outputs, checked again 2026-10-13).
 * A Responses ``function_call_output.output`` is a string or a list of ``input_text``,
   ``input_image`` and ``input_file``; a Chat Completions tool message is text only.
 """
@@ -38,6 +41,7 @@ from __future__ import annotations
 
 import base64
 import copy
+import json
 import re
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping, Sequence
@@ -78,7 +82,7 @@ ANTHROPIC_KEYWORDS = frozenset({
 
 OPENAI_NAME = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
 OPENAI_UNSUPPORTED = frozenset({
-    "allOf", "not", "if", "then", "else", "dependentRequired", "dependentSchemas",
+    "allOf", "oneOf", "not", "if", "then", "else", "dependentRequired", "dependentSchemas",
     "patternProperties", "minLength", "maxLength", "unevaluatedProperties"})
 OPENAI_FORMATS = frozenset({"date-time", "time", "date", "duration", "email", "hostname",
                             "ipv4", "ipv6", "uuid"})
@@ -505,71 +509,230 @@ def _data_url(image: Any) -> str:
 
 
 def openai_problems(definitions: Sequence[Mapping[str, Any]], *, chat: bool = False) -> list[str]:
-    """Where an OpenAI ``tools`` list breaks the documented strict-mode rules.
+    """Where an OpenAI ``tools`` list breaks the documented strict-mode rules, as text.
 
     A function sent ``strict: false`` (``batch``) is held to the general rules only: its
     name, an object root, and ``strict`` stated rather than left to the API's default.
+    :func:`strict_problems` reports the same problems with each one's tool and JSON path,
+    and takes :class:`~.registry.Tool` objects and both OpenAI forms in one list.
     """
     problems: list[str] = []
-    functions: list[Mapping[str, Any]] = []
-    for definition in definitions:
-        kind = definition.get("type")
-        if kind == "namespace":
-            if chat:
-                problems.append("namespaces exist in the Responses API only")
-            if not definition.get("name") or not definition.get("tools"):
-                problems.append("a namespace needs a name and tools")
-            functions += [tool for tool in definition.get("tools", ())]
-        elif kind == "tool_search":
-            if chat:
-                problems.append("tool_search exists in the Responses API only")
-        elif kind == "function":
-            if chat and not isinstance(definition.get("function"), Mapping):
-                problems.append(f"{definition.get('name')!r}: a Chat Completions tool nests "
-                                "its definition under function")
-                continue
-            functions.append(definition["function"] if chat else definition)
-        else:
-            problems.append(f"unknown tool type {kind!r}")
-    for function in functions:
-        name = function.get("name", "")
-        if not OPENAI_NAME.match(name):
-            problems.append(f"{name!r}: the name does not match {OPENAI_NAME.pattern}")
-        schema = function.get("parameters") or {}
-        if schema.get("type") != "object" or "anyOf" in schema:
-            problems.append(f"{name}: the root must be an object, not anyOf")
-        if function.get("strict") is False:
-            continue
-        if function.get("strict") is not True:
-            problems.append(f"{name}: strict is not true")
-        properties = depth_max = enum_values = 0
-        for where, node in _nodes(schema):
-            depth_max = max(depth_max, where.count(".") + where.count("[]"))
-            for key in node:
-                if key in OPENAI_UNSUPPORTED:
-                    problems.append(f"{name}{where}: {key!r} is not supported in strict mode")
-            if "format" in node and node["format"] not in OPENAI_FORMATS:
-                problems.append(f"{name}{where}: format {node['format']!r} is not supported")
-            types = node.get("type")
-            types = types if isinstance(types, list) else [types]
-            if "object" in types:
-                keys = list(node.get("properties", {}))
-                properties += len(keys)
-                if node.get("additionalProperties") is not False:
-                    problems.append(f"{name}{where}: additionalProperties must be false")
-                if sorted(node.get("required", ())) != sorted(keys):
-                    problems.append(f"{name}{where}: every property must be required")
-            if "enum" in node:
-                enum_values += len(node["enum"])
-                if "null" in types and None not in node["enum"]:
-                    problems.append(f"{name}{where}: a nullable enum must list null")
-        if properties > OPENAI_MAX_PROPERTIES:
-            problems.append(f"{name}: {properties} properties; at most {OPENAI_MAX_PROPERTIES}")
-        if depth_max > OPENAI_MAX_DEPTH:
-            problems.append(f"{name}: nested {depth_max} levels; at most {OPENAI_MAX_DEPTH}")
-        if enum_values > OPENAI_MAX_ENUM_VALUES:
-            problems.append(f"{name}: {enum_values} enum values; at most {OPENAI_MAX_ENUM_VALUES}")
+    for index, definition in enumerate(definitions):
+        for problem in _definition_problems(definition, f"$[{index}]", chat=chat):
+            problems.append(problem.text())
     return problems
+
+
+@dataclass(frozen=True)
+class StrictProblem:
+    """One place where a tool definition breaks OpenAI's documented strict-mode rules.
+
+    ``tool`` is the function's name (``""`` for a list entry with none, such as a namespace
+    without a name); ``path`` is a JSON path into the list that was checked, such as
+    ``$[3].parameters.properties.items.items``; ``message`` says what is wrong.
+    """
+
+    tool: str
+    path: str
+    message: str
+    #: The dotted location below the tool's root (``.items[]``), as :func:`openai_problems`
+    #: writes it; empty for the root.
+    where: str = ""
+
+    def text(self) -> str:
+        return f"{self.tool}{self.where}: {self.message}" if self.tool else self.message
+
+    def __str__(self) -> str:
+        return f"{self.path} ({self.tool or '-'}): {self.message}"
+
+
+def strict_problems(definitions: Iterable[Any]) -> list[StrictProblem]:
+    """Every OpenAI strict-mode problem in ``definitions``, each with its tool and JSON path.
+
+    Run it once over everything an application will send -- this library's definitions and
+    its own hand-written ones -- before the first call: one bad definition makes the API
+    refuse the whole request (a 400), whichever tool the model would have called.
+
+    ``definitions`` may mix, item by item:
+
+    * :class:`~.registry.Tool` objects (the neutral form), checked as
+      :func:`to_openai_responses` sends them; their paths point into that form
+      (``$[0].parameters...``);
+    * OpenAI Responses definitions: ``function``, ``namespace`` and ``tool_search`` items;
+    * OpenAI Chat Completions definitions, the function nested under ``function``.
+
+    What it reports (OpenAI's structured-outputs guide, "Supported schemas"): a root that
+    is not an object or carries ``anyOf``, ``oneOf``, ``allOf``, ``enum`` or ``not``; an
+    object whose properties are not all in ``required``, or whose ``additionalProperties``
+    is missing or not ``false``; a keyword strict mode does not take (:data:`OPENAI_UNSUPPORTED`)
+    or a ``format`` outside :data:`OPENAI_FORMATS`; a nullable enum without ``null``;
+    ``strict`` not stated; a name outside :data:`OPENAI_NAME`; more than
+    :data:`OPENAI_MAX_PROPERTIES` properties, :data:`OPENAI_MAX_DEPTH` levels or
+    :data:`OPENAI_MAX_ENUM_VALUES` enum values in one tool.  ``anyOf`` branches and
+    ``$defs`` are checked as well.  A function sent ``strict: false`` is held to its name and
+    an object root only.  An Anthropic definition (``input_schema``) is reported as one:
+    pass the :class:`~.registry.Tool` or its OpenAI form.
+
+    Offline and documented rules only; what a deployment accepts is still the API's to say.
+
+    >>> from ooxml_edit.tools.adapters import strict_problems
+    >>> theirs = {"type": "function", "name": "lookup", "strict": True,
+    ...           "parameters": {"anyOf": [{"type": "object"}, {"type": "string"}]}}
+    >>> for problem in strict_problems([theirs]):
+    ...     print(problem)
+    $[0].parameters (lookup): the root must be an object
+    $[0].parameters (lookup): 'anyOf' at the root; the root must be a plain object
+    $[0].parameters.anyOf[0] (lookup): additionalProperties must be false (it is missing)
+    """
+    problems: list[StrictProblem] = []
+    for index, definition in enumerate(definitions):
+        base = f"$[{index}]"
+        if isinstance(definition, Tool):
+            problems += _function_problems(_function(definition), base)
+        elif not isinstance(definition, Mapping):
+            problems.append(StrictProblem("", base, f"not a tool definition: "
+                                          f"{type(definition).__name__}"))
+        elif definition.get("type") == "function" and "function" in definition:
+            problems += _definition_problems(definition, base, chat=True)
+        else:
+            problems += _definition_problems(definition, base, chat=False)
+    return problems
+
+
+#: Keywords that may not stand at the root of a function's parameters, which must be a
+#: plain object.
+OPENAI_ROOT_KEYWORDS = ("anyOf", "oneOf", "allOf", "enum", "not")
+
+
+def _definition_problems(definition: Mapping[str, Any], base: str, *,
+                         chat: bool) -> list[StrictProblem]:
+    """One entry of a ``tools`` list: a function, namespace or ``tool_search``."""
+    kind = definition.get("type")
+    if kind == "namespace":
+        problems = []
+        if chat:
+            problems.append(StrictProblem("", f"{base}.type",
+                                          "namespaces exist in the Responses API only"))
+        if not definition.get("name") or not definition.get("tools"):
+            problems.append(StrictProblem(definition.get("name") or "", base,
+                                          "a namespace needs a name and tools"))
+        for number, function in enumerate(definition.get("tools", ())):
+            problems += _function_problems(function, f"{base}.tools[{number}]")
+        return problems
+    if kind == "tool_search":
+        return ([StrictProblem("", f"{base}.type", "tool_search exists in the Responses API only")]
+                if chat else [])
+    if kind == "function":
+        if chat:
+            if not isinstance(definition.get("function"), Mapping):
+                return [StrictProblem(str(definition.get("name") or ""), base,
+                                      "a Chat Completions tool nests its definition under "
+                                      "function")]
+            return _function_problems(definition["function"], f"{base}.function")
+        return _function_problems(definition, base)
+    if "input_schema" in definition:
+        return [StrictProblem(str(definition.get("name") or ""), base,
+                              "an Anthropic definition (input_schema), not an OpenAI one")]
+    return [StrictProblem(str(definition.get("name") or ""), f"{base}.type",
+                          f"unknown tool type {kind!r}")]
+
+
+def _function_problems(function: Mapping[str, Any], base: str) -> list[StrictProblem]:
+    """One function's name, root and, when it is strict, every node of its parameters."""
+    name = str(function.get("name") or "")
+    problems: list[StrictProblem] = []
+
+    def report(path: str, message: str, where: str = "") -> None:
+        problems.append(StrictProblem(name, path, message, where))
+
+    if not OPENAI_NAME.match(name):
+        report(f"{base}.name", f"the name {name!r} does not match {OPENAI_NAME.pattern}")
+    schema = function.get("parameters") or {}
+    root = f"{base}.parameters"
+    if not isinstance(schema, Mapping):
+        report(root, "parameters must be a JSON Schema object")
+        return problems
+    if schema.get("type") != "object":
+        report(root, "the root must be an object")
+    for key in OPENAI_ROOT_KEYWORDS:
+        if key in schema:
+            report(root, f"{key!r} at the root; the root must be a plain object")
+    if function.get("strict") is False:
+        return problems
+    if function.get("strict") is not True:
+        report(f"{base}.strict", "strict is not true")
+    properties = depth_max = enum_values = 0
+    for where, path, depth, node in _schema_nodes(schema, "", root, 0):
+        depth_max = max(depth_max, depth)
+        for key in node:
+            if key in OPENAI_UNSUPPORTED and not (where == "" and key in OPENAI_ROOT_KEYWORDS):
+                report(path, f"{key!r} is not supported in strict mode", where)
+        if "format" in node and node["format"] not in OPENAI_FORMATS:
+            report(path, f"format {node['format']!r} is not supported", where)
+        types = node.get("type")
+        types = types if isinstance(types, list) else [types]
+        if "object" in types:
+            keys = list(node.get("properties") or {})
+            properties += len(keys)
+            if "additionalProperties" not in node:
+                report(path, "additionalProperties must be false (it is missing)", where)
+            elif node["additionalProperties"] is not False:
+                report(path, "additionalProperties must be false", where)
+            required = node.get("required") or ()
+            missing = [key for key in keys if key not in required]
+            if missing:
+                report(path, "every property must be required; not in required: "
+                       + ", ".join(missing), where)
+        if "enum" in node:
+            enum_values += len(node["enum"])
+            if "null" in types and None not in node["enum"]:
+                report(path, "a nullable enum must list null", where)
+    if properties > OPENAI_MAX_PROPERTIES:
+        report(root, f"{properties} properties; at most {OPENAI_MAX_PROPERTIES}")
+    if depth_max > OPENAI_MAX_DEPTH:
+        report(root, f"nested {depth_max} levels; at most {OPENAI_MAX_DEPTH}")
+    if enum_values > OPENAI_MAX_ENUM_VALUES:
+        report(root, f"{enum_values} enum values; at most {OPENAI_MAX_ENUM_VALUES}")
+    return problems
+
+
+_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _json_key(path: str, key: str) -> str:
+    return f"{path}.{key}" if _IDENTIFIER.match(key) else f"{path}[{json.dumps(key)}]"
+
+
+def _schema_nodes(node: Mapping[str, Any], where: str, path: str,
+                  depth: int) -> Iterable[tuple[str, str, int, Mapping[str, Any]]]:
+    """Every node of a hand-written schema: its dotted location, JSON path and nesting
+    depth (a property or an array's items is a level; an ``anyOf`` branch or a ``$defs``
+    entry is not), through properties, items, ``anyOf``/``oneOf``/``allOf`` branches and
+    ``$defs``/``definitions``.  A ``$ref`` is not followed."""
+    yield where, path, depth, node
+    properties = node.get("properties")
+    if isinstance(properties, Mapping):
+        for name, child in properties.items():
+            if isinstance(child, Mapping):
+                yield from _schema_nodes(child, f"{where}.{name}",
+                                         _json_key(f"{path}.properties", name), depth + 1)
+    items = node.get("items")
+    if isinstance(items, Mapping):
+        yield from _schema_nodes(items, f"{where}[]", f"{path}.items", depth + 1)
+    for key in ("anyOf", "oneOf", "allOf"):
+        branches = node.get(key)
+        if isinstance(branches, list):
+            for number, branch in enumerate(branches):
+                if isinstance(branch, Mapping):
+                    yield from _schema_nodes(branch, f"{where}.{key}[{number}]",
+                                             f"{path}.{key}[{number}]", depth)
+    for key in ("$defs", "definitions"):
+        defined = node.get(key)
+        if isinstance(defined, Mapping):
+            for name, child in defined.items():
+                if isinstance(child, Mapping):
+                    yield from _schema_nodes(child, f"{where}.{key}.{name}",
+                                             _json_key(_json_key(path, key), name), depth)
 
 
 def _nodes(schema: Mapping[str, Any], where: str = "") -> Iterable[tuple[str, Mapping[str, Any]]]:
