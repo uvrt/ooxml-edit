@@ -2,7 +2,29 @@
 
 Versions are those in `pyproject.toml`; none is published to PyPI yet.
 
-## 0.18.0 -- unreleased
+## 0.19.0 -- unreleased
+- The application's locale: `Toolbox(..., locale=...)` and `toolbox.session(locale=...)`
+  take an `ooxml_common.locales.Locale` -- decimal and thousands separators, date order,
+  language, list separator -- per user or per client, threaded as `font_dirs` is: kept as
+  `session.locale`, copied to each document's entry (`entry.locale`), given to
+  `DocumentFormat.configure`, and offered to handlers as `call.locale` for the work they
+  run in worker processes (multiprocessing, subprocess and in-process alike; a `Locale`
+  pickles). Not given, it is en-US (`tools.DEFAULT_LOCALE`), always: never the machine's.
+  - No dependency is added: ooxml-edit stays lxml-only and imports nothing of
+    ooxml-common. It keeps the object it is given and checks only that it has the five
+    fields as strings (`tools.locale_of`, `tools.LOCALE_FIELDS`); anything else is a
+    `TypeError`. `tools.DEFAULT_LOCALE` has `ooxml_common.locales.EN_US`'s values and the
+    part of its interface the renderers read (`primary_language`, `number_text`).
+  - Application configuration, not a tool argument: the tool definitions and the system
+    prompt are unchanged, so the token budgets are too.
+- `charts.create.add_chart` and `chart_space` take `locale=`: a new chart's language, when
+  the caller passes no `lang`, is `locale.language`, else en-US (`create.DEFAULT_LANG`
+  marks `lang` not given; `create.locale_language`). The caller's `lang` -- the document's
+  -- still wins, and `lang=None` still writes no `lang` on the text, `c:lang` now taking
+  the locale's language there too. Without a locale, or with en-US, the chart is
+  byte-identical to before.
+
+## 0.18.0
 - Workbooks are a shared-tool kind: `shared.KINDS` is `("pptx", "docx", "xlsx")`, so a
   workbook library registers its handlers with `shared.handler(name, kind="xlsx")`.
   - `describe` says what a workbook returns (sheets, tables and regions with key columns,

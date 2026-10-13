@@ -167,6 +167,26 @@ documents alike). The renderers walk the folders once per process and check them
 stat per folder per measurement (ooxml-common 0.10, `refresh_font_dirs()` for what a
 folder's time does not show): a slow mount no longer costs a walk per measurement.
 
+**Locale.** The regional settings documents are drawn and edited in -- decimal and
+thousands separators, date order, language, list separator -- are named the same way:
+`Toolbox(..., locale=Locale(...))` (an `ooxml_common.locales.Locale`, per user or per
+client), the default of every session the toolbox makes, or `toolbox.session(locale=...)`
+for one session. Not given (`None`), it is en-US, always -- never the operating system's,
+so a server draws the same file the same way wherever it runs. Like `font_dirs` it is
+application configuration: no tool takes it, no definition or prompt mentions it, the
+token budget is unchanged. The session keeps it as `session.locale`, copies it to each
+document's entry (`entry.locale`), gives it to `DocumentFormat.configure(document,
+session)`, and offers it to handlers as `call.locale`, which a format passes to the work
+it runs in a worker process -- a renderer's `ConvertOptions(locale=call.locale)` -- and
+keys its caches with. ooxml-edit stays lxml-only: it imports nothing of ooxml-common, keeps
+the object it is given (a `Locale` is frozen and pickles into a worker), and checks only
+that it has the five fields as strings (`tools.locale_of`, `tools.LOCALE_FIELDS`;
+`TypeError` otherwise -- a bare language tag is not a locale). The default is
+`tools.DEFAULT_LOCALE`, an object with `ooxml_common.locales.EN_US`'s values and the part
+of its interface a renderer reads (`primary_language`, `number_text`). A new chart's
+language falls back to the locale's (`add_chart(..., locale=call.locale)`) when the
+format names none; with the default the chart is byte-identical to before.
+
 **OpenAI images.** On the Responses API a result's images go inside its
 `function_call_output` by default: `output` is then a list of `input_text` and
 `input_image`, which OpenAI's function-calling guide documents ("For functions that return

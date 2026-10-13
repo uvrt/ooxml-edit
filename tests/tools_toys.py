@@ -179,6 +179,13 @@ def fonts_seen(font_dirs) -> tuple[int, object]:
     return os.getpid(), font_dirs
 
 
+@worker_task
+def locale_seen(locale) -> tuple[int, object]:
+    """What a renderer in a worker is handed as its locale, and the worker's pid."""
+    import os
+    return os.getpid(), locale
+
+
 # -- the toy tools -----------------------------------------------------------------------------
 
 

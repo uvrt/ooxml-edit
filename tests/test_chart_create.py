@@ -8,6 +8,8 @@ part is in schema order, the package is valid, and the existing edits keep worki
 
 from __future__ import annotations
 
+import re
+
 import pytest
 from lxml import etree
 
@@ -298,3 +300,60 @@ def test_a_host_s_look_sizes_new_titles_and_data_labels():
     assert sizes == {"chart": "1400", "catAx": "1000", "valAx": "1000"}
     assert {n.get("sz") for n in root.iter(A + "defRPr")
             if n.getparent().getparent().getparent().getparent().tag == C + "dLbls"} == {"900"}
+
+
+# -- the language of a new chart: the caller's, else the locale's, else en-US -----------------
+
+
+class _Locale:
+    """A locale as ooxml-edit reads one: only its ``language`` matters here."""
+
+    def __init__(self, language: str) -> None:
+        self.language = language
+
+
+def _space(**options) -> bytes:
+    return etree.tostring(chart_space("column", QUARTERS, REGIONS, title="Revenue",
+                                      axis_titles={"value": "€m"}, seed="s", **options))
+
+
+def _langs(space: bytes) -> tuple[str, set]:
+    root = etree.fromstring(space)
+    return (root.find(C + "lang").get("val"),
+            {node.get("lang") for node in root.iter(A + "endParaRPr")})
+
+
+def test_without_a_locale_a_new_chart_is_byte_identical():
+    from ooxml_edit.tools import DEFAULT_LOCALE
+    before = _space(lang="en-US")
+    assert _space() == before
+    assert _space(locale=None) == before
+    assert _space(locale=DEFAULT_LOCALE) == before
+    assert _space(locale=_Locale("en-US")) == before
+    assert _langs(before) == ("en-US", {"en-US"})
+    # ``None`` as before: no lang on the text, en-US in c:lang.
+    assert _space(lang=None, locale=None) == _space(lang=None)
+    assert _langs(_space(lang=None)) == ("en-US", {None})
+
+
+def test_ooxml_commons_en_us_writes_the_same_bytes():
+    locales = pytest.importorskip("ooxml_common.locales")
+    assert _space(locale=locales.EN_US) == _space(lang="en-US")
+
+
+def test_the_locale_language_is_the_fallback():
+    assert _langs(_space(locale=_Locale("nl-NL"))) == ("nl-NL", {"nl-NL"})
+    # The caller's lang (the document's) wins over the locale's.
+    assert _space(lang="de-DE", locale=_Locale("nl-NL")) == _space(lang="de-DE")
+    # None: no lang on the text; c:lang takes the locale's.
+    assert _langs(_space(lang=None, locale=_Locale("nl-NL"))) == ("nl-NL", {None})
+
+
+def test_add_chart_passes_the_locale_on():
+    for options, expected in (({}, "en-US"), ({"locale": _Locale("fr-FR")}, "fr-FR"),
+                              ({"locale": _Locale("fr-FR"), "lang": "en-GB"}, "en-GB")):
+        document, _ = new("column", title="T", **options)
+        part = [name for name in document.package.part_names
+                if re.search(r"charts/chart\d+\.xml$", name)][-1]  # the new one
+        root = document.package.tree(part)
+        assert root.find(C + "lang").get("val") == expected

@@ -54,7 +54,8 @@ from .logs import CallRecord, digest, log_call, logger, shape
 from .registry import CORE, Tool, ToolGroup, merge_tools
 from .results import Image, Result, ToolError
 from .schema import CallError, validate_call
-from .session import Clock, DocumentEntry, DocumentFormat, Output, Session, doc_order, font_dirs_of
+from .session import (Clock, DocumentEntry, DocumentFormat, Output, Session, doc_order,
+                      font_dirs_of, locale_of)
 from .worker import WorkerPool
 
 
@@ -163,6 +164,14 @@ class Call:
         """The session's font folders (:attr:`Session.font_dirs`): pass them to work run in
         a worker process, which does not see the session."""
         return self.session.font_dirs
+
+    @property
+    def locale(self) -> Any:
+        """The session's regional settings (:attr:`Session.locale`, an
+        :class:`ooxml_common.locales.Locale`; en-US unless the application gave one): pass
+        it to work run in a worker process -- a renderer's ``ConvertOptions(locale=...)`` --
+        which does not see the session."""
+        return self.session.locale
 
     def now(self) -> Any:
         return self.session.now()
@@ -276,7 +285,7 @@ class _OpFailed(Exception):
         self.error = error
 
 
-#: :meth:`Toolbox.session`'s ``font_dirs`` when not given: the toolbox's own.
+#: :meth:`Toolbox.session`'s ``font_dirs`` and ``locale`` when not given: the toolbox's own.
 _TOOLBOX_DEFAULT: Any = object()
 
 
@@ -289,7 +298,7 @@ class Toolbox:
                  start_method: str = "spawn", log_arguments: bool = False,
                  error_map: Mapping[type[BaseException], Any] | None = None,
                  strict_first: Sequence[str] | None = None,
-                 runner: Any = None, font_dirs: Any = None) -> None:
+                 runner: Any = None, font_dirs: Any = None, locale: Any = None) -> None:
         """``workers`` worker processes render and lay out (:class:`~.worker.WorkerPool`).
         In a daemonic process, which may not start multiprocessing children, the pool uses
         ``workers`` subprocess workers instead (:class:`~.worker.SubprocessPool`), by
@@ -303,7 +312,14 @@ class Toolbox:
         system's for every render and measurement -- is the default of the sessions this
         toolbox makes (:meth:`session` overrides it per session).  ``None`` leaves it to
         the renderers: ``OOXML_FONT_DIRS``, then the system's folders.  It is never a tool
-        argument: the model neither sees nor sets it."""
+        argument: the model neither sees nor sets it.
+
+        ``locale`` -- the regional settings documents are drawn and edited in, an
+        :class:`ooxml_common.locales.Locale` (decimal and thousands separators, date order,
+        language, list separator) -- is likewise the default of the sessions this toolbox
+        makes, forwarded to every format and to the work run in worker processes.  ``None``
+        is en-US (:data:`~.session.DEFAULT_LOCALE`, :data:`ooxml_common.locales.EN_US`'s
+        values), always: never the operating system's.  Not a tool argument either."""
         self.tools: dict[str, Tool] = merge_tools(tools)
         self.formats: dict[str, DocumentFormat] = {fmt.kind: fmt for fmt in formats}
         #: Claude's strict priority: the application's order, else each format's in turn.
@@ -317,6 +333,8 @@ class Toolbox:
         self.log_arguments = log_arguments
         #: The default :attr:`Session.font_dirs` of the sessions this toolbox makes.
         self.font_dirs: tuple[str, ...] | None = font_dirs_of(font_dirs)
+        #: The default :attr:`Session.locale` of the sessions this toolbox makes.
+        self.locale: Any = locale_of(locale)
         self._workers = workers
         self._start_method = start_method
         self._pool: Any = runner
@@ -336,13 +354,15 @@ class Toolbox:
 
     def session(self, *, clock: Clock | None = None, limits: Limits | None = None,
                 on_output: Callable[[Output], None] | None = None,
-                font_dirs: Any = _TOOLBOX_DEFAULT) -> Session:
+                font_dirs: Any = _TOOLBOX_DEFAULT, locale: Any = _TOOLBOX_DEFAULT) -> Session:
         """A new session.  ``font_dirs`` replaces the toolbox's :attr:`font_dirs` for this
         session (``None``: the renderers' default; ``[]``: no folders of the
-        application's, ``OOXML_FONT_DIRS`` not read either)."""
+        application's, ``OOXML_FONT_DIRS`` not read either); ``locale`` the toolbox's
+        :attr:`locale` (``None``: en-US) -- one user's or client's own."""
         return Session(self.formats.values(), clock=clock, limits=limits or self.limits,
                        on_output=on_output,
-                       font_dirs=self.font_dirs if font_dirs is _TOOLBOX_DEFAULT else font_dirs)
+                       font_dirs=self.font_dirs if font_dirs is _TOOLBOX_DEFAULT else font_dirs,
+                       locale=self.locale if locale is _TOOLBOX_DEFAULT else locale)
 
     def tool(self, name: str) -> Tool:
         if name not in self.tools:
