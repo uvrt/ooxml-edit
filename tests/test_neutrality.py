@@ -36,6 +36,7 @@ FORBIDDEN = (
     "pptx", "docx", "xlsx", "powerpoint", "excel", "msword", "microsoft word",
     # one format's things
     "slide", "sldid", "sptree", "deck", "presentation", "workbook", "worksheet",
+    "spreadsheet", "sheet",
     # part paths
     "ppt/", "word/", "xl/",
     # the formats' own prefixes, spelled as a tag

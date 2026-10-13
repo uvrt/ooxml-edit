@@ -93,6 +93,8 @@ class Result:
     renamed: dict[str, str] = field(default_factory=dict)
     #: Refs this call defined: ``{name: address}``; later calls may write ``$name``.
     refs: dict[str, str] = field(default_factory=dict)
+    #: Datasets this call defined, by address (``d:by_region``); later calls may name them.
+    datasets: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     checks: dict[str, Any] = field(default_factory=dict)
     data: Any = None
@@ -125,6 +127,8 @@ class Result:
                 "data": self.data, "next_cursor": self.next_cursor}
         if self.refs:
             data["refs"] = self.refs
+        if self.datasets:
+            data["datasets"] = self.datasets
         if self.total is not None:
             data["total"] = self.total
         if self.images:
@@ -143,7 +147,8 @@ class Result:
         text = json.dumps(envelope, ensure_ascii=False, separators=(",", ":"))
         if len(text) > limit:
             # Still too long: keep the counts of what else was there, so it stays JSON.
-            for key in ("checks", "warnings", "changed", "created", "removed", "renamed", "refs"):
+            for key in ("checks", "warnings", "changed", "created", "removed", "renamed", "refs",
+                        "datasets"):
                 value = envelope.get(key)
                 if value:
                     envelope[key] = {"omitted": len(value)}

@@ -29,6 +29,8 @@ What is here:
   estimates, truncation and paging;
 * :mod:`.session` -- documents, blobs and outputs, all in memory and under handles; locks,
   versions and caches;
+* :mod:`.datasets` -- :class:`Dataset`, a table of values with the sources of each, kept in
+  the session under ``d:<id>`` and named by later calls on any document;
 * :mod:`.limits` -- size limits, magic-byte checks and the zip-bomb guard;
 * :mod:`.worker` -- worker processes whose deadlines are kept by killing the worker
   (subprocess workers in a process that may not start multiprocessing children);
@@ -45,6 +47,7 @@ this subpackage is optional, and the core never imports it.
 """
 
 from . import shared
+from .datasets import DATASET_ID, DATASET_PREFIX, Dataset, DatasetEntry, dataset_id
 from .dispatch import REF, Call, CallContext, Toolbox, collect_warnings
 from .limits import LimitError, Limits
 from .logs import CallRecord
@@ -60,14 +63,14 @@ from .session import (DEFAULT_LOCALE, LOCALE_FIELDS, Blob, DefaultLocale, Docume
 from .worker import InProcess, SubprocessPool, WorkerPool, worker_task
 
 __all__ = [
-    "Blob", "CORE", "Call", "CallContext", "CallError", "CallRecord", "DEFAULT_LOCALE",
-    "DefaultLocale", "DocumentEntry", "DocumentFormat",
+    "Blob", "CORE", "Call", "CallContext", "CallError", "CallRecord", "DATASET_ID",
+    "DATASET_PREFIX", "DEFAULT_LOCALE", "Dataset", "DatasetEntry", "DefaultLocale", "DocumentEntry", "DocumentFormat",
     "ERROR_CODES", "LOCALE_FIELDS", "REF", "Image", "LimitError", "Limits", "Output", "Param",
     "Result", "SYSTEM",
     "InProcess", "Session", "SubprocessPool", "SubsetError", "Tool", "ToolError", "ToolGroup", "Toolbox",
     "WorkerPool",
     "anthropic_image_tokens", "array", "boolean", "build_schema", "canonical", "check_subset",
-    "collect_warnings", "doc_order", "free_object", "integer", "locale_of",
+    "collect_warnings", "dataset_id", "doc_order", "free_object", "integer", "locale_of",
     "number", "obj", "openai_image_tokens",
     "page_list", "page_text", "shared", "string", "system_prompt", "tool", "truncate", "validate_call",
     "worker_task",

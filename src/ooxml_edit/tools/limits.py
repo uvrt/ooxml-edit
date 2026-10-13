@@ -47,6 +47,11 @@ class Limits:
     image_budget_per_round: int | None = None
     # batches
     max_batch_ops: int = 200
+    # datasets (``d:<id>``, :mod:`.datasets`)
+    #: Datasets a session keeps at once; defining an id that exists replaces it.
+    max_datasets: int = 50
+    #: Values (rows times columns) in one dataset; its sources are not counted.
+    max_dataset_cells: int = 50_000
     # deadlines, in seconds
     render_timeout: float = 20.0
     layout_timeout: float = 30.0

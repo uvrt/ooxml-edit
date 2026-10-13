@@ -18,6 +18,10 @@ never a tool argument.  ``None`` (the default) leaves it to the renderers, which
 document that joins the session (:attr:`DocumentFormat.configure`), and passes it on to
 the work it runs in a worker process.
 
+Datasets.  :attr:`Session.datasets` holds the tables of values calls derived, by id
+(``d:by_region``): session state, not any document's, so they outlive the document they
+came from and are marked stale, never refreshed, when it changes (:mod:`.datasets`).
+
 Locale.  :attr:`Session.locale` is the regional settings the session's documents are drawn
 and edited in -- decimal and thousands separators, date order, language, list separator --
 for every render and every measurement, as :attr:`~Session.font_dirs` is: application
@@ -43,6 +47,7 @@ from dataclasses import dataclass, field
 from os import PathLike, fspath
 from typing import Any, Callable, Hashable, Iterable, Iterator, Sequence
 
+from .datasets import DATASET_PREFIX, DatasetEntry, dataset_id
 from .limits import LimitError, Limits, check_declared_type, check_image, check_package
 from .logs import CallRecord
 from .results import ToolError
@@ -376,6 +381,8 @@ class Session:
         self.documents: dict[str, DocumentEntry] = {}
         self.blobs: dict[str, Blob] = {}
         self.outputs: list[Output] = []
+        #: Datasets by id (without ``d:``), in the order defined: :mod:`.datasets`.
+        self.datasets: dict[str, DatasetEntry] = {}
         self.log: list[CallRecord] = []
         #: Images returned this session, and since the last :meth:`new_round`.
         self.images_used = 0
@@ -428,10 +435,18 @@ class Session:
                                 valid_options=sorted(self.documents, key=doc_order))
             return entry
 
-    def close(self, doc_id: str) -> None:
+    def close(self, doc_id: str) -> list[str]:
+        """Close a document; the addresses of the datasets derived from it, which stay,
+        each as stale or current as it is now, for good."""
         entry = self.entry(doc_id)
         with entry.lock, self._lock:
             self.documents.pop(doc_id, None)
+            kept = []
+            for dataset in self.datasets.values():
+                if dataset.doc == doc_id and not dataset.closed:
+                    dataset.source_closed()
+                    kept.append(dataset.address)
+            return kept
 
     @contextmanager
     def lock(self, doc_ids: Iterable[str]) -> Iterator[list[DocumentEntry]]:
@@ -575,6 +590,50 @@ class Session:
             raise ToolError("invalid_arguments", str(exc), field="blob",
                             valid_options=sorted(self.formats)) from None
 
+    # -- datasets ----------------------------------------------------------------------------
+
+    def dataset(self, address: str, *, field: str | None = None) -> DatasetEntry:
+        """The dataset ``address`` names (``d:by_region``, ``d:by_region[total]``, or the
+        bare id); ``not_found`` lists the ids there are."""
+        found = dataset_id(address) if isinstance(address, str) and address.startswith(
+            DATASET_PREFIX) else address
+        with self._lock:
+            entry = self.datasets.get(found) if isinstance(found, str) else None
+            if entry is None:
+                raise ToolError("not_found", f"no dataset {DATASET_PREFIX}{found}",
+                                field=field, valid_options=self.dataset_ids())
+            return entry
+
+    def dataset_ids(self) -> list[str]:
+        """Every dataset's address, ``d:`` and its id, in the order defined."""
+        with self._lock:
+            return [entry.address for entry in self.datasets.values()]
+
+    def keep_datasets(self, entries: Iterable[DatasetEntry]) -> None:
+        """Keep datasets a call defined: all, or none and ``limit``.  An id that exists is
+        replaced; a new one needs room under ``Limits.max_datasets``."""
+        entries = list(entries)
+        if not entries:
+            return
+        limits = self.limits
+        with self._lock:
+            new = {entry.id for entry in entries} - set(self.datasets)
+            if len(self.datasets) + len(new) > limits.max_datasets:
+                raise ToolError("limit", f"{len(self.datasets)} datasets are kept; at most "
+                                f"{limits.max_datasets}: reuse an id to replace one",
+                                valid_options=self.dataset_ids())
+            for entry in entries:
+                if entry.doc is not None and entry.doc not in self.documents:
+                    entry.source_closed()       # closed while the call ran (in a batch)
+                self.datasets.pop(entry.id, None)
+                self.datasets[entry.id] = entry
+
+    def drop_dataset(self, address: str) -> None:
+        """Forget a dataset (the application's housekeeping; no tool does this)."""
+        entry = self.dataset(address)
+        with self._lock:
+            self.datasets.pop(entry.id, None)
+
     # -- outputs -----------------------------------------------------------------------------
 
     def add_output(self, output: Output) -> None:
@@ -635,9 +694,12 @@ class Session:
 
     def describe(self) -> dict[str, Any]:
         with self._lock:
-            return {"documents": [e.describe() for e in
-                                  sorted(self.documents.values(), key=lambda e: doc_order(e.doc_id))],
+            data = {"documents": [e.describe() for e in sorted(
+                        self.documents.values(), key=lambda e: doc_order(e.doc_id))],
                     "blobs": [blob.describe() for blob in self.blobs.values()]}
+            if self.datasets:
+                data["datasets"] = [entry.describe() for entry in self.datasets.values()]
+            return data
 
     # -- internals ---------------------------------------------------------------------------
 

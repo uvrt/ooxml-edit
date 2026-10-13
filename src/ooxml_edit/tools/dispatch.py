@@ -24,6 +24,13 @@ the name is kept per document for the session, listed in the result's ``refs``, 
 call may write ``$box1`` (or ``$box1/p0``) wherever its tool declares a target
 (``Tool.refs``).  The dispatcher replaces it with the address before the handler runs.
 
+**Datasets.**  A call may keep a table of values it derived for the session
+(``call.define_dataset("by_region", dataset)``, :class:`~.datasets.Dataset`); a later call,
+on any document, may name it ``d:by_region`` wherever its tool declares a dataset
+(``Tool.datasets``).  The dispatcher checks the id exists before the handler runs -- an
+unknown one is ``not_found`` with the known ids -- and warns when a dataset a call names is
+stale (its source changed since).  The handler reads it with ``call.dataset(value)``.
+
 **Checks.**  Handlers say what they touched (``call.touch(page)``); after a changing call
 the dispatcher asks the document's format for the facts (``DocumentFormat.checks``) once.
 
@@ -49,6 +56,8 @@ from contextlib import ExitStack, contextmanager
 from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 
 from . import adapters, prompts
+from .datasets import (DATASET_PREFIX, Dataset, DatasetEntry, check_dataset_id,
+                       dataset_id)
 from .limits import LimitError, Limits
 from .logs import CallRecord, digest, log_call, logger, shape
 from .registry import CORE, Tool, ToolGroup, merge_tools
@@ -74,6 +83,20 @@ class CallContext:
         self.refs: dict[str, dict[str, str]] = {}
         #: True inside a batch.
         self.batch = False
+        #: ``id -> entry``: datasets defined, not yet kept (a failure drops them).
+        self.datasets: dict[str, DatasetEntry] = {}
+        #: ``id -> the op that defined it`` (0 outside a batch).
+        self.dataset_ops: dict[str, int] = {}
+        #: Datasets the calls named in declared arguments, by id: warned about when stale.
+        self.datasets_used: dict[str, DatasetEntry] = {}
+        #: ``doc_id -> the last op that changed it``, in a batch.
+        self.changed_at: dict[str, int] = {}
+        #: The op running now (0 outside a batch).
+        self.op = 0
+
+
+#: ``define_dataset``'s ``source`` when not given: the call's own document.
+_PRIMARY: Any = object()
 
 
 class Call:
@@ -148,6 +171,67 @@ class Call:
             raise ToolError("not_found", f"no ref ${name} in {doc or self.entry.doc_id}",
                             field=field, valid_options=[f"${key}" for key in sorted(known)])
         return known[name] + rest
+
+    def define_dataset(self, id: str, dataset: Dataset, *, source: Any = _PRIMARY) -> str:
+        """Keep ``dataset`` in the session as ``d:<id>`` once the call succeeds; its address.
+
+        ``source`` is what it was derived from: by default the call's document; another
+        document's handle; a :class:`~.datasets.DatasetEntry` (a dataset derived from a
+        dataset, which inherits its source); or ``None`` (no document: never stale).  The
+        source's version is taken when the call ends, so a changing call defines a dataset
+        from the state it leaves.  An existing id is replaced.  ``limit`` when the dataset is
+        over ``Limits.max_dataset_cells`` or the session would keep over
+        ``Limits.max_datasets``."""
+        id = check_dataset_id(id)
+        if not isinstance(dataset, Dataset):
+            raise TypeError(f"define_dataset takes a Dataset, not {type(dataset).__name__}")
+        limits = self.limits
+        if dataset.cells > limits.max_dataset_cells:
+            raise ToolError("limit", f"the dataset has {dataset.cells} values ({len(dataset.rows)} "
+                            f"rows of {len(dataset.columns)} columns); at most "
+                            f"{limits.max_dataset_cells}: group, filter or take the top rows")
+        known = set(self.session.dataset_ids()) | {DATASET_PREFIX + key
+                                                     for key in self.context.datasets}
+        if DATASET_PREFIX + id not in known and len(known) >= limits.max_datasets:
+            raise ToolError("limit", f"{len(known)} datasets are kept; at most "
+                            f"{limits.max_datasets}: reuse an id to replace one",
+                            valid_options=sorted(known))
+        defined_at = self.session.now()
+        if isinstance(source, DatasetEntry):
+            entry = source.derived(id, dataset, defined_at=defined_at)
+        else:
+            if source is _PRIMARY:
+                document = self.entry
+            elif source is None:
+                document = None
+            else:
+                document = self.entries.get(source) or self.session.entry(source)
+            entry = DatasetEntry(id, dataset, defined_at=defined_at,
+                                 doc=document.doc_id if document else None,
+                                 kind=document.kind if document else None,
+                                 name=document.name if document else None, source=document)
+        self.context.datasets.pop(id, None)
+        self.context.datasets[id] = entry
+        self.context.dataset_ops[id] = self.context.op
+        if entry.address not in self.result.datasets:
+            self.result.datasets.append(entry.address)
+        return entry.address
+
+    def dataset(self, address: str, *, field: str | None = None) -> DatasetEntry:
+        """The dataset ``address`` names (``d:by_region``, with or without what follows the
+        id): one this call (or an earlier op of its batch) defined, else the session's.
+        ``not_found`` lists the ids there are."""
+        found = dataset_id(address) if isinstance(address, str) and address.startswith(
+            DATASET_PREFIX) else address
+        pending = self.context.datasets.get(found) if isinstance(found, str) else None
+        if pending is not None:
+            return pending
+        try:
+            return self.session.dataset(address, field=field)
+        except ToolError as error:
+            error.valid_options = list(dict.fromkeys(
+                error.valid_options + [DATASET_PREFIX + key for key in self.context.datasets]))
+            raise
 
     @property
     def document(self) -> Any:
@@ -571,6 +655,7 @@ class Toolbox:
         with collect_warnings() as caught:
             arguments = self._with_refs(tool, arguments, entries, primary, context)
             call = Call(self, session, tool, arguments, entries, primary, context)
+            self._with_datasets(tool, arguments, call)
             call.held = list(entries.values())   # dispatch() holds each once
             if changing and primary is not None:
                 with primary.batch():
@@ -585,6 +670,10 @@ class Toolbox:
                 self._keep_refs(entries, context, [primary.doc_id] if primary else [])
                 if primary is not None:
                     result.checks = {**self._checks(session, primary, context), **result.checks}
+            if result.ok:
+                self._keep_datasets(session, context, result)
+            else:
+                result.datasets = []
         result.warnings.extend(caught)
         if key is not None and primary is not None and result.ok:
             primary.keys[(tool.name, key)] = result
@@ -630,32 +719,44 @@ class Toolbox:
                                 valid_options=[f"${key}" for key in sorted(known)])
             return known[name] + rest
 
-        def walk(node: Any, parts: list[str], where: str) -> Any:
-            if not parts:
-                if isinstance(node, list):
-                    return [resolve(item, f"{where}[{i}]") for i, item in enumerate(node)]
-                return resolve(node, where)
-            part, rest = parts[0], parts[1:]
-            many = part.endswith("[]")
-            name = part[:-2] if many else part
-            if not isinstance(node, Mapping) or name not in node:
-                return node
-            node = dict(node)
-            path = f"{where}.{name}" if where else name
-            if many and isinstance(node[name], list):
-                if rest:
-                    node[name] = [walk(item, rest, f"{path}[{i}]")
-                                  for i, item in enumerate(node[name])]
-                else:
-                    node[name] = [resolve(item, f"{path}[{i}]")
-                                  for i, item in enumerate(node[name])]
-            else:
-                node[name] = walk(node[name], rest, path)
-            return node
-
         for path in tool.refs:
-            arguments = walk(arguments, path.split("."), "")
+            arguments = _walk(arguments, path.split("."), "", resolve)
         return arguments
+
+    @staticmethod
+    def _with_datasets(tool: Tool, arguments: dict[str, Any], call: Call) -> None:
+        """Check every ``d:<id>`` in a declared dataset argument names a dataset: one this
+        call's batch defined, or the session's.  The value is left as it is."""
+        if not tool.datasets:
+            return
+        used = call.context.datasets_used
+
+        def resolve(value: Any, where: str) -> Any:
+            if isinstance(value, str) and value.startswith(DATASET_PREFIX):
+                entry = call.dataset(value, field=where)
+                used.setdefault(entry.id, entry)
+            return value
+
+        for path in tool.datasets:
+            _walk(arguments, path.split("."), "", resolve)
+
+    @staticmethod
+    def _keep_datasets(session: Session, context: CallContext, result: Result) -> None:
+        """Keep the datasets a call (or batch) defined, each with its source's version now;
+        warn about the stale ones it defined or named."""
+        defined = list(context.datasets.values())
+        for entry in defined:
+            if entry.version is None and entry.doc is not None and not entry.closed:
+                if context.changed_at.get(entry.doc, -1) > context.dataset_ops[entry.id]:
+                    # A later op of the batch changed its source: the state it came from
+                    # has no version of its own.
+                    entry.mark_stale()
+                entry.version = entry.source_version
+        session.keep_datasets(defined)
+        named = {**context.datasets_used, **context.datasets}
+        for entry in named.values():
+            if entry.stale:
+                result.warnings.append(_stale_warning(entry))
 
     @staticmethod
     def _keep_refs(entries: dict[str, DocumentEntry], context: CallContext,
@@ -731,12 +832,16 @@ class Toolbox:
                     for doc in sorted(entries, key=doc_order):
                         stack.enter_context(entries[doc].batch())
                     for index, tool, clean in prepared:
+                        context.op = index
                         if time.perf_counter() - started > limits.batch_timeout:
                             raise _OpFailed(index, tool.name, ToolError(
                                 "timeout", f"the batch passed its {limits.batch_timeout:g} s "
                                 "deadline"))
                         done.append(self._run_op(session, index, tool, clean, entries, context,
                                                  combined))
+                        if tool.changes(clean):
+                            for doc in tool.doc_ids(clean):
+                                context.changed_at[doc] = index
             except _OpFailed as failed:
                 error = failed.error
                 raise ToolError(
@@ -753,6 +858,7 @@ class Toolbox:
             changing = any(tool.changes(clean) for _, tool, clean in prepared)
             checks = {doc: self._checks(session, entries[doc], context)
                       for doc in sorted(entries, key=doc_order)} if changing else {}
+            self._keep_datasets(session, context, combined)
         combined.warnings.extend(caught)
         if len(checks) == 1:
             combined.checks = next(iter(checks.values()))
@@ -775,6 +881,7 @@ class Toolbox:
             call = Call(self, session, tool, arguments,
                         {doc: entries[doc] for doc in doc_ids if doc in entries}, primary,
                         context)
+            self._with_datasets(tool, arguments, call)
             result = _as_result(handler(call, **arguments), call.result)
         except _OpFailed:
             raise
@@ -789,6 +896,7 @@ class Toolbox:
         combined.removed += result.removed
         combined.renamed.update(result.renamed)
         combined.refs.update(result.refs)
+        combined.datasets += [a for a in result.datasets if a not in combined.datasets]
         combined.warnings += [f"ops[{index}]: {w}" for w in result.warnings]
         entry: dict[str, Any] = {"op": index, "tool": tool.name, "summary": result.summary}
         if result.created:
@@ -829,6 +937,44 @@ class Toolbox:
             entry.log.append(record)
         if logger.isEnabledFor(logging.INFO):
             log_call(record)
+
+
+def _walk(node: Any, parts: list[str], where: str, resolve: Callable[[Any, str], Any]) -> Any:
+    """``node`` with ``resolve(value, where)`` applied at the argument path ``parts``
+    (``items[].target`` split at the dots), each value named by where it is."""
+    if not parts:
+        if isinstance(node, list):
+            return [resolve(item, f"{where}[{i}]") for i, item in enumerate(node)]
+        return resolve(node, where)
+    part, rest = parts[0], parts[1:]
+    many = part.endswith("[]")
+    name = part[:-2] if many else part
+    if not isinstance(node, Mapping) or name not in node:
+        return node
+    node = dict(node)
+    path = f"{where}.{name}" if where else name
+    if many and isinstance(node[name], list):
+        if rest:
+            node[name] = [_walk(item, rest, f"{path}[{i}]", resolve)
+                          for i, item in enumerate(node[name])]
+        else:
+            node[name] = [resolve(item, f"{path}[{i}]") for i, item in enumerate(node[name])]
+    else:
+        node[name] = _walk(node[name], rest, path, resolve)
+    return node
+
+
+def _stale_warning(entry: DatasetEntry) -> str:
+    if entry.closed:
+        return (f"{entry.address} is stale: {entry.doc} changed after it was derived, "
+                "before it was closed")
+    if entry.version is not None and entry.source_version is not None \
+            and entry.version != entry.source_version:
+        return (f"{entry.address} is stale: {entry.doc} has changed since it was derived "
+                f"(version {entry.version}, now {entry.source_version}); derive it again "
+                "for current values")
+    return (f"{entry.address} is stale: {entry.doc} was changed after it was derived in "
+            "the same batch; derive it again for current values")
 
 
 #: ``\v`` in JSON text, not itself escaped: no JSON escape, but what a model writes for U+000B.
@@ -879,6 +1025,7 @@ def _as_result(returned: Any, built: Result) -> Result:
         returned.images = built.images + returned.images
         returned.warnings = built.warnings + returned.warnings
         returned.refs = {**built.refs, **returned.refs}
+        returned.datasets = list(dict.fromkeys(built.datasets + returned.datasets))
         return returned
     if returned is not None:
         built.data = returned
