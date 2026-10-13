@@ -604,7 +604,9 @@ class Toolbox:
                 found = self._batch_sources(session, clean)
             else:
                 doc_ids = tool.doc_ids(clean)
-                clean, found = self._sources(session, tool, clean)
+                clean, found = self._sources(
+                    session, tool, clean,
+                    hint=lambda value: self._source_hint(session, doc_ids, value))
             reading = [doc for doc in found if doc not in doc_ids]
             with session.lock(doc_ids + reading) as locked:
                 entries = {entry.doc_id: entry for entry in locked}
@@ -781,22 +783,33 @@ class Toolbox:
         if not tool.datasets and not tool.sources:
             return
         used = call.context.datasets_used
+        sources = set(tool.sources)
+        primary = [call.entry.doc_id] if call.entry is not None else []
 
-        def resolve(value: Any, where: str) -> Any:
+        def resolve(value: Any, where: str, hinted: bool) -> Any:
             if isinstance(value, str) and value.startswith(DATASET_PREFIX):
-                entry = call.dataset(value, field=where)
+                try:
+                    entry = call.dataset(value, field=where)
+                except ToolError as error:
+                    if not hinted or error.code != "not_found":
+                        raise
+                    raise _with_hint(error, Toolbox._source_hint(call.session, primary,
+                                                                 value)) from None
                 used.setdefault(entry.id, entry)
             return value
 
         for path in (*tool.datasets, *tool.sources):
-            _walk(arguments, path.split("."), "", resolve)
+            hinted = path in sources
+            _walk(arguments, path.split("."), "",
+                  lambda value, where, hinted=hinted: resolve(value, where, hinted))
 
     @staticmethod
-    def _sources(session: Session, tool: Tool,
-                 arguments: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    def _sources(session: Session, tool: Tool, arguments: dict[str, Any], *,
+                 hint: Callable[[str], str | None] | None = None,
+                 ) -> tuple[dict[str, Any], list[str]]:
         """``arguments`` with every address in a declared source qualified with its document
         (``t:sales`` -> ``d2/t:sales``), and those documents, in order.  Datasets (``d:``)
-        are left as they are."""
+        are left as they are.  ``hint(value)``: words added to a ``not_found``."""
         if not tool.sources:
             return arguments, []
         found: list[str] = []
@@ -805,7 +818,12 @@ class Toolbox:
         def resolve(value: Any, where: str) -> Any:
             if not isinstance(value, str) or value.startswith(DATASET_PREFIX):
                 return value
-            doc, address = qualify(value, documents, session.formats, field=where)
+            try:
+                doc, address = qualify(value, documents, session.formats, field=where)
+            except ToolError as error:
+                if hint is None or error.code != "not_found":
+                    raise
+                raise _with_hint(error, hint(value)) from None
             if doc not in found:
                 found.append(doc)
             return f"{doc}/{address}"
@@ -813,6 +831,23 @@ class Toolbox:
         for path in tool.sources:
             arguments = _walk(arguments, path.split("."), "", resolve)
         return arguments, found
+
+    @staticmethod
+    def _source_hint(session: Session, doc_ids: Sequence[str], value: str) -> str | None:
+        """What the format of the call's document (the first of ``doc_ids``) says about a
+        source value that names nothing (:attr:`DocumentFormat.source_hint`), or ``None``."""
+        entry = session.documents.get(doc_ids[0]) if doc_ids else None
+        fmt = session.formats.get(entry.kind) if entry is not None else None
+        hook = getattr(fmt, "source_hint", None)
+        if hook is None:
+            return None
+        try:
+            with entry.lock:
+                said = hook(entry.document, value)
+        except Exception:  # noqa: BLE001 -- a hint only adds words; the refusal stands
+            logger.exception("source_hint of %s failed", entry.kind)
+            return None
+        return said.strip() if isinstance(said, str) and said.strip() else None
 
     def _batch_sources(self, session: Session, arguments: Mapping[str, Any]) -> list[str]:
         """The documents a batch's ops name as sources, as far as can be told before they
@@ -971,7 +1006,9 @@ class Toolbox:
         try:
             handler = self._handler(session, tool, arguments, primary)
             arguments = self._with_refs(tool, arguments, entries, primary, context)
-            arguments, found = self._sources(session, tool, arguments)
+            arguments, found = self._sources(
+                session, tool, arguments,
+                hint=lambda value: self._source_hint(session, doc_ids, value))
             held = {**reading, **entries}
             call = Call(self, session, tool, arguments,
                         {doc: held[doc] for doc in [*doc_ids, *found] if doc in held},
@@ -1163,3 +1200,12 @@ def collect_warnings() -> Iterator[list[str]]:
         yield caught
     finally:
         stack.pop()
+
+
+def _with_hint(error: ToolError, hint: str | None) -> ToolError:
+    """``error`` with a format's hint added to its message; the code, field, options and
+    details stay as they are."""
+    if not hint:
+        return error
+    return ToolError(error.code, f"{error.message}; {hint}", field=error.field,
+                     valid_options=error.valid_options, details=error.details)

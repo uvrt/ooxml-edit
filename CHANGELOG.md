@@ -2,6 +2,17 @@
 
 Versions are those in `pyproject.toml`; none is published to PyPI yet.
 
+## 0.23.0 -- unreleased
+- A format's hint for a source that names nothing: `DocumentFormat.source_hint(document,
+  value) -> str | None`. When a declared source (`Tool.sources`) is a `d:` that is no
+  dataset, or a `t:` (or `d2/t:`) address no open document takes, the dispatcher asks the
+  format of the call's document (its first document argument) and appends the hint to the
+  `not_found` message (`no dataset d:3; ...`) -- in a `batch` too, where the op's error and
+  the batch's message both carry it. Code, field and `valid_options` are unchanged; the
+  hook is asked only for such a refusal, never changes what resolves, and one that returns
+  nothing or raises leaves the message as it was. For the Word library, whose drawings and
+  charts are `d:<digits>`. Definitions unchanged (no tokens added).
+
 ## 0.22.0 -- unreleased
 - Sources (O3): the shared `edit_chart` takes its categories and series from a dataset or
   from a table of another open document, by column name, and says where every placed value

@@ -10,6 +10,7 @@ cells in one column into ranges (``G!B2:B4``).
 
 from __future__ import annotations
 
+import dataclasses
 import datetime as dt
 
 import pytest
@@ -440,6 +441,94 @@ def test_parallel_calls_order_by_the_source_document_too(toolbox, session):
                         "from": "t:sales", "columns": ["region", "units"]}),
         ("close_document", {"doc": "d2"})])
     assert results[0].ok and results[1].ok
+
+
+# -- the format's hint for a source that names nothing -------------------------------------------
+
+#: What the hinting deck format was asked: (document, value).
+ASKED: list[tuple] = []
+
+
+def _deck_hint(document, value):
+    ASKED.append((document, value))
+    if value.startswith("d:") and value[2:].isdigit():
+        return f"{value} is one of the deck's drawings, not a dataset"
+    if value == "t:raise":
+        raise RuntimeError("a broken hint")
+    return "" if value == "t:blank" else None
+
+
+@pytest.fixture
+def hinting():
+    ASKED.clear()
+    deck = dataclasses.replace(tools_toys.DECK, source_hint=_deck_hint)
+    with Toolbox(TOOLS, formats=[deck, tools_toys.TEXT, GRID], groups=shared.GROUPS,
+                 workers=0) as box:
+        yield box
+
+
+def _set_from(value):
+    return {"doc": "d1", "target": "c1", "action": "set_values", "series": "units",
+            "from": value, "columns": ["region", "units"]}
+
+
+def test_without_a_hint_the_message_is_unchanged(toolbox, session):
+    error = failed(call(toolbox, session, "edit_chart", **_set_from("d:3")), "not_found")
+    assert error.message == "no dataset d:3" and error.field == "from"
+    alone = toolbox.session(clock=CLOCK)
+    alone.open(synthetic.outer_package(), "deck.pptx")
+    error = failed(call(toolbox, alone, "edit_chart", **_set_from("t:sales")), "not_found")
+    assert error.message == "no open document takes t: addresses: open one first"
+
+
+def test_the_call_documents_format_adds_its_hint_to_a_missing_dataset(hinting):
+    session = _session(hinting)
+    ok(call(hinting, session, "ds_put", id="sales"))
+    error = failed(call(hinting, session, "edit_chart", **_set_from("d:3")), "not_found")
+    assert error.message == "no dataset d:3; d:3 is one of the deck's drawings, not a dataset"
+    assert error.field == "from" and error.valid_options == ["d:sales"]
+    assert ASKED == [(session.entry("d1").document, "d:3")]
+
+
+def test_the_hint_reaches_a_t_address_no_document_takes(hinting):
+    session = hinting.session(clock=CLOCK)
+    session.open(synthetic.outer_package(), "deck.pptx")
+    error = failed(call(hinting, session, "edit_chart", **_set_from("t:sales")), "not_found")
+    assert error.message.startswith("no open document takes t: addresses: open one first")
+    assert ASKED == [(session.entry("d1").document, "t:sales")]
+    for value in ("t:blank", "t:raise"):    # nothing to say, or a hint that fails: as it was
+        error = failed(call(hinting, session, "edit_chart", **_set_from(value)), "not_found")
+        assert error.message == "no open document takes t: addresses: open one first"
+
+
+def test_a_hint_never_changes_what_resolves(hinting):
+    session = _session(hinting)
+    _chart(hinting, session, ["North", "South", "East"])
+    ok(call(hinting, session, "ds_put", id="sales"))
+    for value in ("d:sales", "t:sales"):
+        ok(call(hinting, session, "edit_chart", **_set_from(value)))
+    failed(call(hinting, session, "edit_chart", **_set_from("d2/t:none")), "not_found")
+    failed(call(hinting, session, "edit_chart", **_set_from("x:1")), "invalid_arguments")
+    assert ASKED == []      # asked only when the dispatcher finds nothing to resolve
+
+
+def test_the_hint_reaches_a_batch(hinting):
+    session = _session(hinting)
+    error = failed(call(hinting, session, "batch", ops=[
+        {"tool": "edit_chart", "arguments": {"doc": "d1", "target": "1", "action": "add",
+                                             "chart_type": "column", "from": "t:sales",
+                                             "columns": ["region", "units"]}},
+        {"tool": "edit_chart", "arguments": _set_from("d:3")}]), "not_found")
+    assert error.message.endswith("no dataset d:3; d:3 is one of the deck's drawings, "
+                                  "not a dataset")
+    assert error.field == "ops[1].arguments.from"
+    assert error.details["error"]["message"] == (
+        "no dataset d:3; d:3 is one of the deck's drawings, not a dataset")
+    alone = hinting.session(clock=CLOCK)
+    alone.open(synthetic.outer_package(), "deck.pptx")
+    error = failed(call(hinting, alone, "batch", ops=[
+        {"tool": "edit_chart", "arguments": _set_from("t:sales")}]), "not_found")
+    assert [value for _, value in ASKED][-1] == "t:sales"
 
 
 # -- the helpers ---------------------------------------------------------------------------------

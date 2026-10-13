@@ -124,6 +124,13 @@ class DocumentFormat:
     #: as one range -- in the order given: ``merge_sources(addresses) -> addresses``.
     #: ``None``: they are listed as they are, each once.
     merge_sources: Callable[[Sequence[str]], Sequence[str]] | None = None
+    #: A word on a source value that names nothing -- a ``d:`` that is no dataset, a
+    #: ``t:`` no open document takes -- when this format's document is the call's
+    #: (its first document argument): ``source_hint(document, value) -> str | None``,
+    #: appended to the ``not_found`` message (say, that ``d:3`` is one of the format's
+    #: own drawings, not a dataset).  It only adds wording: what resolves never changes,
+    #: and a hint that raises is ignored.  ``None``: the message is left as it is.
+    source_hint: Callable[[Any, str], str | None] | None = None
 
 
 class LRU:

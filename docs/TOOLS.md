@@ -128,7 +128,13 @@ FORMAT = DocumentFormat(..., datasets={"t:": table_rows},
 
 `merge_sources` writes a run of the format's addresses compactly for a result (a dataset's
 sources are merged by its source document's format); without it they are listed as they
-are, each once. A resolved address is held to `Limits.max_dataset_cells`.
+are, each once. A resolved address is held to `Limits.max_dataset_cells`. A format may
+also give `source_hint(document, value) -> str | None`: when a source names nothing -- a
+`d:3` that is no dataset, a `t:` no open document takes -- the dispatcher asks the format of
+the call's document (its first document argument) and appends what it says to the
+`not_found` message, in a `batch` too (a library whose drawings are `d:<digits>` can say
+`d:3` is one, not a dataset); it only adds wording, never changes what resolves, and a hint
+that raises is ignored.
 
 The shared `edit_chart` takes a source for `add`, `set_values` and `add_series`:
 `from` names it and `columns` its columns by name -- the category column (a scatter chart's
