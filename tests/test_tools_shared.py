@@ -183,11 +183,39 @@ def test_a_handler_changes_no_definition_and_an_unknown_name_is_refused():
     with pytest.raises(KeyError):
         shared.handler("no_such_tool", kind="pptx")
     with pytest.raises(ValueError):
-        shared.handler("render", kind="xlsx")
+        shared.handler("render", kind="odt")
     altered = Tool(name="render", description="Something else.",
                    schema=shared.SPECS["render"].schema, handlers={"docx": lambda c: None})
     with pytest.raises(ValueError, match="two different tools"):
         merge_tools([shared.definition("render"), altered])
+
+
+def test_workbooks_are_a_kind_and_their_formats_are_in_the_definitions():
+    assert shared.KINDS == ("pptx", "docx", "xlsx")
+    assert shared.handler("describe", kind="xlsx")(lambda call, doc: None).kinds == ["xlsx"]
+    kind = shared.SPECS["new_document"].schema["properties"]["kind"]
+    assert kind["enum"] == ["pptx", "docx", "xlsx"] and "xlsx: a workbook" in kind["description"]
+    save = shared.SPECS["save_document"].schema["properties"]["format"]
+    assert {"xlsx", "xlsm", "xltx"} <= set(save["enum"]) and "xltx" in save["description"]
+    assert "Workbooks:" in shared.SPECS["describe"].description
+    find = shared.SPECS["find_text"]
+    assert "workbook" in find.description
+    assert "Workbooks: a sheet, range or table" in find.schema["properties"]["range"]["description"]
+    # replace_text's range stays the documents' alone
+    replace = shared.SPECS["replace_text"].schema["properties"]["range"]["description"]
+    assert "Workbooks" not in replace
+
+
+def test_a_toolbox_without_a_workbook_library_refuses_workbook_calls(toolbox, session):
+    """The enums are static (one definition whichever libraries are loaded), so a toolbox
+    without a kind's library answers a call for it as before for a kind it lacks."""
+    made = call(toolbox, session, "new_document", kind="xlsx")
+    assert not made.ok and made.error.code == "invalid_arguments"
+    assert made.error.field == "kind" and made.error.valid_options == ["docx"]
+    assert list(session.documents) == ["d1", "d2"]
+    # a deck's or document's library is asked the same as before, and the toolbox's shared
+    # definitions are the same objects whichever kinds it serves
+    assert toolbox.tools["new_document"].schema == shared.SPECS["new_document"].schema
 
 
 def test_definitions_meet_each_providers_rules_with_batch_sent_non_strict(toolbox):

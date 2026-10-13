@@ -34,9 +34,15 @@ How a call finds its handler:
   keeps one.
 
 A parameter that applies to one format says so in its description (``slides`` for decks,
-``pages`` and ``range`` for documents); the handler of the other kind answers
-``invalid_arguments`` naming the field to use instead.  Lengths are points, as everywhere in
-the tool layer.
+``pages`` and ``range`` for documents, ``find_text``'s ``range`` for workbooks too: a sheet,
+range or table); the handler of another kind answers ``invalid_arguments`` naming the field
+to use instead.  Lengths are points, as everywhere in the tool layer.
+
+The kinds (:data:`KINDS`) are ``ooxml_common.kinds``' main kind per application: ``pptx``,
+``docx`` and ``xlsx``.  The enums that name them (``new_document``'s ``kind``,
+``save_document``'s ``format``) are static, like the descriptions: one definition whichever
+libraries are loaded, so that two libraries' tools merge.  A toolbox without a kind's
+library answers a call for it ``invalid_arguments`` with the kinds it has.
 """
 
 from __future__ import annotations
@@ -57,7 +63,7 @@ MISC = "shared_misc"
 GROUPS = [ToolGroup(MISC, "Session housekeeping, charts, SmartArt and document properties.")]
 
 #: Every document kind a shared tool may serve.
-KINDS = ("pptx", "docx")
+KINDS = ("pptx", "docx", "xlsx")
 
 _DOC = string("Document id.")
 _TARGET = string("Address as a read tool printed it, or $ref.")
@@ -80,6 +86,8 @@ def _pages(what: str) -> Param:
 
 
 _RANGE = string("Documents: only within this block or span (p:A..t:B).", optional=True)
+_FIND_RANGE = string("Documents: only within this block or span (p:A..t:B). Workbooks: a "
+                     "sheet, range or table.", optional=True)
 _STORIES = string("Documents: body (default) or all stories. Decks: body is the slides; "
                   "layouts, masters, or all.", enum=["body", "all", "layouts", "masters"],
                   optional=True)
@@ -142,7 +150,8 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
     Spec("new_document",
          "Make a new deck or document, optionally from a template blob (its layouts, styles "
          "and theme, not its content). Returns its doc id.",
-         {"kind": string("pptx: a deck; docx: a document.", enum=list(KINDS)),
+         {"kind": string("pptx: a deck; docx: a document; xlsx: a workbook.",
+                         enum=list(KINDS)),
           "template_blob": string("Template blob handle (.potx, .dotx...).", optional=True),
           "size": string("Decks 16:9 (default) or 4:3; documents A4, Letter...",
                          optional=True),
@@ -156,9 +165,10 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
          "Returns the name, format, size and validation report, never the content.",
          {"doc": _DOC,
           "name": string("File name, e.g. q3-review.pptx."),
-          "format": string("potx/dotx: a template; outline (decks) or markdown (documents): "
-                           "a text copy.",
-                           enum=["pptx", "potx", "docx", "dotx", "markdown", "outline"])},
+          "format": string("potx/dotx/xltx: a template; outline (decks) or markdown "
+                           "(documents): a text copy.",
+                           enum=["pptx", "potx", "docx", "dotx", "xlsx", "xlsm", "xltx",
+                                 "markdown", "outline"])},
          batchable=False),
     # S4 (list_documents went post-T4: the application names the documents and inputs)
     Spec("close_document", "Close a document, discarding unsaved changes. The session holds "
@@ -179,17 +189,19 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
          "The document at a glance; call once, first. Decks: slides (id, title, layout, "
          "content area), size, theme colours, fonts, roles and tints, layouts and their "
          "placeholders. Documents: headings with ids, sections, styles in use, comments, "
-         "revisions, fields, tables, drawings, pages. Both: the problems it opened with.",
+         "revisions, fields, tables, drawings, pages. Workbooks: sheets, tables and regions "
+         "with key columns, column types and fill, sample rows, flags. All: the problems it "
+         "opened with.",
          {"doc": _DOC}),
     # S6
     Spec("find_text",
          "Find text: each match's address, kind and context, in order, across slides, notes, "
-         "tables, SmartArt and a document's stories.",
+         "tables, SmartArt, a document's stories and a workbook's cells, names and comments.",
          {"doc": _DOC,
           "text": string("Text to find."),
           "regex": boolean("text is a Python regex. Default false.", optional=True),
           "slides": _slides(". Default all"),
-          "range": _RANGE,
+          "range": _FIND_RANGE,
           "stories": _STORIES,
           "cursor": _CURSOR}),
     # S7
