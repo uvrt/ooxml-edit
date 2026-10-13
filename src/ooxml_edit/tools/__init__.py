@@ -33,6 +33,8 @@ What is here:
   versions and caches;
 * :mod:`.datasets` -- :class:`Dataset`, a table of values with the sources of each, kept in
   the session under ``d:<id>`` and named by later calls on any document;
+* :mod:`.sources` -- :class:`Rows`: what a tool takes rows from, a dataset or another open
+  document's address its format resolves (``t:sales``), with where each value came from;
 * :mod:`.limits` -- size limits, magic-byte checks and the zip-bomb guard;
 * :mod:`.worker` -- worker processes whose deadlines are kept by killing the worker
   (subprocess workers in a process that may not start multiprocessing children);
@@ -61,6 +63,7 @@ from .registry import (CORE, Param, Tool, ToolGroup, array, boolean, build_schem
 from .results import (ERROR_CODES, Image, Result, ToolError, anthropic_image_tokens,
                       openai_image_tokens, page_list, page_text, truncate)
 from .schema import CallError, SubsetError, canonical, check_subset, validate_call
+from .sources import Rows
 from .session import (DEFAULT_LOCALE, LOCALE_FIELDS, Blob, DefaultLocale, DocumentEntry,
                       DocumentFormat, Output, Session, doc_order, locale_of)
 from .worker import InProcess, SubprocessPool, WorkerPool, worker_task
@@ -69,7 +72,7 @@ __all__ = [
     "Blob", "CORE", "Call", "CallContext", "CallError", "CallRecord", "DATASET_ID",
     "DATASET_PREFIX", "DEFAULT_LOCALE", "Dataset", "DatasetEntry", "DefaultLocale", "DocumentEntry", "DocumentFormat",
     "ERROR_CODES", "LOCALE_FIELDS", "REF", "Image", "LimitError", "Limits", "Output", "Param",
-    "Result", "SYSTEM",
+    "Result", "Rows", "SYSTEM",
     "InProcess", "Session", "StrictProblem", "SubprocessPool", "SubsetError", "Tool", "ToolError", "ToolGroup", "Toolbox",
     "WorkerPool",
     "anthropic_image_tokens", "array", "boolean", "build_schema", "canonical", "check_subset",

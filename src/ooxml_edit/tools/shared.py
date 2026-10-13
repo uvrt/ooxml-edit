@@ -47,8 +47,10 @@ library answers a call for it ``invalid_arguments`` with the kinds it has.
 
 from __future__ import annotations
 
+import functools
 from typing import Any, Callable, Mapping
 
+from . import sources
 from .registry import (CORE, Param, Tool, ToolGroup, array, boolean, build_schema,
                        free_object, integer, number, obj, string)
 from .results import Result, ToolError, page_text
@@ -102,7 +104,9 @@ class Spec:
                  documents: Any = ("doc",), route: str | None = None, strict: bool = True,
                  batchable: bool = True, composite: bool = False,
                  refs: tuple[str, ...] = (), datasets: tuple[str, ...] = (),
-                 reads: Callable[[Mapping[str, Any]], bool] | None = None) -> None:
+                 sources: tuple[str, ...] = (),
+                 reads: Callable[[Mapping[str, Any]], bool] | None = None,
+                 wrap: Callable[[Callable[..., Any]], Callable[..., Any]] | None = None) -> None:
         self.name = name
         self.description = description
         self.params = dict(params)
@@ -116,15 +120,21 @@ class Spec:
         self.composite = composite
         self.refs = refs
         self.datasets = datasets
+        self.sources = sources
         self.reads = reads
+        #: What every kind's handler runs inside: the shared part of a tool's work (taking
+        #: ``edit_chart``'s rows from a source), done once here for every library.
+        self.wrap = wrap
 
     def make(self, handlers: Mapping[str | None, Callable[..., Any]]) -> Tool:
+        if self.wrap is not None:
+            handlers = {kind: self.wrap(fn) for kind, fn in handlers.items()}
         return Tool(name=self.name, description=self.description,
                     schema=build_schema(self.params), handlers=dict(handlers),
                     group=self.group, mutates=self.mutates, documents=self.documents,
                     exactly_one=self.exactly_one, route=self.route, strict=self.strict,
                     batchable=self.batchable, composite=self.composite, refs=self.refs,
-                    datasets=self.datasets, reads=self.reads)
+                    datasets=self.datasets, sources=self.sources, reads=self.reads)
 
     @property
     def schema(self) -> dict[str, Any]:
@@ -244,10 +254,10 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
          refs=("slides[]",)),
     # S10, S11: edit_chart reads too
     Spec("edit_chart",
-         "Add, read or change a chart. add: a new chart from data, styled as Office inserts "
-         "one. read: type, data, formats, scales, and what Edit Data holds. Other actions "
-         "change data, titles, legend, labels, axes, colours, series type, text or gridlines; "
-         "values and workbook change together.",
+         "Add, read or change a chart. add: a new chart, styled as Office inserts one. read: "
+         "type, data, formats, scales, and what Edit Data holds. Others change data, titles, "
+         "legend, labels, axes, colours, series type, text or gridlines; values and workbook "
+         "change together.",
          {"doc": _DOC,
           "target": string("The chart; add: decks the slide, documents the paragraph to "
                            "follow. Or $ref."),
@@ -273,10 +283,10 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
                                   "code, e.g. #,##0.0.", optional=True),
           "series": string("Series name, or number from 0.", optional=True),
           "category": string("Category label, or number from 0.", optional=True),
-          "values": array(number(), "One per category (set_values, add_series) or per "
-                          "series (add_category); add: scatter and bubble x values.",
+          "values": array(number(), "One per category (set_values, add_series) or series "
+                          "(add_category); add: scatter, bubble x values.",
                           optional=True),
-          "value": number("set_value: the value; set_gap_width: percent of a bar's width.",
+          "value": number("set_value: the value; set_gap_width: % of a bar's width.",
                           optional=True),
           "text": string("New name, label or title; add: the chart title.", optional=True),
           "axis": string("set_axis_title, set_axis_scale, set_gridlines; add with scale.",
@@ -317,8 +327,13 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
                              enum=["right", "left", "top", "bottom", "none", "center",
                                    "inside_end", "inside_base", "outside_end", "best_fit"],
                              optional=True),
-          "ref": string("add: ref name for the new chart.", optional=True)},
-         group=MISC, mutates=True, refs=("target",), reads=_reading_action),
+          "ref": string("add: ref name for the new chart.", optional=True),
+          "from": string("add, set_values, add_series: rows of d:<id> or table t:<name>.",
+                         optional=True),
+          "columns": array(string(), "from's category column, then series columns.",
+                           optional=True)},
+         group=MISC, mutates=True, refs=("target",), sources=("from",),
+         reads=_reading_action, wrap=lambda fn: _chart_rows(fn)),
     # S12
     Spec("edit_smartart",
          "Change a SmartArt diagram's node text, or add and remove nodes. Returns the nodes.",
@@ -356,6 +371,182 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
          documents=_no_documents, mutates=True, strict=False, batchable=False,
          composite=True),
 ]}
+
+# -- edit_chart's rows from a source ------------------------------------------------------------
+
+#: The ``edit_chart`` actions that take ``from``.
+FROM_ACTIONS = ("add", "set_values", "add_series")
+
+
+def _chart_rows(handler: Callable[..., Any]) -> Callable[..., Any]:
+    """``edit_chart``'s handler for a kind, taking ``from`` and ``columns`` for it.
+
+    With ``from`` (a dataset ``d:<id>``, or a table of an open document, ``t:<name>``;
+    :mod:`.sources`) the categories and series come from the source's columns by name:
+    ``columns`` is the category column (a scatter chart's x values), then a column per
+    series (``add``), or one, the values (``set_values``, ``add_series``, matched to the
+    chart's categories by label).  The kind's handler gets literal ``categories``,
+    ``data`` and ``values``, as if the model had written them, and never sees ``from``.
+    Its result gets ``from``: the source, its document and version, and per category and
+    series column the rows placed (from 1, as runs) and their sources, merged.  A series
+    value that is not a number is refused, naming its cell: text is never converted."""
+
+    @functools.wraps(handler)
+    def run(call: Any, **arguments: Any) -> Any:
+        source = arguments.pop("from", None)
+        columns = arguments.pop("columns", None)
+        if source is None:
+            if columns is not None:
+                raise ToolError("invalid_arguments", "columns name the columns of from; "
+                                "give from too, or the values in data", field="columns")
+            return handler(call, **arguments)
+        return _from_rows(handler, call, source, columns, arguments)
+
+    return run
+
+
+def _from_rows(handler: Callable[..., Any], call: Any, source: str, columns: Any,
+               arguments: dict[str, Any]) -> Result:
+    action = arguments.get("action")
+    if action not in FROM_ACTIONS:
+        raise ToolError("invalid_arguments", f"{action} takes no from; from is for "
+                        f"{', '.join(FROM_ACTIONS)}", field="from",
+                        valid_options=list(FROM_ACTIONS))
+    for name in ("categories", "data", "values"):
+        if arguments.get(name) is not None:
+            raise ToolError("invalid_arguments", f"from replaces {name}: name the columns "
+                            "in columns instead", field=name)
+    if not columns:
+        raise ToolError("invalid_arguments", "from needs columns: the category column, "
+                        "then each series' column", field="columns")
+    rows = call.source(source, field="from")
+    at = [rows.column(name, field=f"columns[{i}]") for i, name in enumerate(columns)]
+    if len(set(at)) != len(at):
+        raise ToolError("invalid_arguments", "a column is named twice", field="columns")
+    names = rows.dataset.columns
+    chart_type = arguments.get("chart_type")
+    if action == "add":
+        if len(at) < 2:
+            raise ToolError("invalid_arguments", "add from rows needs the category column "
+                            "and at least one series column", field="columns")
+        if chart_type == "bubble":
+            raise ToolError("invalid_arguments", "a bubble chart's sizes are not taken from "
+                            "a source: give categories and data", field="from")
+        if not rows.dataset.rows:
+            raise ToolError("refused", f"{rows.address} has no rows", field="from")
+        order = list(range(len(rows.dataset.rows)))
+        if chart_type == "scatter":
+            arguments["values"] = _numbers(rows, at[0], order, "columns[0]")
+        else:
+            arguments["categories"] = _labels(call, rows, at[0], order)
+        arguments["data"] = [{"name": names[column],
+                              "values": _numbers(rows, column, order, f"columns[{i + 1}]")}
+                             for i, column in enumerate(at[1:])]
+        series = [names[column] for column in at[1:]]
+    else:
+        if len(at) != 2:
+            raise ToolError("invalid_arguments", f"{action} from rows takes two columns: "
+                            "the category column, then the values'", field="columns")
+        read = handler(call, doc=arguments["doc"], target=arguments["target"], action="read")
+        data = read.data if isinstance(read, Result) else read
+        order = _matched(call, rows, at[0], list((data or {}).get("categories") or []))
+        arguments["values"] = _numbers(rows, at[1], order, "columns[1]")
+        if action == "add_series" and arguments.get("text") is None:
+            arguments["text"] = names[at[1]]
+        series = [arguments.get("text") if action == "add_series"
+                  else arguments.get("series")]
+    returned = handler(call, **arguments)
+    result = returned if isinstance(returned, Result) else Result(data=returned)
+    placed = rows.describe()
+    placed["categories"] = rows.provenance(at[0], order)
+    placed["series"] = [{"name": name, **rows.provenance(column, order)}
+                        for name, column in zip(series, at[1:])]
+    if isinstance(result.data, dict):
+        result.data["from"] = placed
+    else:
+        result.data = {"chart": result.data, "from": placed}
+    return result
+
+
+def _numbers(rows: Any, column: int, order: list[int], field: str) -> list[Any]:
+    """A series' values from a column, in ``order``: numbers, or a refusal naming the cell."""
+    out = []
+    for row in order:
+        value = rows.dataset.rows[row][column]
+        if not sources.number(value):
+            raise ToolError("invalid_arguments", f"{rows.where(row, column)} is "
+                            f"{sources.what(value)}, not a number: a series takes numbers and "
+                            "text is never converted; fix the source or choose another column",
+                            field=field)
+        out.append(value)
+    return out
+
+
+def _labels(call: Any, rows: Any, column: int, order: list[int]) -> list[str]:
+    """Category labels from a column, in ``order``: text as it is, numbers written in the
+    session's locale; a blank is refused, naming its cell."""
+    out = []
+    for row in order:
+        text = sources.label(rows.dataset.rows[row][column], call.locale)
+        if text is None:
+            raise ToolError("invalid_arguments", f"{rows.where(row, column)} is blank: "
+                            "a category needs a label", field="columns[0]")
+        out.append(text)
+    return out
+
+
+def _key(value: Any, locale: Any) -> tuple[str, Any]:
+    """What a category is matched by: its number when it is or reads as one, else its text."""
+    if sources.number(value):
+        return ("n", float(value))
+    text = str(value).strip()
+    separator = getattr(locale, "decimal_separator", ".")
+    for candidate in (text, text.replace(separator, ".") if separator != "." else None):
+        if candidate:
+            try:
+                number = float(candidate)
+            except ValueError:
+                continue
+            if sources.number(number):
+                return ("n", number)
+    return ("t", str(value))
+
+
+def _matched(call: Any, rows: Any, column: int, categories: list[Any]) -> list[int]:
+    """The row for each of the chart's categories, matched by label (a number by value):
+    every category needs exactly one row, and every row a category."""
+    locale = call.locale
+    wanted = [_key(category, locale) for category in categories]
+    if len(set(wanted)) != len(wanted):
+        raise ToolError("ambiguous", "the chart has two categories alike, so rows cannot be "
+                        "matched to them by label; set values by position instead",
+                        field="from")
+    found: dict[tuple[str, Any], int] = {}
+    for row, record in enumerate(rows.dataset.rows):
+        value = record[column]
+        if sources.label(value, locale) is None:
+            raise ToolError("invalid_arguments", f"{rows.where(row, column)} is blank: "
+                            "a row is matched to a category by its label",
+                            field="columns[0]")
+        key = _key(value, locale)
+        if key in found:
+            raise ToolError("ambiguous", f"rows {found[key] + 1} and {row + 1} of "
+                            f"{rows.address} have the same category", field="columns[0]")
+        found[key] = row
+    missing = [str(category) for category, key in zip(categories, wanted) if key not in found]
+    if missing:
+        raise ToolError("not_found", f"no row of {rows.address} for the chart's "
+                        f"categor{'y' if len(missing) == 1 else 'ies'} "
+                        f"{', '.join(missing[:5])}" + (" and more" if len(missing) > 5 else ""),
+                        field="columns[0]", valid_options=[str(c) for c in categories][:50])
+    extra = sorted(set(found.values()) - {found[key] for key in wanted})
+    if extra:
+        raise ToolError("refused", f"row{'s' if len(extra) > 1 else ''} "
+                        f"{sources.runs(extra)} of {rows.address} match no category of the "
+                        "chart: add_category first, or leave them out of the source",
+                        field="from")
+    return [found[key] for key in wanted]
+
 
 #: The shared tools in the core group (never deferred).
 CORE_NAMES = [name for name, spec in SPECS.items() if spec.group == CORE]
@@ -477,5 +668,5 @@ SESSION_TOOLS: list[Tool] = [
     SPECS["read_blob"].make({None: _read_blob}),
 ]
 
-__all__ = ["CORE_NAMES", "GROUPS", "KINDS", "MISC", "SESSION_TOOLS", "SPECS", "Spec",
+__all__ = ["CORE_NAMES", "FROM_ACTIONS", "GROUPS", "KINDS", "MISC", "SESSION_TOOLS", "SPECS", "Spec",
            "definition", "handler"]

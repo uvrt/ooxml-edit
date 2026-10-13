@@ -31,6 +31,12 @@ on any document, may name it ``d:by_region`` wherever its tool declares a datase
 unknown one is ``not_found`` with the known ids -- and warns when a dataset a call names is
 stale (its source changed since).  The handler reads it with ``call.dataset(value)``.
 
+**Sources.**  A tool that takes rows (``Tool.sources``: a chart's data) may name a dataset
+or an address in another open document that its format resolves (``t:sales``, or
+``d2/t:sales`` naming the document; :mod:`.sources`).  The dispatcher qualifies the address
+with its document before the call runs and locks that document too, for reading: no undo
+step, no version, no checks.  The handler reads either with ``call.source(value)``.
+
 **Checks.**  Handlers say what they touched (``call.touch(page)``); after a changing call
 the dispatcher asks the document's format for the facts (``DocumentFormat.checks``) once.
 
@@ -65,6 +71,7 @@ from .results import Image, Result, ToolError
 from .schema import CallError, validate_call
 from .session import (Clock, DocumentEntry, DocumentFormat, Output, Session, doc_order,
                       font_dirs_of, locale_of)
+from .sources import Rows, qualify, resolve as resolve_rows
 from .worker import WorkerPool
 
 
@@ -232,6 +239,35 @@ class Call:
             error.valid_options = list(dict.fromkeys(
                 error.valid_options + [DATASET_PREFIX + key for key in self.context.datasets]))
             raise
+
+    def source(self, value: str, *, field: str | None = None) -> Rows:
+        """The rows a source names (:mod:`.sources`): a whole dataset (``d:by_region``), or
+        an address in a document this call holds (``d2/t:sales``, ``t:sales``), read now by
+        that document's format.  ``limit`` over ``Limits.max_dataset_cells``."""
+        if isinstance(value, str) and value.startswith(DATASET_PREFIX):
+            entry = self.dataset(value, field=field)
+            if value != entry.address:
+                raise ToolError("invalid_arguments", f"a source is a whole dataset "
+                                f"({entry.address}), not part of one", field=field)
+            self.context.datasets_used.setdefault(entry.id, entry)
+            fmt = self.session.formats.get(entry.kind) if entry.kind else None
+            return Rows(entry.address, entry.dataset, doc=entry.doc, kind=entry.kind,
+                        name=entry.name, version=entry.version, stale=entry.stale,
+                        merge=getattr(fmt, "merge_sources", None))
+        doc, address = qualify(value, self.session.documents, self.session.formats,
+                               field=field)
+        entry = self.entries.get(doc)
+        if entry is None:
+            raise ToolError("refused", f"{doc} is not held by this call: name it in an "
+                            "argument the tool declares as a source", field=field)
+        fmt = self.session.formats[entry.kind]
+        dataset = resolve_rows(fmt, entry.document, address)
+        if dataset.cells > self.limits.max_dataset_cells:
+            raise ToolError("limit", f"{doc}/{address} has {dataset.cells} values; at most "
+                            f"{self.limits.max_dataset_cells}: derive a smaller dataset",
+                            field=field)
+        return Rows(f"{doc}/{address}", dataset, doc=doc, kind=entry.kind, name=entry.name,
+                    version=entry.version, merge=fmt.merge_sources)
 
     @property
     def document(self) -> Any:
@@ -563,12 +599,17 @@ class Toolbox:
         try:
             tool = self.tool(name)
             clean = self._arguments(tool, arguments)
-            doc_ids = (self._batch_documents(clean) if tool.composite
-                       else tool.doc_ids(clean))
-            with session.lock(doc_ids) as locked:
+            if tool.composite:
+                doc_ids = self._batch_documents(clean)
+                found = self._batch_sources(session, clean)
+            else:
+                doc_ids = tool.doc_ids(clean)
+                clean, found = self._sources(session, tool, clean)
+            reading = [doc for doc in found if doc not in doc_ids]
+            with session.lock(doc_ids + reading) as locked:
                 entries = {entry.doc_id: entry for entry in locked}
                 primary = entries[doc_ids[0]] if doc_ids else None
-                result = self._run(session, tool, clean, entries, primary)
+                result = self._run(session, tool, clean, entries, primary, reading)
         except ToolError as error:
             result = Result.failure(error)
         except Exception as exc:  # noqa: BLE001 -- the model gets an error result
@@ -587,7 +628,8 @@ class Toolbox:
         """Run one turn's calls: per document in the order given, documents concurrently."""
         if not calls:
             return []
-        documents = [self._documents_named(name, arguments) for name, arguments in calls]
+        documents = [self._documents_named(session, name, arguments)
+                     for name, arguments in calls]
         futures: list[Future[Result]] = []
         with ThreadPoolExecutor(max_workers=max(1, min(max_workers, len(calls)))) as executor:
             for index, (name, arguments) in enumerate(calls):
@@ -602,7 +644,8 @@ class Toolbox:
             future.exception()  # wait; its outcome is its own
         return self.dispatch(session, name, arguments)
 
-    def _documents_named(self, name: str, arguments: Any) -> frozenset[str]:
+    def _documents_named(self, session: Session, name: str,
+                         arguments: Any) -> frozenset[str]:
         """The documents a call will lock, as far as can be told before validating it."""
         try:
             tool = self.tools[name]
@@ -610,8 +653,13 @@ class Toolbox:
             if not isinstance(parsed, Mapping):
                 return frozenset()
             if tool.composite:
-                return frozenset(self._batch_documents(parsed))
-            return frozenset(tool.doc_ids(parsed))
+                return frozenset(self._batch_documents(parsed)
+                                 + self._batch_sources(session, parsed))
+            try:
+                found = self._sources(session, tool, dict(parsed))[1]
+            except ToolError:
+                found = []
+            return frozenset(tool.doc_ids(parsed) + found)
         except Exception:  # noqa: BLE001 -- the call will fail on its own, in order
             return frozenset()
 
@@ -640,9 +688,12 @@ class Toolbox:
         return clean
 
     def _run(self, session: Session, tool: Tool, arguments: dict[str, Any],
-             entries: dict[str, DocumentEntry], primary: DocumentEntry | None) -> Result:
+             entries: dict[str, DocumentEntry], primary: DocumentEntry | None,
+             reading: Sequence[str] = ()) -> Result:
         if tool.composite:
-            return self._run_batch(session, arguments, entries, primary)
+            edited = {doc: entry for doc, entry in entries.items() if doc not in reading}
+            return self._run_batch(session, arguments, edited, primary,
+                                   {doc: entries[doc] for doc in reading})
         handler = self._handler(session, tool, arguments, primary)
         changing = tool.changes(arguments)
         key = arguments.get("key") if changing and isinstance(arguments.get("key"), str) else None
@@ -727,7 +778,7 @@ class Toolbox:
     def _with_datasets(tool: Tool, arguments: dict[str, Any], call: Call) -> None:
         """Check every ``d:<id>`` in a declared dataset argument names a dataset: one this
         call's batch defined, or the session's.  The value is left as it is."""
-        if not tool.datasets:
+        if not tool.datasets and not tool.sources:
             return
         used = call.context.datasets_used
 
@@ -737,8 +788,47 @@ class Toolbox:
                 used.setdefault(entry.id, entry)
             return value
 
-        for path in tool.datasets:
+        for path in (*tool.datasets, *tool.sources):
             _walk(arguments, path.split("."), "", resolve)
+
+    @staticmethod
+    def _sources(session: Session, tool: Tool,
+                 arguments: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+        """``arguments`` with every address in a declared source qualified with its document
+        (``t:sales`` -> ``d2/t:sales``), and those documents, in order.  Datasets (``d:``)
+        are left as they are."""
+        if not tool.sources:
+            return arguments, []
+        found: list[str] = []
+        documents = dict(session.documents)
+
+        def resolve(value: Any, where: str) -> Any:
+            if not isinstance(value, str) or value.startswith(DATASET_PREFIX):
+                return value
+            doc, address = qualify(value, documents, session.formats, field=where)
+            if doc not in found:
+                found.append(doc)
+            return f"{doc}/{address}"
+
+        for path in tool.sources:
+            arguments = _walk(arguments, path.split("."), "", resolve)
+        return arguments, found
+
+    def _batch_sources(self, session: Session, arguments: Mapping[str, Any]) -> list[str]:
+        """The documents a batch's ops name as sources, as far as can be told before they
+        are validated (an op that names none it can is refused when it runs)."""
+        found: list[str] = []
+        for op in arguments.get("ops") or []:
+            tool = self.tools.get(op.get("tool", "")) if isinstance(op, Mapping) else None
+            args = op.get("arguments") if isinstance(op, Mapping) else None
+            if tool is None or not tool.sources or not isinstance(args, Mapping):
+                continue
+            try:
+                docs = self._sources(session, tool, dict(args))[1]
+            except ToolError:
+                continue
+            found += [doc for doc in docs if doc not in found]
+        return found
 
     @staticmethod
     def _keep_datasets(session: Session, context: CallContext, result: Result) -> None:
@@ -814,7 +904,10 @@ class Toolbox:
         return found
 
     def _run_batch(self, session: Session, arguments: dict[str, Any],
-                   entries: dict[str, DocumentEntry], primary: DocumentEntry | None) -> Result:
+                   entries: dict[str, DocumentEntry], primary: DocumentEntry | None,
+                   reading: Mapping[str, DocumentEntry] | None = None) -> Result:
+        """``entries``: the documents the ops change (one undo step each); ``reading``:
+        the documents they only take rows from, locked but left alone."""
         ops = arguments.get("ops") or []
         limits = session.limits
         if len(ops) > limits.max_batch_ops:
@@ -838,7 +931,7 @@ class Toolbox:
                                 "timeout", f"the batch passed its {limits.batch_timeout:g} s "
                                 "deadline"))
                         done.append(self._run_op(session, index, tool, clean, entries, context,
-                                                 combined))
+                                                 combined, reading or {}))
                         if tool.changes(clean):
                             for doc in tool.doc_ids(clean):
                                 context.changed_at[doc] = index
@@ -872,15 +965,17 @@ class Toolbox:
 
     def _run_op(self, session: Session, index: int, tool: Tool, arguments: dict[str, Any],
                 entries: dict[str, DocumentEntry], context: CallContext,
-                combined: Result) -> dict[str, Any]:
+                combined: Result, reading: Mapping[str, DocumentEntry]) -> dict[str, Any]:
         doc_ids = tool.doc_ids(arguments)
         primary = entries.get(doc_ids[0]) if doc_ids else None
         try:
             handler = self._handler(session, tool, arguments, primary)
             arguments = self._with_refs(tool, arguments, entries, primary, context)
+            arguments, found = self._sources(session, tool, arguments)
+            held = {**reading, **entries}
             call = Call(self, session, tool, arguments,
-                        {doc: entries[doc] for doc in doc_ids if doc in entries}, primary,
-                        context)
+                        {doc: held[doc] for doc in [*doc_ids, *found] if doc in held},
+                        primary, context)
             self._with_datasets(tool, arguments, call)
             result = _as_result(handler(call, **arguments), call.result)
         except _OpFailed:
