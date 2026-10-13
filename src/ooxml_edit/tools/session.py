@@ -114,6 +114,16 @@ class DocumentFormat:
     #: created or adopted -- before anything is measured: the format applies the
     #: session's settings to it (:attr:`Session.font_dirs`, :attr:`Session.locale`).
     configure: Callable[[Any, "Session"], None] | None = None
+    #: The addresses of this format's documents that other documents' tools may take rows
+    #: from (a chart's data from a table, :mod:`.sources`): ``{prefix: resolve}``, where
+    #: ``resolve(document, address)`` returns a :class:`~.datasets.Dataset` -- columns,
+    #: rows, and each value's sources as the format's own address strings -- or raises
+    #: :class:`~.results.ToolError` (``not_found`` with the names there are).  Never ``d:``.
+    datasets: dict[str, Callable[[Any, str], Any]] = field(default_factory=dict)
+    #: Writes a run of this format's source addresses compactly for a result -- neighbours
+    #: as one range -- in the order given: ``merge_sources(addresses) -> addresses``.
+    #: ``None``: they are listed as they are, each once.
+    merge_sources: Callable[[Sequence[str]], Sequence[str]] | None = None
 
 
 class LRU:

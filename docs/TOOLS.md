@@ -14,6 +14,7 @@ standard library only, and no provider SDK. The plan it implements is
 | `tools.results` | the result envelope, error codes with `valid_options`, image token estimates, truncation and paging |
 | `tools.session` | `Session`: documents opened from bytes (`d1`), inputs registered as blobs (`b1`), outputs handed to the application as bytes; a re-entrant lock per document, taken in a fixed order across documents; versions (`History.version`) and version-keyed caches; an injected clock |
 | `tools.datasets` | `Dataset` (columns, rows, opaque sources per value) and `DatasetEntry` (its id, source document and version, `stale`): what a call keeps for the session under `d:<id>` (below) |
+| `tools.sources` | `Rows` (a source's `Dataset`, where it came from, `stale`) and the helpers that qualify, resolve and report sources: rows a tool takes from a dataset or another open document's table (below) |
 | `tools.limits` | size limits, magic-byte checks, image sizes read from headers, and a zip-bomb guard |
 | `tools.worker` | worker processes for rendering and layout whose deadlines are kept: a worker past its deadline is killed and the call reports `timeout`; multiprocessing workers by default, subprocess workers where multiprocessing may not start children, in-process on request (below) |
 | `tools.logs`, `tools.prompts` | call records with argument digests, not content; the shared system-prompt fragment (mechanics only, no house style) |
@@ -100,8 +101,66 @@ source and version, and goes stale with it. `Limits.max_datasets` (50) bounds a 
 `Limits.max_dataset_cells` (50,000 values; sources not counted) one dataset; the
 application may forget one with `session.drop_dataset(address)` (no tool does). Datasets
 stay in the session and are never sent to worker processes; a handler that needs one there
-passes the `Dataset`, which pickles when its `detail` does. No shared definition takes a
-dataset yet (consumers come with O3), so the deck and Word cores are unchanged.
+passes the `Dataset`, which pickles when its `detail` does.
+
+**Sources: charts from rows.** A tool that places values may take them from a *source*
+instead of literal arrays (`Tool.sources`, paths as for `Tool.refs`): a dataset, or an
+address in another open document that the document's format turns into rows -- a table
+`t:sales`, or `d2/t:sales` naming the document when several could. The dispatcher qualifies
+such an address with its document (`t:sales` -> `d2/t:sales`; with several candidates it is
+`ambiguous`, the qualified forms its `valid_options`) and holds that document's lock for the
+call, for reading only: no undo step, no version, no checks, even inside a `batch`. The
+handler reads either with `call.source(value)`, a `sources.Rows`: the `Dataset`, the source
+as resolved, its document and version, and `stale` for a dataset.
+
+A format makes its addresses sources with two fields of its `DocumentFormat` (the resolver
+hook; nothing else is needed):
+
+```python
+def table_rows(document, address):              # "t:sales"
+    table = document.table(address[2:])         # the library's own lookup; ToolError not_found
+    return Dataset(table.columns, table.rows,    # each value's sources, the format's addresses
+                   sources=[[(cell.address,) for cell in row] for row in table.cells])
+
+FORMAT = DocumentFormat(..., datasets={"t:": table_rows},
+                        merge_sources=merge_into_ranges)  # ["A2", "A3"] -> ["A2:A3"]; optional
+```
+
+`merge_sources` writes a run of the format's addresses compactly for a result (a dataset's
+sources are merged by its source document's format); without it they are listed as they
+are, each once. A resolved address is held to `Limits.max_dataset_cells`.
+
+The shared `edit_chart` takes a source for `add`, `set_values` and `add_series`:
+`from` names it and `columns` its columns by name -- the category column (a scatter chart's
+x values), then a column per series (`add`) or the one column of values (`set_values`,
+`add_series`, whose rows are matched to the chart's categories by label, a number by value:
+every category needs exactly one row and every row a category, or the call is refused):
+
+```json
+{"doc": "d1", "target": "256", "action": "add", "chart_type": "column",
+ "box": {"x": 40, "y": 90, "w": 600, "h": 340},
+ "from": "d:by_region", "columns": ["region", "total", "count"]}
+```
+
+The kind's handler is wrapped once for every library (`Spec(wrap=...)`): it gets literal
+`categories`, `data` and `values` as if the model had written them and never sees `from`.
+Series values must be numbers: text, a logical value or a blank is refused with the cell's
+sources in the message (never its text), and nothing is converted. Category labels are text
+as given, or a number written as the General format does in the session's locale (`2,5` in
+nl-NL; `2024` without a thousands separator). Columns match exactly, else case aside. A
+bubble chart's sizes are not taken from a source. The result's `from` says where every
+placed value came from, the column, the rows placed (from 1, in the order placed, runs as
+`1-4`) and their sources, merged:
+
+```json
+"from": {"source": "d:by_region", "doc": "d2", "version": 4,
+         "categories": {"column": "region", "rows": "1-3", "sources": ["Sales!A2:A9"]},
+         "series": [{"name": "total", "column": "total", "rows": "1-3",
+                     "sources": ["Sales!C2:C4", "Sales!C6:C9"]}]}
+```
+
+The sources are reported, not written into the saved chart: where a document could keep
+them so that a save in Office leaves them there is still to be measured.
 
 **Loading tools and the prompt.** Every tool is in one group; the `core` group is always
 loaded, the others on demand. What `definitions()` sends by default:

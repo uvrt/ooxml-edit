@@ -174,6 +174,12 @@ class Tool:
     #: the session, ``d:<id>`` (and what the format reads after it): the dispatcher checks
     #: the id exists before the handler runs, which reads it with ``call.dataset(value)``.
     datasets: Sequence[str] = ()
+    #: Argument paths whose string values may name rows to take: a dataset (``d:<id>``,
+    #: checked as for ``datasets``) or an address in another open document that its format
+    #: resolves (``t:sales``, ``d2/t:sales``; :mod:`.sources`).  The dispatcher qualifies
+    #: such an address with its document and holds that document's lock for the call; the
+    #: handler reads either with ``call.source(value)``.
+    sources: Sequence[str] = ()
     #: For a changing tool with a reading mode (``edit_chart`` with ``action: "read"``, a
     #: measure-only call): a function of the arguments, true when the call changes nothing.
     #: Such a call runs as a reading one: no undo step, no version, no checks, no retry key.
@@ -230,7 +236,8 @@ class Tool:
             self.reads) == (
             other.name, other.description, other.schema, other.group, other.mutates,
             other.route, other.strict, other.batchable, other.composite, tuple(other.refs),
-            other.reads) and tuple(self.datasets) == tuple(other.datasets)
+            other.reads) and tuple(self.datasets) == tuple(other.datasets) \
+            and tuple(self.sources) == tuple(other.sources)
 
     def merged(self, other: "Tool") -> "Tool":
         """One definition serving both tools' kinds: a shared tool two libraries implement."""
@@ -260,6 +267,9 @@ def definition_problems(tool: Tool) -> list[str]:
     for path in tool.datasets:
         if not _path_exists(tool.schema, path):
             problems.append(f"datasets names {path!r}, which is not a string parameter")
+    for path in tool.sources:
+        if not _path_exists(tool.schema, path):
+            problems.append(f"sources names {path!r}, which is not a string parameter")
     properties = tool.schema.get("properties", {})
     required = set(tool.schema.get("required", ()))
     for group in tool.exactly_one:
@@ -298,18 +308,19 @@ def tool(name: str, description: str, params: Mapping[str, Param] | None = None,
          documents: Sequence[str] | Callable[[Mapping[str, Any]], list[str]] = ("doc",),
          exactly_one: Sequence[Sequence[str]] = (),
          priority: int | None = None, strict: bool = True, batchable: bool = True,
-         refs: Sequence[str] = (), datasets: Sequence[str] = (),
+         refs: Sequence[str] = (), datasets: Sequence[str] = (), sources: Sequence[str] = (),
          reads: Callable[[Mapping[str, Any]], bool] | None = None) -> Callable[[Handler], Tool]:
     """Make a :class:`Tool` of a handler.  ``kind`` restricts it to one document kind;
     ``reads`` marks the calls of a changing tool that only read (:attr:`Tool.reads`);
-    ``refs`` and ``datasets`` declare the arguments that may hold a ref or a dataset."""
+    ``refs``, ``datasets`` and ``sources`` declare the arguments that may hold a ref, a
+    dataset, or a source (a dataset or another document's rows)."""
 
     def make(handler: Handler) -> Tool:
         return Tool(name=name, description=description, schema=build_schema(params or {}),
                     handlers={kind: handler}, group=group, mutates=mutates,
                     documents=documents, exactly_one=exactly_one, priority=priority,
                     strict=strict, batchable=batchable, refs=tuple(refs),
-                    datasets=tuple(datasets), reads=reads)
+                    datasets=tuple(datasets), sources=tuple(sources), reads=reads)
 
     return make
 

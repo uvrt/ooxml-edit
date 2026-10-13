@@ -2,6 +2,44 @@
 
 Versions are those in `pyproject.toml`; none is published to PyPI yet.
 
+## 0.22.0 -- unreleased
+- Sources (O3): the shared `edit_chart` takes its categories and series from a dataset or
+  from a table of another open document, by column name, and says where every placed value
+  came from.
+  - `edit_chart` gains `from` (`d:<id>`, `t:<name>`, or `d2/t:<name>` naming the document)
+    and `columns` (the category column -- a scatter chart's x values -- then a column per
+    series for `add`, or the one column of values for `set_values` and `add_series`, whose
+    rows are matched to the chart's categories by label, a number by value; every category
+    needs exactly one row and every row a category). `from` is refused with the other
+    actions, with `categories`, `data` or `values`, and for a bubble chart's sizes; `add_series`
+    is named by its column unless `text` says otherwise.
+  - Series values must be numbers: text, a logical value, a blank or a non-finite number
+    is refused, naming the cell by its sources (never its text); nothing is converted.
+    Category labels are text as given, or a number written as the General format does in
+    the session's locale; a blank category is refused.
+  - The result's `from`: the source as resolved, its document and version (`stale` for a
+    stale dataset), and per category and series column the rows placed (from 1, in the
+    order placed, runs as `1-3,5`) and their sources, merged. Nothing is written into the
+    saved chart yet.
+  - Every kind's handler is wrapped once, here (`Spec(wrap=...)`): it gets literal
+    `categories`, `data` and `values` and never sees `from`, so the deck and Word libraries
+    need no change.
+  - The resolver hook: `DocumentFormat.datasets` (`{prefix: resolve(document, address) ->
+    Dataset}`) and `DocumentFormat.merge_sources` (a run of the format's addresses written
+    compactly, optional). `Tool.sources` (and `@tool(sources=...)`, `Spec(sources=...)`)
+    declares the arguments that take a source; the dispatcher qualifies an address with its
+    document (several candidates: `ambiguous`, the qualified forms as `valid_options`; none:
+    `not_found`), checks a dataset as for `Tool.datasets`, and locks the document for
+    reading -- no undo step, no version, no checks, in a `batch` too -- and
+    `dispatch_many` orders calls by it. `call.source(value)` returns `tools.Rows`; a
+    resolved address is held to `Limits.max_dataset_cells`.
+  - Definitions: `from` and `columns` add about 50 tokens to every definition, none to the
+    cores (deferred `edit_chart`); `edit_chart`'s description and its `values` and `value`
+    texts were shortened to keep the all-definitions guards: deck 11,844 -> 11,897
+    estimated (guard 11,900), Word 11,880 -> 11,933 (guard 11,950). Cores unchanged: deck
+    3,504 (about 5,186 by the 1.48 proxy), Word 2,535 (about 3,752), workbook 3,452 (about
+    5,109). `strict_problems` stays empty for each.
+
 ## 0.21.0 -- unreleased
 - `tools.strict_problems(definitions)`: OpenAI's documented strict-mode rules over a whole
   `tools` list -- this library's definitions and an application's own, mixed -- before the
