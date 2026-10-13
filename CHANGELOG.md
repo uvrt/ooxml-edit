@@ -2,7 +2,25 @@
 
 Versions are those in `pyproject.toml`; none is published to PyPI yet.
 
-## 0.17.0 -- unreleased
+## 0.18.0 -- unreleased
+- Workbooks are a shared-tool kind: `shared.KINDS` is `("pptx", "docx", "xlsx")`, so a
+  workbook library registers its handlers with `shared.handler(name, kind="xlsx")`.
+  - `describe` says what a workbook returns (sheets, tables and regions with key columns,
+    column types and fill, sample rows, flags); `find_text` finds in a workbook's cells,
+    names and comments, and its `range` takes a sheet, range or table. `replace_text`'s
+    `range` is unchanged (documents only), so it costs nothing.
+  - `save_document`'s `format` gains `xlsx`, `xlsm` and `xltx` (`xltx` a template);
+    `new_document`'s `kind` gains `xlsx`.
+  - The enums stay static, like every shared definition: one definition whichever libraries
+    are loaded, so that two libraries' tools still merge. A toolbox without a workbook
+    library answers `new_document` with `kind: "xlsx"` as it answers any kind it lacks
+    (`invalid_arguments`, the kinds it has), and a deck's or document's `save_document`
+    handler refuses a workbook format.
+  - Cost to the deck and Word cores, by the siblings' offline proxy (compact JSON / 3.5):
+    64 estimated tokens each (about 95 counted), all in core tools; of these about 15 (22
+    counted) are the enum values and their notes, the rest the descriptions.
+
+## 0.17.0
 - Subprocess workers (`tools.SubprocessPool`): where multiprocessing may not start children
   -- a daemonic process such as a Celery prefork worker's child -- `WorkerPool` now hands the
   work to long-lived workers started with `subprocess` (`python -m
