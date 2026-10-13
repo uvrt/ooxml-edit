@@ -25,6 +25,8 @@ What is here:
   call validator (no jsonschema dependency);
 * :mod:`.adapters` -- definitions and results for the Anthropic Messages API, the OpenAI
   Responses API and Chat Completions, as plain dicts; no provider SDK is imported;
+  :func:`strict_problems` checks any OpenAI definitions, an application's own too, against
+  the documented strict-mode rules before the first call;
 * :mod:`.results` -- the result envelope, error codes with ``valid_options``, image token
   estimates, truncation and paging;
 * :mod:`.session` -- documents, blobs and outputs, all in memory and under handles; locks,
@@ -47,6 +49,7 @@ this subpackage is optional, and the core never imports it.
 """
 
 from . import shared
+from .adapters import StrictProblem, strict_problems
 from .datasets import DATASET_ID, DATASET_PREFIX, Dataset, DatasetEntry, dataset_id
 from .dispatch import REF, Call, CallContext, Toolbox, collect_warnings
 from .limits import LimitError, Limits
@@ -67,11 +70,11 @@ __all__ = [
     "DATASET_PREFIX", "DEFAULT_LOCALE", "Dataset", "DatasetEntry", "DefaultLocale", "DocumentEntry", "DocumentFormat",
     "ERROR_CODES", "LOCALE_FIELDS", "REF", "Image", "LimitError", "Limits", "Output", "Param",
     "Result", "SYSTEM",
-    "InProcess", "Session", "SubprocessPool", "SubsetError", "Tool", "ToolError", "ToolGroup", "Toolbox",
+    "InProcess", "Session", "StrictProblem", "SubprocessPool", "SubsetError", "Tool", "ToolError", "ToolGroup", "Toolbox",
     "WorkerPool",
     "anthropic_image_tokens", "array", "boolean", "build_schema", "canonical", "check_subset",
     "collect_warnings", "dataset_id", "doc_order", "free_object", "integer", "locale_of",
     "number", "obj", "openai_image_tokens",
-    "page_list", "page_text", "shared", "string", "system_prompt", "tool", "truncate", "validate_call",
+    "page_list", "page_text", "shared", "strict_problems", "string", "system_prompt", "tool", "truncate", "validate_call",
     "worker_task",
 ]
