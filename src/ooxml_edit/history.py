@@ -152,6 +152,23 @@ class History:
             if self._package.snapshot() != snapshot:
                 self._push(snapshot)
 
+    @contextmanager
+    def savepoint(self) -> Iterator[None]:
+        """Inside a batch: if the code inside raises, roll back to here and re-raise, and
+        the batch stays open -- what came before in it is kept, as one step when it closes.
+        A batch nested inside rolls nothing back by itself; this is the inner rollback a
+        batch of independent edits needs.  Outside a batch it is a :meth:`batch`."""
+        if not self._batch_depth:
+            with self.batch():
+                yield
+            return
+        snapshot = self._package.snapshot()
+        try:
+            yield
+        except Exception:
+            self._package.restore(snapshot)
+            raise
+
     @property
     def in_batch(self) -> bool:
         return self._batch_depth > 0

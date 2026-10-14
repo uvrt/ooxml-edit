@@ -89,6 +89,29 @@ def test_a_failed_batch_rolls_back_and_records_nothing():
     assert not history.can_undo()
 
 
+def test_a_savepoint_rolls_back_only_what_came_after_it_and_the_batch_stays_open():
+    counter = Counter()
+    history = History(counter)
+    with history.batch():
+        _step(history, counter, 1)
+        with pytest.raises(RuntimeError):
+            with history.savepoint():
+                _step(history, counter, 2)
+                with history.batch():           # a nested batch rolls nothing back itself
+                    _step(history, counter, 3)
+                    raise RuntimeError("this op only")
+        assert counter.value == 1 and history.in_batch
+        with history.savepoint():
+            _step(history, counter, 4)
+    assert counter.value == 4 and history.version == 1     # one step for what applied
+    assert history.undo() and counter.value == 0 and not history.can_undo()
+    with pytest.raises(RuntimeError):                       # outside a batch: a batch
+        with history.savepoint():
+            _step(history, counter, 5)
+            raise RuntimeError("all of it")
+    assert counter.value == 0 and history.version == 0 and not history.in_batch
+
+
 def test_clear_forgets_everything():
     counter = Counter()
     history = History(counter)

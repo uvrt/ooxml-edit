@@ -79,6 +79,17 @@ def t_fail(call, doc):
     raise ToolError("refused", "not this way", valid_options=["a", "b"])
 
 
+@tool("t_half", "Adds an item with a ref, then fails.",
+      {"doc": string("Document id."), "ref": string("A name.", optional=True)},
+      kind="docx", mutates=True)
+def t_half(call, doc, ref=None):
+    position = call.document.insert("half", "end")
+    if ref:
+        call.define_ref(ref, f"item:{position}")
+    call.touch(f"item:{position}")
+    raise ValueError("gave up half way")
+
+
 @tool("t_read", "Read the items.", {"doc": string("Document id.")}, kind="docx")
 def t_read(call, doc):
     return call.document.items()
@@ -112,7 +123,7 @@ def t_title(call, doc, page, text, ref=None):
     return Result(summary=f"Titled page {page}")
 
 
-TEXT_TOOLS = [t_add, t_set, t_fail, t_read, new_text, save_text, *shared.SESSION_TOOLS]
+TEXT_TOOLS = [t_add, t_set, t_fail, t_half, t_read, new_text, save_text, *shared.SESSION_TOOLS]
 DECK_TOOLS = [tools_toys.toy_ppt_set_title, t_title, save_deck, *shared.SESSION_TOOLS]
 
 
@@ -328,6 +339,7 @@ def test_a_batch_runs_its_ops_in_order_as_one_undo_step_with_refs(toolbox, sessi
     assert entry.version == before + 1
     assert result.refs == {"x": "item:1", "y": "item:2"} and entry.refs == result.refs
     assert [op["tool"] for op in result.data["ops"]] == ["t_add", "t_add", "t_set", "t_read"]
+    assert set(result.data) == {"ops"}          # as an all-or-none batch's: no failures to list
     assert result.data["ops"][3]["data"] == ["A", "b"]
     assert CHECKS == [("d1", ["item:1", "item:2"])]
     assert result.checks["items"] == 2
@@ -335,17 +347,121 @@ def test_a_batch_runs_its_ops_in_order_as_one_undo_step_with_refs(toolbox, sessi
     assert entry.document.items() == []
 
 
-def test_a_failing_op_rolls_the_whole_batch_back_and_names_itself(toolbox, session):
+def test_an_atomic_batch_rolls_back_whole_when_an_op_fails_and_names_it(toolbox, session):
     entry = session.entry("d1")
     ops = _ops(("t_add", {"doc": "d1", "items": [{"text": "a", "ref": "x"}]}),
                ("t_fail", {"doc": "d1"}))
-    result = call(toolbox, session, "batch", ops=ops)
+    result = call(toolbox, session, "batch", ops=ops, atomic=True)
     assert not result.ok and result.error.code == "refused"
     assert result.error.details["op"] == 1 and result.error.details["tool"] == "t_fail"
     assert result.error.valid_options == ["a", "b"]
-    assert "ops[1] (t_fail)" in result.error.message
+    assert result.error.message == ("ops[1] (t_fail) failed, so nothing in the batch was "
+                                    "applied: not this way")
+    assert result.error.details["completed_before"] == 1
     assert entry.document.items() == [] and entry.refs == {} and entry.version == 0
     assert CHECKS == []
+
+
+def test_a_failing_op_is_skipped_and_the_others_apply_as_one_step(toolbox, session):
+    # T1: by default one bad op no longer voids the batch; the model resends only it.
+    entry = session.entry("d1")
+    ops = _ops(("t_add", {"doc": "d1", "items": [{"text": "a", "ref": "x"}]}),
+               ("t_fail", {"doc": "d1"}),
+               ("t_add", {"doc": "d1", "items": [{"text": "b", "ref": "y"}]}),
+               ("t_read", {"doc": "d1"}))
+    result = call(toolbox, session, "batch", ops=ops)
+    assert result.ok, result.to_json()
+    assert entry.document.items() == ["a", "b"] and entry.version == 1
+    assert result.refs == entry.refs == {"x": "item:1", "y": "item:2"}
+    assert result.data["applied"] == 3 and result.data["failed"] == [1]
+    assert [op["op"] for op in result.data["ops"]] == [0, 1, 2, 3]
+    assert result.data["ops"][1] == {"op": 1, "tool": "t_fail", "error": {
+        "code": "refused", "message": "not this way", "valid_options": ["a", "b"]}}
+    assert result.data["ops"][3]["data"] == ["a", "b"]
+    assert result.summary == ("Ran 3 of 4 ops as one step: Added 1 item(s); Added 1 item(s). "
+                              "Not applied -- fix and resend only these: ops[1] (t_fail): "
+                              "not this way")
+    assert CHECKS == [("d1", ["item:1", "item:2"])]
+    assert call(toolbox, session, "undo", doc="d1").ok      # one step takes back all of it
+    assert entry.document.items() == [] and entry.refs == {} and entry.version == 0
+
+
+def test_an_op_that_fails_half_way_is_rolled_back_alone(toolbox, session):
+    entry = session.entry("d1")
+    ops = _ops(("t_add", {"doc": "d1", "items": [{"text": "a"}]}),
+               ("t_half", {"doc": "d1", "ref": "h"}),
+               ("t_add", {"doc": "d1", "items": [{"text": "b"}]}))
+    result = call(toolbox, session, "batch", ops=ops)
+    assert result.ok and result.data["failed"] == [1]
+    assert result.data["ops"][1]["error"] == {"code": "unit", "message": "gave up half way"}
+    assert entry.document.items() == ["a", "b"]           # "half" went with its op
+    assert entry.refs == {} and result.refs == {}
+    assert CHECKS == [("d1", ["item:1", "item:2"])]       # what it touched is forgotten
+
+
+def test_a_ref_a_failed_op_would_have_made_names_that_op(toolbox, session):
+    ops = _ops(("t_half", {"doc": "d1", "ref": "chart1"}),
+               ("t_set", {"doc": "d1", "target": "$chart1", "text": "A"}),
+               ("t_add", {"doc": "d1", "items": [{"text": "b"}]}))
+    result = call(toolbox, session, "batch", ops=ops)
+    assert result.ok and result.data["failed"] == [0, 1]
+    assert result.data["ops"][1]["error"] == {
+        "code": "not_found", "field": "arguments.target", "details": {"op": 0},
+        "message": "$chart1 was to be made by ops[0], which failed: fix that op and resend "
+                   "both"}
+    # A ref in a schema-invalid op counts too; a ref nobody asked for is the usual error.
+    ops = _ops(("t_add", {"doc": "d1", "items": [{"text": 5, "ref": "z"}]}),
+               ("t_set", {"doc": "d1", "target": "$z", "text": "A"}),
+               ("t_set", {"doc": "d1", "target": "$nobody", "text": "A"}))
+    result = call(toolbox, session, "batch", ops=ops)
+    assert not result.ok and result.error.details["failed"] == [0, 1, 2]
+    errors = [op["error"] for op in result.error.details["ops"]]
+    assert errors[1]["message"].startswith("$z was to be made by ops[0]")
+    assert errors[2]["message"] == "no ref $nobody in d1"
+
+
+def test_a_batch_in_which_no_op_applies_is_an_error_and_no_step(toolbox, session):
+    entry = session.entry("d1")
+    ops = _ops(("t_fail", {"doc": "d1"}),
+               ("t_half", {"doc": "d1"}),
+               ("t_nope", {"doc": "d1"}))
+    result = call(toolbox, session, "batch", ops=ops)
+    assert not result.ok and result.error.code == "refused"
+    assert result.error.field == "ops[0]" and result.error.valid_options == ["a", "b"]
+    assert result.error.message.startswith("none of the 3 ops applied: ops[0] (t_fail): not "
+                                           "this way; ops[1] (t_half): gave up half way; "
+                                           "ops[2] (t_nope): no tool 't_nope'")
+    assert result.error.details["applied"] == 0
+    assert [op["error"]["code"] for op in result.error.details["ops"]] == [
+        "refused", "unit", "invalid_arguments"]
+    assert entry.document.items() == [] and entry.version == 0 and CHECKS == []
+    assert not entry.history.can_undo()
+    one = call(toolbox, session, "batch", ops=_ops(("t_fail", {"doc": "d1"})))
+    assert one.error.message == "ops[0] (t_fail) failed, so nothing was applied: not this way"
+
+
+def test_the_format_is_told_when_a_failed_op_is_rolled_back(toolbox, session):
+    tools_toys.RESTORED.clear()
+    entry = session.entry("d2")
+    ops = _ops(("toy_ppt_set_title", {"doc": "d2", "page": 1, "text": "Q3"}),
+               ("toy_ppt_set_title", {"doc": "d2", "page": 9, "text": "Q4"}))
+    result = call(toolbox, session, "batch", ops=ops)
+    assert result.ok and result.data["failed"] == [1]
+    assert result.data["ops"][1]["error"]["code"] == "not_found"
+    assert tools_toys.RESTORED == [id(entry.document)]      # it drops what it caches
+    assert entry.document.title(1) == "Q3" and entry.version == 1
+
+
+def test_an_op_naming_a_document_that_is_not_open_fails_alone(toolbox, session):
+    ops = _ops(("t_add", {"doc": "d9", "items": [{"text": "a"}]}),
+               ("t_add", {"doc": "d1", "items": [{"text": "b"}]}))
+    result = call(toolbox, session, "batch", ops=ops)
+    assert result.ok and result.data["failed"] == [0]
+    assert result.data["ops"][0]["error"]["field"] == "arguments.doc"
+    assert result.data["ops"][0]["error"]["valid_options"] == ["d1", "d2"]
+    assert session.entry("d1").document.items() == ["b"]
+    refused = call(toolbox, session, "batch", ops=ops, atomic=True)
+    assert refused.error.code == "not_found" and session.entry("d1").version == 1
 
 
 def test_ops_written_as_a_json_string_are_parsed(toolbox, session):
@@ -369,19 +485,32 @@ def test_ops_written_as_a_json_string_are_parsed(toolbox, session):
         assert refused.error.code == "invalid_arguments" and refused.error.field == "ops"
 
 
-def test_an_ops_arguments_are_validated_before_anything_runs(toolbox, session):
+def test_an_atomic_batchs_ops_are_validated_before_anything_runs(toolbox, session):
     ops = _ops(("t_add", {"doc": "d1", "items": [{"text": "a"}]}),
                ("t_set", {"doc": "d1", "target": "item:1"}))
-    result = call(toolbox, session, "batch", ops=ops)
+    result = call(toolbox, session, "batch", ops=ops, atomic=True)
     assert result.error.code == "invalid_arguments"
     assert result.error.field == "ops[1].arguments.text"
+    assert result.error.message.startswith("ops[1] (t_set): ")
     assert session.entry("d1").document.items() == []
+
+
+def test_a_schema_invalid_op_in_the_middle_no_longer_blocks_the_rest(toolbox, session):
+    ops = _ops(("t_add", {"doc": "d1", "items": [{"text": "a"}]}),
+               ("t_set", {"doc": "d1", "target": "item:1"}),
+               ("t_set", {"doc": "d1", "target": "item:1", "text": "A"}))
+    result = call(toolbox, session, "batch", ops=ops)
+    assert result.ok and result.data["applied"] == 2 and result.data["failed"] == [1]
+    error = result.data["ops"][1]["error"]
+    assert error["code"] == "invalid_arguments" and error["field"] == "arguments.text"
+    assert session.entry("d1").document.items() == ["A"]
 
 
 @pytest.mark.parametrize("name", ["batch", "save_document", "undo", "new_document"])
 def test_some_tools_cannot_run_inside_a_batch(toolbox, session, name):
-    result = call(toolbox, session, "batch", ops=_ops((name, {"doc": "d1"})))
-    assert result.error.code == "invalid_arguments" and result.error.field == "ops[0].tool"
+    for atomic in (False, True):
+        result = call(toolbox, session, "batch", ops=_ops((name, {"doc": "d1"})), atomic=atomic)
+        assert result.error.code == "invalid_arguments" and result.error.field == "ops[0].tool"
 
 
 def test_an_unknown_op_tool_lists_near_names(toolbox, session):
@@ -398,6 +527,11 @@ def test_a_batch_has_a_size_limit_and_a_deadline(toolbox):
                                                                 "items": [{"text": "a"}]}),
                                                      ("t_read", {"doc": "d1"})))
     assert slow.error.code == "timeout" and session.entry("d1").document.items() == []
+    assert [op["error"]["message"] for op in slow.error.details["ops"]] == [
+        "not run: the batch passed its 0 s deadline"] * 2
+    slow = call(toolbox, session, "batch", atomic=True,
+                ops=_ops(("t_add", {"doc": "d1", "items": [{"text": "a"}]})))
+    assert slow.error.code == "timeout" and "nothing in the batch" in slow.error.message
 
 
 def test_a_batch_over_two_documents_is_one_step_in_each(toolbox, session):

@@ -558,11 +558,18 @@ def test_the_hint_reaches_a_batch(hinting):
         {"tool": "edit_chart", "arguments": {"doc": "d1", "target": "1", "action": "add",
                                              "chart_type": "column", "from": "t:sales",
                                              "columns": ["region", "units"]}},
-        {"tool": "edit_chart", "arguments": _set_from("d:3")}]), "not_found")
+        {"tool": "edit_chart", "arguments": _set_from("d:3")}], atomic=True), "not_found")
     assert error.message.endswith("no dataset d:3; d:3 is one of the deck's drawings, "
                                   "not a dataset")
     assert error.field == "ops[1].arguments.from"
     assert error.details["error"]["message"] == (
+        "no dataset d:3; d:3 is one of the deck's drawings, not a dataset")
+    result = ok(call(hinting, session, "batch", ops=[
+        {"tool": "edit_chart", "arguments": {"doc": "d1", "target": "1", "action": "add",
+                                             "chart_type": "column", "from": "t:sales",
+                                             "columns": ["region", "units"]}},
+        {"tool": "edit_chart", "arguments": _set_from("d:3")}]))
+    assert result.data["failed"] == [1] and result.data["ops"][1]["error"]["message"] == (
         "no dataset d:3; d:3 is one of the deck's drawings, not a dataset")
     alone = hinting.session(clock=CLOCK)
     alone.open(synthetic.outer_package(), "deck.pptx")

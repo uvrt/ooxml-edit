@@ -363,12 +363,14 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
          group=MISC, documents=_no_documents, batchable=False),
     # the generic batch
     Spec("batch",
-         "Run calls to several tools as one: in order, all or none, one undo step, checks "
-         "once at the end. Not for render, save_document or session tools.",
+         "Run calls to several tools in order as one undo step, checks once at the end; a "
+         "failing op is skipped with its error. Not for render, save_document or session "
+         "tools.",
          {"ops": array(obj({"tool": string(),
                             "arguments": free_object("That tool's arguments.")}),
                        "The calls in order, at most 200; later ops may use earlier refs.",
-                       min_items=1)},
+                       min_items=1),
+          "atomic": boolean("All or none.", optional=True)},
          documents=_no_documents, mutates=True, strict=False, batchable=False,
          composite=True),
 ]}
