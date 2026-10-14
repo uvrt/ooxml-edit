@@ -10,6 +10,7 @@ The modules of `ooxml_edit` and how a format layer uses them.
 | `ooxml_edit.xml` | The namespace registry and `qn`; attribute helpers; `register_child_order` and `insert_in_order`, which put a new child where its parent's schema sequence requires, with rank groups for repeating choices, and append a detached child where no sequence is known; `replace_choice`; `remove`, which keeps the whitespace around what it removes |
 | `ooxml_edit.history` | `History`: undo, redo and nested batches over anything with `snapshot` and `restore`; a failed batch rolls back; `version` numbers every state, never reusing a number, and undo and redo restore it, so a cache keyed by version is never stale |
 | `ooxml_edit.stamp` | `ExtensionStamp`: an id frozen into an `extLst`/`ext` extension, which Office keeps when it does not know the URI |
+| `ooxml_edit.provenance` | Provenance records: where values placed from a source came from, as compact versioned JSON (`record`, `dumps`, `loads`, `RecordError`), and `Holder`, `watch` and `note`, through which an embedded object that keeps a record in its own part says it was used, for code that places values without knowing that kind of object (see docs/TOOLS.md, "Source addresses in the saved file") |
 
 The losslessness rule, which everything else rests on:
 

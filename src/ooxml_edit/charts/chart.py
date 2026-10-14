@@ -41,6 +41,7 @@ from lxml import etree
 
 from ..xml import Element, append_in_order, find, local_name, make, qn, remove, subelement
 from .dmltext import paragraph_text, replace_body_text
+from . import record as _record
 from .host import GraphicHost, chart_part
 from .namespaces import C_NS  # noqa: F401  (re-exported)
 from .workbook import Area, Cell, SheetRange, Workbook, Worksheet, number_text, parse_formula
@@ -512,6 +513,7 @@ class Chart(ChartStyling):
         part = chart_part(host)
         if part is None:
             raise ValueError(f"{host.address}: the chart's part is missing")
+        _record.note(host.package, part)  # for a placement watching (record.py)
         return part
 
     @property

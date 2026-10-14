@@ -50,6 +50,7 @@ from __future__ import annotations
 import functools
 from typing import Any, Callable, Mapping
 
+from .. import provenance
 from . import sources
 from .registry import (CORE, Param, Tool, ToolGroup, array, boolean, build_schema,
                        free_object, integer, number, obj, string)
@@ -391,7 +392,18 @@ def _chart_rows(handler: Callable[..., Any]) -> Callable[..., Any]:
     and never sees ``from``.
     Its result gets ``from``: the source, its document and version, and per category and
     series column the rows placed (from 1, as runs) and their sources, merged.  A series
-    value that is not a number is refused, naming its cell: text is never converted."""
+    value that is not a number is refused, naming its cell: text is never converted.
+
+    The placement is also kept in the saved document, in the call's undo step: its
+    :mod:`ooxml_edit.provenance` record goes into the chart part (``ooxml_edit.charts``
+    notes the chart the handler used) and to the format's
+    :attr:`~.session.DocumentFormat.store_provenance`, with the chart's address -- for
+    ``add`` the last of the result's ``created``, else the first of its ``changed`` (else
+    ``target``).  ``add`` replaces the chart's record; ``set_values`` replaces its
+    categories and that series' entry, and ``add_series`` that series' entry, keeping the
+    others (an entry from another source names its own).  An edit without ``from`` keeps
+    the record true or drops what it no longer says (:data:`RECORD_ACTIONS`).
+    ``action: "read"`` returns the chart part's record as ``from``, when it has one."""
 
     @functools.wraps(handler)
     def run(call: Any, **arguments: Any) -> Any:
@@ -401,10 +413,26 @@ def _chart_rows(handler: Callable[..., Any]) -> Callable[..., Any]:
             if columns is not None:
                 raise ToolError("invalid_arguments", "columns name the columns of from; "
                                 "give from too, or the values in data", field="columns")
+            if arguments.get("action") == "read":
+                return _read_record(handler, call, arguments)
+            if arguments.get("action") in RECORD_ACTIONS:
+                return _edit_record(handler, call, arguments)
             return handler(call, **arguments)
         return _from_rows(handler, call, source, columns, arguments)
 
     return run
+
+
+def _read_record(handler: Callable[..., Any], call: Any, arguments: dict[str, Any]) -> Any:
+    """``action: "read"`` with the record kept in the chart's part, as ``from``."""
+    with provenance.watch() as used:
+        returned = handler(call, **arguments)
+    data = returned.data if isinstance(returned, Result) else returned
+    if len(used) == 1 and isinstance(data, dict) and "from" not in data:
+        found = used[0].read()
+        if found is not None:
+            data["from"] = found
+    return returned
 
 
 def _from_rows(handler: Callable[..., Any], call: Any, source: str, columns: Any,
@@ -466,17 +494,154 @@ def _from_rows(handler: Callable[..., Any], call: Any, source: str, columns: Any
             arguments["text"] = names[at[1]]
         series = [arguments.get("text") if action == "add_series"
                   else arguments.get("series")]
-    returned = handler(call, **arguments)
+    with provenance.watch() as used:
+        returned = handler(call, **arguments)
     result = returned if isinstance(returned, Result) else Result(data=returned)
     placed = rows.describe()
     placed["categories"] = rows.provenance(at[0], order)
     placed["series"] = [{"name": name, **rows.provenance(column, order)}
                         for name, column in zip(series, at[1:])]
+    if result.ok:
+        _keep(call, rows, placed, used, _chart_address(action, result, arguments), action)
     if isinstance(result.data, dict):
         result.data["from"] = placed
     else:
         result.data = {"chart": result.data, "from": placed}
     return result
+
+
+#: The ``edit_chart`` actions without ``from`` that change what a chart's record says:
+#: ``rename_series`` renames the series' entry, ``remove_series`` drops it, ``set_values``
+#: and ``set_value`` drop it (its values no longer come from the source),
+#: ``rename_category`` drops the categories' entry, and ``add_category`` and
+#: ``remove_category`` drop the record (every series' rows have changed).  A stale address
+#: is worse than none.
+RECORD_ACTIONS = ("set_values", "set_value", "add_category", "remove_category",
+                  "rename_category", "remove_series", "rename_series")
+
+#: Where a record's values came from: the record's own, or a series entry's when it differs.
+_ORIGIN = ("source", "document", "version", "stale")
+
+
+def _edit_record(handler: Callable[..., Any], call: Any, arguments: dict[str, Any]) -> Any:
+    """An edit without ``from`` that changes the chart's data, with its record kept true."""
+    with provenance.watch() as used:
+        returned = handler(call, **arguments)
+    result = returned if isinstance(returned, Result) else Result(data=returned)
+    if not result.ok or len(used) != 1:
+        return returned
+    before = used[0].read()
+    if before is None:
+        return returned
+    after = _updated(before, arguments, _series_names(result.data))
+    if after != before:
+        used[0].store(after)
+        address = result.changed[0] if result.changed else arguments.get("target")
+        if address is not None:
+            call.store_provenance(address, after)
+    return returned
+
+
+def _series_names(data: Any) -> list[str] | None:
+    """The chart's series names after an edit, from its result's ``series`` (``None``
+    when the result does not say)."""
+    series = data.get("series") if isinstance(data, dict) else None
+    if not isinstance(series, list) or not all(isinstance(s, dict) for s in series):
+        return None
+    return [str(s.get("name")) for s in series]
+
+
+def _updated(before: dict[str, Any], arguments: Mapping[str, Any],
+             names: list[str] | None) -> dict[str, Any] | None:
+    """``before`` after an edit without ``from``; ``None`` when nothing of it stays true."""
+    action = arguments.get("action")
+    if action in ("add_category", "remove_category") or names is None:
+        return None
+    after = dict(before)
+    entries = [dict(entry) for entry in before.get("series") or []]
+    if action == "rename_category":
+        after.pop("categories", None)
+    elif action in ("set_values", "set_value"):
+        which = str(arguments.get("series"))
+        if which not in names and which.isdigit() and int(which) < len(names):
+            which = names[int(which)]
+        entries = [entry for entry in entries if str(entry.get("name")) != which]
+    elif action == "rename_series":
+        gone = [entry for entry in entries if str(entry.get("name")) not in names]
+        text = arguments.get("text")
+        if len(gone) == 1 and text is not None and str(text) in names:
+            gone[0]["name"] = text
+    # Whatever the edit, an entry names a series the chart has.
+    entries = [entry for entry in entries if str(entry.get("name")) in names]
+    if entries:
+        after["series"] = entries
+    else:
+        after.pop("series", None)
+    if "series" not in after and "categories" not in after:
+        return None
+    return after
+
+
+def _merged(before: dict[str, Any] | None, found: dict[str, Any],
+            action: str) -> dict[str, Any]:
+    """The chart's record after a placement from a source: ``add`` replaces it;
+    ``set_values`` takes the new categories and the series' new entry, ``add_series`` the
+    series' new entry, keeping the other series' entries.  An entry whose origin is not
+    the record's names its own (``source``, ``document``, ``version``, ``stale``)."""
+    if action == "add" or before is None:
+        return found
+    new = found.get("series") or []
+    name = str(new[0].get("name")) if new else None
+    if action == "set_values":
+        top, out = _origin(found), {k: v for k, v in found.items() if k != "series"}
+    else:
+        top = _origin(before)
+        out = {k: v for k, v in before.items() if k != "series"}
+    fresh = [_with_origin(entry, _origin(found), top) for entry in new]
+    entries: list[dict[str, Any]] = []
+    for entry in before.get("series") or []:
+        if str(entry.get("name")) == name:      # replaced where it stands
+            entries += fresh
+            fresh = []
+            continue
+        entries.append(_with_origin(entry, _origin(entry) or _origin(before), top))
+    entries += fresh
+    out["series"] = entries
+    return out
+
+
+def _origin(found: Mapping[str, Any]) -> dict[str, Any]:
+    return {key: found[key] for key in _ORIGIN if key in found}
+
+
+def _with_origin(entry: Mapping[str, Any], origin: dict[str, Any],
+                 top: dict[str, Any]) -> dict[str, Any]:
+    """``entry`` naming ``origin`` itself when it is not the record's (``top``)."""
+    out = {key: value for key, value in entry.items() if key not in _ORIGIN}
+    if origin != top:
+        out = {"name": out.pop("name"), **origin, **out} if "name" in out else {**origin, **out}
+    return out
+
+
+def _chart_address(action: str, result: Result, arguments: Mapping[str, Any]) -> str | None:
+    """The chart a placement went into: a new one last in ``created``, else the first
+    ``changed``, else the call's ``target``."""
+    if action == "add":
+        return result.created[-1] if result.created else None
+    return result.changed[0] if result.changed else arguments.get("target")
+
+
+def _keep(call: Any, rows: Any, placed: Mapping[str, Any], used: list[Any],
+          address: str | None, action: str) -> None:
+    """Keep a chart placement's record, merged with the chart's (:func:`_merged`): in the
+    chart's part, when the handler used one chart, and with the format, when the chart has
+    an address."""
+    found = provenance.record(placed, document=rows.name)
+    if len(used) == 1:
+        found = _merged(used[0].read(), found, action)
+        used[0].store(found)
+    if address is not None:
+        call.store_provenance(address, found)
 
 
 def _numbers(rows: Any, column: int, order: list[int], field: str) -> list[Any]:
