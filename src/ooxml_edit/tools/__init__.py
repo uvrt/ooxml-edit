@@ -52,7 +52,8 @@ this subpackage is optional, and the core never imports it.
 
 from . import shared
 from .adapters import StrictProblem, strict_problems
-from .datasets import DATASET_ID, DATASET_PREFIX, Dataset, DatasetEntry, dataset_id
+from .datasets import (DATASET_ID, DATASET_PREFIX, TYPE_LABELS, Dataset, DatasetEntry,
+                       dataset_id)
 from .dispatch import REF, Call, CallContext, Toolbox, collect_warnings
 from .limits import LimitError, Limits
 from .logs import CallRecord
@@ -72,7 +73,7 @@ __all__ = [
     "Blob", "CORE", "Call", "CallContext", "CallError", "CallRecord", "DATASET_ID",
     "DATASET_PREFIX", "DEFAULT_LOCALE", "Dataset", "DatasetEntry", "DefaultLocale", "DocumentEntry", "DocumentFormat",
     "ERROR_CODES", "LOCALE_FIELDS", "REF", "Image", "LimitError", "Limits", "Output", "Param",
-    "Result", "Rows", "SYSTEM",
+    "Result", "Rows", "SYSTEM", "TYPE_LABELS",
     "InProcess", "Session", "StrictProblem", "SubprocessPool", "SubsetError", "Tool", "ToolError", "ToolGroup", "Toolbox",
     "WorkerPool",
     "anthropic_image_tokens", "array", "boolean", "build_schema", "canonical", "check_subset",

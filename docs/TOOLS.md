@@ -105,6 +105,31 @@ def table(call, doc, **arguments):
     ...
 ```
 
+A dataset made in Python -- figures an application computed itself -- comes from records,
+its columns labelled where a value alone does not say its type:
+
+```python
+from datetime import date
+from ooxml_edit.tools import Dataset, DatasetEntry
+
+data = Dataset.from_records(
+    [{"region": "North", "opened": date(2026, 3, 1), "total": 3.68},
+     {"region": "South", "opened": "2026-04-15", "total": 0.13}],
+    types={"opened": "date"})                 # or a label per column: (None, "date", None)
+session.keep_datasets([DatasetEntry("openings", data)])     # d:openings, no source document
+```
+
+`rows` are mappings (a missing name is a blank) or sequences with `columns`; `columns` picks
+and orders them (a name no record has is refused). The type labels (`TYPE_LABELS`) are
+`number`, `percent` (a fraction: 0.25 for 25%), `date`, `time`, `datetime`, `text`, `bool`
+and `error`. A Python `date`, `datetime` or `time` needs no label: a format library reads it
+as one, and a tool that places it in a table or as a category writes it in the session's
+locale's day order (`3/1/2026` in en-US, `1/3/2026` in nl-BE, ISO 8601 for `ymd`; a time
+on the 24-hour clock, `14:05`) -- the library's own writing, not Office's short-date
+format, which is not measured. ISO 8601 text (`"2026-04-15"`) stays text until its column
+is labelled `date` (`datetime`, `time`): a column of codes that look like dates is never
+read as dates on its own, and a placed ISO text is written as it is.
+
 A dataset is session state, not document content: it outlives `close_document`, undo never
 removes it, and defining one is not an undo step (a reading call may define one; a failed
 call or batch defines none; an existing id is replaced). It records its source document and
