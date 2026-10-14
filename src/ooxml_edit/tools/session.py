@@ -108,7 +108,9 @@ class DocumentFormat:
     #: A scope that should find such a step lists the parts in ``undo_scope`` too.
     undo_shared: Callable[[Any], Iterable[str]] | None = None
     #: Called after a scoped undo or redo restored parts behind the document's back, so it
-    #: drops what it caches (what its own ``undo`` does after the history's).
+    #: drops what it caches (what its own ``undo`` does after the history's) -- and after a
+    #: ``batch`` rolled one failed op back inside its open undo step
+    #: (:meth:`DocumentEntry.savepoint`).
     restored: Callable[[Any], None] | None = None
     #: Called with ``(document, session)`` when a document joins a session -- opened,
     #: created or adopted -- before anything is measured: the format applies the
@@ -267,6 +269,21 @@ class DocumentEntry:
             return
         with batch():
             yield
+
+    @contextmanager
+    def savepoint(self) -> Iterator[bool]:
+        """Inside :meth:`batch`: roll back what the code inside changed if it raises, the
+        batch staying open (the document's ``savepoint()``, or its history's:
+        :meth:`~ooxml_edit.history.History.savepoint`).  Yields whether a rollback is
+        possible; a document with neither keeps what a failing edit did."""
+        savepoint = getattr(self.document, "savepoint", None)
+        if savepoint is None and self.history is not None:
+            savepoint = getattr(self.history, "savepoint", None)
+        if savepoint is None:
+            yield False
+            return
+        with savepoint():
+            yield True
 
     def keep_refs(self, defined: dict[str, str]) -> None:
         """Add refs a call defined, and remember the set as this version's."""
