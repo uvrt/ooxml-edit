@@ -91,6 +91,17 @@ class Rows:
                    f"{self.dataset.columns[column]!r})"
         return f"row {row + 1} of {self.address}, column {self.dataset.columns[column]!r}"
 
+    def type(self, column: int) -> str | None:
+        """The column's type label (``Dataset.types``); ``None`` without one."""
+        types = self.dataset.types
+        return types[column] if types is not None and column < len(types) else None
+
+    def label(self, row: int, column: int, locale: Any = None) -> str | None:
+        """The value at ``row``, ``column`` as :func:`label` writes it, by its column's type:
+        a ``date``, ``datetime`` or ``time`` column's ISO 8601 text in the locale, as a
+        Python date is."""
+        return label(self.dataset.rows[row][column], locale, type=self.type(column))
+
     def provenance(self, column: int, rows: Sequence[int]) -> dict[str, Any]:
         """Where a column's values at ``rows`` (from 0, in the order placed) came from: the
         column, the rows (from 1, runs as ``1-4``) and their sources, merged."""
@@ -219,13 +230,33 @@ def what(value: Any) -> str:
     return f"a {type(value).__name__}"
 
 
-def label(value: Any, locale: Any = None) -> str | None:
+#: The column type labels whose ISO 8601 text :func:`label` writes as a date or a time.
+MOMENT_TYPES = ("date", "datetime", "time")
+
+_ISO = re.compile(r"^(\d{4})-(\d{2})-(\d{2})"
+                  r"(?:[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,6}))?)?)?$")
+_CLOCK = re.compile(r"^(\d{1,2}):(\d{2})(?::(\d{2})(?:\.(\d{1,6}))?)?$")
+_LOCAL = re.compile(r"^(\d{1,2})/(\d{1,2})/(\d{4})(?: (.+))?$")
+
+
+def label(value: Any, locale: Any = None, *, type: str | None = None) -> str | None:
     """A value as a category label or a cell's text: text as it is; a number as a cell in
     the General format writes it, with the locale's decimal separator (``1.5`` is ``1,5``
     in nl-NL; ``2024`` stays ``2024``, no thousands separator); a logical value as ``TRUE``
     or ``FALSE``; a Python ``date``, ``datetime`` or ``time`` as :func:`moment_text` writes
-    it, in the locale's day order.  ``None`` for a blank, or anything else."""
+    it, in the locale's day order.  ``None`` for a blank, or anything else.
+
+    ``type`` is the value's column type label (:meth:`Rows.label` passes it): in a
+    ``date``, ``datetime`` or ``time`` column, ISO 8601 text (``2026-03-01``,
+    ``2026-03-01T14:05:00``, ``14:05:00.250`` -- how a format library gives the dates it
+    reads, and those derived from them) is written as the Python value it names is, so one
+    document never mixes ``1/3/2026`` and ``2026-01-20``; text that is not ISO 8601 (an
+    elapsed time, ``PT25H30M0S``) is written as it is.  Unlabelled ISO text stays text."""
     if isinstance(value, str):
+        if type in MOMENT_TYPES:
+            found = moment_of(value)
+            if found is not None:
+                return moment_text(found, locale)
         return value if value != "" else None
     if isinstance(value, bool):
         return "TRUE" if value else "FALSE"
@@ -265,5 +296,51 @@ def moment_text(value: "_dt.date | _dt.time", locale: Any = None) -> str:
     return "/".join(str(parts[letter]) for letter in order)
 
 
-__all__ = ["QUALIFIED", "Rows", "label", "merged", "moment_text", "number", "prefixes",
-           "qualify", "resolve", "runs", "what"]
+def moment_of(value: Any, locale: Any = None, *,
+              written: bool = False) -> "_dt.date | _dt.time | None":
+    """The date, datetime or time ``value`` is or names: a Python one as it is; ISO 8601
+    text (``2026-03-01``, ``2026-03-01T14:05:00`` or with a space, ``14:05``, seconds and
+    their fraction optional); with ``written``, also text as :func:`moment_text` writes it
+    in ``locale`` (``1/3/2026`` in ``dmy``, ``1/3/2026 14:05``).  ``None`` for anything
+    else -- a day that does not exist, a time zone, another separator.  A chart's
+    categories are matched to a date column's rows by it, whichever way they were
+    written."""
+    if isinstance(value, (_dt.date, _dt.time)):
+        return value
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    try:
+        match = _ISO.match(text)
+        if match:
+            day = _dt.date(*(int(part) for part in match.groups()[:3]))
+            if match.group(4) is None:
+                return day
+            return _dt.datetime.combine(day, _clock(match.groups()[3:]))
+        match = _CLOCK.match(text)
+        if match:
+            return _clock(match.groups())
+        order = getattr(locale, "date_order", None) or "mdy"
+        match = _LOCAL.match(text) if written and order in ("dmy", "mdy") else None
+        if match:
+            parts = dict(zip(order, (int(part) for part in match.groups()[:3])))
+            day = _dt.date(parts["y"], parts["m"], parts["d"])
+            if match.group(4) is None:
+                return day
+            clock = _CLOCK.match(match.group(4))
+            return _dt.datetime.combine(day, _clock(clock.groups())) if clock else None
+    except ValueError:
+        return None
+    return None
+
+
+def _clock(parts: Sequence[str | None]) -> _dt.time:
+    """A time of day of regex groups: hour, minute, second, fraction (the last two may be
+    ``None``); ``ValueError`` when there is no such time."""
+    hour, minute, second, fraction = parts
+    micro = int((fraction or "0").ljust(6, "0"))
+    return _dt.time(int(hour), int(minute), int(second or 0), micro)
+
+
+__all__ = ["MOMENT_TYPES", "QUALIFIED", "Rows", "label", "merged", "moment_of", "moment_text",
+           "number", "prefixes", "qualify", "resolve", "runs", "what"]

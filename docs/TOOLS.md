@@ -128,7 +128,14 @@ locale's day order (`3/1/2026` in en-US, `1/3/2026` in nl-BE, ISO 8601 for `ymd`
 on the 24-hour clock, `14:05`) -- the library's own writing, not Office's short-date
 format, which is not measured. ISO 8601 text (`"2026-04-15"`) stays text until its column
 is labelled `date` (`datetime`, `time`): a column of codes that look like dates is never
-read as dates on its own, and a placed ISO text is written as it is.
+read as dates on its own. A labelled column's ISO text -- what a workbook's date cells
+(`t:`) and a derive's dates are -- is placed as the Python value it names is
+(`sources.label(value, locale, type=...)`, `Rows.label(row, column, locale)`), so one deck
+or document never mixes `1/3/2026` and `2026-01-20`; unlabelled ISO text, and text in a
+date column that is not ISO 8601, is written as it is. A chart's categories are matched to
+a date column's rows by the date, whether they were written ISO (an older file) or in the
+session's locale (`sources.moment_of`). A provenance record names sources, never values,
+so it is unchanged.
 
 A dataset is session state, not document content: it outlives `close_document`, undo never
 removes it, and defining one is not an undo step (a reading call may define one; a failed

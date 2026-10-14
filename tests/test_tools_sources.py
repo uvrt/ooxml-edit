@@ -18,7 +18,7 @@ import pytest
 from ooxml_edit.tools import (Dataset, DatasetEntry, DefaultLocale, DocumentFormat, Limits,
                               Result, ToolError, Toolbox, shared, string, strict_problems,
                               tool)
-from ooxml_edit.tools.sources import label, merged, runs
+from ooxml_edit.tools.sources import label, merged, moment_of, runs
 
 import synthetic
 import tools_toys
@@ -632,3 +632,89 @@ def test_a_date_in_a_series_is_refused_as_a_date(toolbox, session):
         [{"region": "North", "day": DAYS[0]}]))])
     error = failed(add(toolbox, session, **{"from": "d:days"}), "invalid_arguments")
     assert "a date, not a number" in error.message
+
+
+# -- ISO text in a date column (T18b) --------------------------------------------------------------
+
+#: A workbook's date column, as a ``t:`` address or a derive gives it: ISO 8601 text, typed.
+ISO_DAYS = Dataset(("day", "units"), (("2026-03-01", 3), ("2026-04-15", 5)),
+                   types=("date", "number"))
+
+
+@pytest.mark.parametrize("locale, first, second", [
+    (None, "3/1/2026", "4/15/2026"),
+    (DUTCH, "1/3/2026", "15/4/2026"),
+    (dataclasses.replace(DUTCH, date_order="ymd"), "2026-03-01", "2026-04-15"),
+])
+def test_iso_text_in_a_date_column_is_written_as_a_date_is(locale, first, second):
+    assert [label(day, locale, type="date") for day in ISO_DAYS.rows[0][:1] +
+            ISO_DAYS.rows[1][:1]] == [first, second]
+    assert label("2026-03-01", locale) == "2026-03-01"          # unlabelled: text
+    assert label("2026-03-01", locale, type="text") == "2026-03-01"
+
+
+def test_iso_datetime_and_time_text_by_their_types():
+    assert label("2026-03-01T14:05:00", type="datetime") == "3/1/2026 14:05"
+    assert label("2026-03-01T14:05:30.250", DUTCH, type="datetime") == "1/3/2026 14:05:30"
+    assert label("14:05:00", type="time") == "14:05"
+    assert label("09:05:30.500", DUTCH, type="time") == "09:05:30"
+    # Not ISO 8601, or no such day: as written.
+    assert label("PT25H30M0S", type="time") == "PT25H30M0S"
+    assert label("2026-02-30", type="date") == "2026-02-30"
+    assert label("soon", type="date") == "soon" and label("", type="date") is None
+
+
+def test_moment_of_reads_iso_and_with_written_the_locales_text():
+    assert moment_of("2026-03-01") == dt.date(2026, 3, 1)
+    assert moment_of("2026-03-01 14:05") == dt.datetime(2026, 3, 1, 14, 5)
+    assert moment_of("1/3/2026") is None                         # not without written
+    assert moment_of("1/3/2026", DUTCH, written=True) == dt.date(2026, 3, 1)
+    assert moment_of("1/3/2026", written=True) == dt.date(2026, 1, 3)          # en-US
+    assert moment_of("1/3/2026 14:05", DUTCH, written=True) == dt.datetime(2026, 3, 1, 14, 5)
+    assert moment_of("15/4/2026", written=True) is None          # no month 15
+    assert moment_of(3) is None and moment_of("2026-03-01+02:00") is None
+
+
+@pytest.mark.parametrize("locale, written", [
+    (None, ["3/1/2026", "4/15/2026"]), (DUTCH, ["1/3/2026", "15/4/2026"])])
+def test_a_date_columns_iso_categories_are_written_in_the_locale(toolbox, locale, written):
+    session = _session(toolbox, locale=locale)
+    session.keep_datasets([DatasetEntry("iso", ISO_DAYS)])
+    ok(add(toolbox, session, **{"from": "d:iso"}))
+    assert SEEN[-1][1]["categories"] == written
+
+
+@pytest.mark.parametrize("locale, categories", [
+    (None, ["4/15/2026", "3/1/2026"]),               # written in the locale
+    (DUTCH, ["15/4/2026", "1/3/2026"]),
+    (None, ["2026-04-15", "2026-03-01"]),            # written ISO, by an older deck
+    (DUTCH, ["2026-04-15", "2026-03-01"]),
+])
+def test_set_values_matches_a_date_column_however_its_categories_were_written(
+        toolbox, locale, categories):
+    for rows in (ISO_DAYS, Dataset.from_records(
+            [{"day": DAYS[0], "units": 3}, {"day": DAYS[1], "units": 5}])):
+        session = _session(toolbox, locale=locale)
+        session.keep_datasets([DatasetEntry("days", rows)])
+        _chart(toolbox, session, categories)
+        ok(call(toolbox, session, "edit_chart", doc="d1", target="c1", action="set_values",
+                series="units", **{"from": "d:days"}))
+        assert SEEN[-1][1]["values"] == [5, 3]
+
+
+@pytest.mark.parametrize("categories, found", [
+    (["2026-04-15", "2026-03-01"], [5, 3]), (["4/15/2026", "3/1/2026"], None)])
+def test_iso_categories_of_a_text_column_still_match_as_text(toolbox, categories, found):
+    session = _session(toolbox)
+    session.keep_datasets([DatasetEntry("codes", Dataset(
+        ("code", "units"), (("2026-03-01", 3), ("2026-04-15", 5)), types=("text", None)))])
+    _chart(toolbox, session, categories)
+    if found:
+        ok(call(toolbox, session, "edit_chart", doc="d1", target="c1", action="set_values",
+                series="units", **{"from": "d:codes"}))
+        assert SEEN[-1][1]["values"] == found
+        return
+    error = failed(call(toolbox, session, "edit_chart", doc="d1", target="c1",
+                        action="set_values", series="units", **{"from": "d:codes"}),
+                   "not_found")
+    assert "no row of d:codes" in error.message

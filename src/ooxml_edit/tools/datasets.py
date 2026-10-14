@@ -21,7 +21,8 @@ tuples, with ``columns``) and labels its columns: ``types={"when": "date"}``.  A
 the session's locale (:func:`.sources.label`), and a format library reads it as a date
 without a label.  ISO 8601 text (``"2026-03-01"``) stays text until its column is
 labelled ``date`` (or ``datetime``, ``time``): a column of codes that happen to look like
-dates is not read as dates on its own.
+dates is not read as dates on its own.  A labelled column's ISO text is placed as the
+date it names is (:meth:`.sources.Rows.label`).
 
 **Its source.**  A dataset records the document it was derived from and that document's
 version (:attr:`DocumentEntry.version`) after the call that defined it.  It outlives
