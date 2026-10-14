@@ -15,8 +15,9 @@ import datetime as dt
 
 import pytest
 
-from ooxml_edit.tools import (Dataset, DefaultLocale, DocumentFormat, Limits, Result, ToolError,
-                              Toolbox, shared, string, strict_problems, tool)
+from ooxml_edit.tools import (Dataset, DatasetEntry, DefaultLocale, DocumentFormat, Limits,
+                              Result, ToolError, Toolbox, shared, string, strict_problems,
+                              tool)
 from ooxml_edit.tools.sources import label, merged, runs
 
 import synthetic
@@ -587,3 +588,47 @@ def test_runs_merging_and_labels():
     assert merged(["G!A2", "G!A3"], _merge) == ["G!A2:A3"]
     assert label(2024.0) == "2024" and label(0.1 + 0.2) == "0.3" and label("") is None
     assert label(True) == "TRUE" and label(None) is None and label(float("inf")) is None
+
+
+# -- dates -----------------------------------------------------------------------------------------
+
+DUTCH = DefaultLocale(decimal_separator=",", thousands_separator=".", date_order="dmy",
+                      language="nl-BE", list_separator=";")
+#: Made-up days: March the first, and a day whose day number is over 12.
+DAYS = (dt.date(2026, 3, 1), dt.date(2026, 4, 15))
+
+
+@pytest.mark.parametrize("locale, first, second", [
+    (None, "3/1/2026", "4/15/2026"),             # en-US, the default
+    (DUTCH, "1/3/2026", "15/4/2026"),
+    (dataclasses.replace(DUTCH, date_order="ymd"), "2026-03-01", "2026-04-15"),
+])
+def test_a_date_is_written_in_the_locales_day_order(locale, first, second):
+    assert [label(day, locale) for day in DAYS] == [first, second]
+
+
+def test_a_datetime_and_a_time():
+    when = dt.datetime(2026, 3, 1, 14, 5)
+    assert label(when) == "3/1/2026 14:05" and label(when, DUTCH) == "1/3/2026 14:05"
+    assert label(dt.time(9, 5, 30)) == "09:05:30" and label(dt.time(23, 0)) == "23:00"
+    aware = dt.datetime(2026, 3, 1, 14, 5, tzinfo=dt.timezone(dt.timedelta(hours=2)))
+    assert label(aware) == "3/1/2026 14:05"              # the wall clock, no zone
+
+
+def test_date_categories_from_a_dataset_in_the_sessions_locale(toolbox):
+    session = _session(toolbox, locale=DUTCH)
+    session.keep_datasets([DatasetEntry("days", Dataset.from_records(
+        [{"day": DAYS[0], "units": 3}, {"day": DAYS[1], "units": 5}]))])
+    ok(add(toolbox, session, **{"from": "d:days"}))
+    assert SEEN[-1][1]["categories"] == ["1/3/2026", "15/4/2026"]
+    _chart(toolbox, session, ["15/4/2026", "1/3/2026"])
+    ok(call(toolbox, session, "edit_chart", doc="d1", target="c1", action="set_values",
+            series="units", **{"from": "d:days"}))
+    assert SEEN[-1][1]["values"] == [5, 3]               # matched by the date's label
+
+
+def test_a_date_in_a_series_is_refused_as_a_date(toolbox, session):
+    session.keep_datasets([DatasetEntry("days", Dataset.from_records(
+        [{"region": "North", "day": DAYS[0]}]))])
+    error = failed(add(toolbox, session, **{"from": "d:days"}), "invalid_arguments")
+    assert "a date, not a number" in error.message

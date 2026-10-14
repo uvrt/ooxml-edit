@@ -2,6 +2,23 @@
 
 Versions are those in `pyproject.toml`; none is published to PyPI yet.
 
+## 0.28.0 -- unreleased
+- Dates in datasets (round 5, T18), at no cost in tool definitions.
+  - `Dataset.from_records(rows, types=None, columns=None, *, keys=0)`: a dataset made in
+    Python, of mappings (a missing name a blank; columns in the order first met) or of
+    sequences with `columns`; `types` a mapping by column name or a label per column. A
+    column no record has, an unknown label or a label for no column is refused.
+  - `TYPE_LABELS`: the type labels the format libraries read -- `number`, `percent`,
+    `date`, `time`, `datetime`, `text`, `bool`, `error` -- documented in `Dataset`, in
+    `from_records` and in docs/TOOLS.md. The `Dataset` constructor still takes any label.
+  - `sources.label` writes a Python `date`, `datetime` or `time` instead of giving `None`
+    (a table cell refused it, a chart category called it blank): the day, month and
+    four-digit year in the session locale's `date_order` joined by `/` (`3/1/2026` en-US,
+    `1/3/2026` nl-BE), ISO 8601 for `ymd`, a time on the 24-hour clock (`14:05`, seconds
+    when not 0), a datetime both; the wall-clock time of an aware one
+    (`sources.moment_text`). Not Office's short-date format, which is not measured. A
+    chart's categories match a date row by that text. ISO text is written as it is.
+
 ## 0.27.0 -- unreleased
 - Aliases and refusals that say what would do (round 5, T6, T7, T8), at no cost in tool
   definitions: what follows is never sent to a provider.

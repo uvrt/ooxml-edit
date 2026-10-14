@@ -393,3 +393,47 @@ def test_parallel_calls_define_and_name_datasets(toolbox, session):
 def test_a_dataset_entry_names_its_address():
     entry = DatasetEntry("x", Dataset(["a"], [(1,)]))
     assert entry.address == DATASET_PREFIX + "x" and not entry.stale and not entry.closed
+
+
+# -- from_records ----------------------------------------------------------------------------------
+
+
+def test_from_records_reads_mappings_by_name_in_the_order_first_met():
+    data = Dataset.from_records([{"region": "North", "opened": dt.date(2026, 3, 1)},
+                                 {"opened": "2026-04-15", "total": 0.13}],
+                                types={"opened": "date"})
+    assert data.columns == ("region", "opened", "total")
+    assert data.rows == (("North", dt.date(2026, 3, 1), None), (None, "2026-04-15", 0.13))
+    assert data.types == (None, "date", None) and data.sources is None and data.keys == 0
+
+
+def test_from_records_takes_columns_and_a_label_per_column():
+    data = Dataset.from_records([("North", 3), ("South", 5)], ("text", "number"),
+                                columns=("region", "units"), keys=1)
+    assert data.rows == (("North", 3), ("South", 5)) and data.keys == 1
+    assert data.types == ("text", "number")
+    picked = Dataset.from_records([{"a": 1, "b": 2, "c": 3}], columns=["c", "a"])
+    assert picked.columns == ("c", "a") and picked.rows == ((3, 1),)
+
+
+@pytest.mark.parametrize("rows, options, words", [
+    ([("North", 3)], {}, "need columns"),
+    ([{"a": 1}], {"columns": ["a", "b"]}, "no record has 'b'"),
+    ([{"a": 1}], {"types": {"b": "date"}}, "'b', which is no column"),
+    ([{"a": 1}], {"types": {"a": "Date"}}, "'Date' is not a type label"),
+    ([{"a": 1}], {"types": ("date", "text")}, "2 type labels for 1 columns"),
+    ([{"a": 1}], {"types": "date"}, "types is a mapping"),
+    ([("North",)], {"columns": ["a", "b"]}, "1 values for 2 columns"),
+    ([], {}, "give columns"),
+])
+def test_from_records_refuses_what_it_cannot_read(rows, options, words):
+    with pytest.raises(ValueError, match=words):
+        Dataset.from_records(rows, **options)
+
+
+def test_the_type_labels():
+    from ooxml_edit.tools import TYPE_LABELS
+    assert TYPE_LABELS == ("number", "percent", "date", "time", "datetime", "text", "bool",
+                           "error")
+    data = Dataset.from_records([{"when": dt.datetime(2026, 3, 1, 14, 5)}])
+    assert pickle.loads(pickle.dumps(data)) == data

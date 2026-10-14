@@ -27,6 +27,7 @@ prefix: it is the session's datasets.
 
 from __future__ import annotations
 
+import datetime as _dt
 import math
 import re
 from dataclasses import dataclass
@@ -219,14 +220,17 @@ def what(value: Any) -> str:
 
 
 def label(value: Any, locale: Any = None) -> str | None:
-    """A value as a category label: text as it is; a number as a cell in the General
-    format writes it, with the locale's decimal separator (``1.5`` is ``1,5`` in nl-NL;
-    ``2024`` stays ``2024``, no thousands separator); a logical value as ``TRUE`` or
-    ``FALSE``.  ``None`` for a blank, or anything else."""
+    """A value as a category label or a cell's text: text as it is; a number as a cell in
+    the General format writes it, with the locale's decimal separator (``1.5`` is ``1,5``
+    in nl-NL; ``2024`` stays ``2024``, no thousands separator); a logical value as ``TRUE``
+    or ``FALSE``; a Python ``date``, ``datetime`` or ``time`` as :func:`moment_text` writes
+    it, in the locale's day order.  ``None`` for a blank, or anything else."""
     if isinstance(value, str):
         return value if value != "" else None
     if isinstance(value, bool):
         return "TRUE" if value else "FALSE"
+    if isinstance(value, (_dt.date, _dt.time)):
+        return moment_text(value, locale)
     if not number(value):
         return None
     if isinstance(value, float) and value.is_integer() and abs(value) < 1e15:
@@ -238,5 +242,28 @@ def label(value: Any, locale: Any = None) -> str | None:
     return text
 
 
-__all__ = ["QUALIFIED", "Rows", "label", "merged", "number", "prefixes", "qualify",
-           "resolve", "runs", "what"]
+def moment_text(value: "_dt.date | _dt.time", locale: Any = None) -> str:
+    """A Python ``date``, ``datetime`` or ``time`` as text in the locale's day order
+    (``date_order``; en-US's ``mdy`` without one): a date's day, month and four-digit
+    year as digits joined by ``/`` -- ``3/1/2026`` in ``mdy``, ``1/3/2026`` in ``dmy`` --
+    or ISO 8601 in ``ymd`` (``2026-03-01``); a time of day on the 24-hour clock,
+    ``14:05`` (``14:05:30`` with seconds); a datetime the two, a space between.  A time
+    zone is not written: the wall-clock time is.
+
+    This is the library's own way to write a date into a cell, not Office's short-date
+    format for the locale, which is not measured: the order is the locale's, the day and
+    the month unpadded."""
+    if isinstance(value, _dt.datetime):
+        return f"{moment_text(value.date(), locale)} {moment_text(value.time(), locale)}"
+    if isinstance(value, _dt.time):
+        clock = f"{value.hour:02d}:{value.minute:02d}"
+        return f"{clock}:{value.second:02d}" if value.second else clock
+    order = getattr(locale, "date_order", None) or "mdy"
+    if order == "ymd" or order not in ("dmy", "mdy"):
+        return f"{value.year:04d}-{value.month:02d}-{value.day:02d}"
+    parts = {"d": value.day, "m": value.month, "y": value.year}
+    return "/".join(str(parts[letter]) for letter in order)
+
+
+__all__ = ["QUALIFIED", "Rows", "label", "merged", "moment_text", "number", "prefixes",
+           "qualify", "resolve", "runs", "what"]

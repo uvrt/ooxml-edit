@@ -47,6 +47,7 @@ library answers a call for it ``invalid_arguments`` with the kinds it has.
 
 from __future__ import annotations
 
+import datetime as dt
 import functools
 from typing import Any, Callable, Mapping
 
@@ -675,8 +676,9 @@ def _numbers(rows: Any, column: int, order: list[int], field: str) -> list[Any]:
 
 
 def _labels(call: Any, rows: Any, column: int, order: list[int], field: str) -> list[str]:
-    """Category labels from a column, in ``order``: text as it is, numbers written in the
-    session's locale; a blank is refused, naming its cell."""
+    """Category labels from a column, in ``order``: text as it is, numbers and dates written
+    in the session's locale (:func:`.sources.label`); a blank is refused, naming its
+    cell."""
     out = []
     for row in order:
         text = sources.label(rows.dataset.rows[row][column], call.locale)
@@ -688,9 +690,12 @@ def _labels(call: Any, rows: Any, column: int, order: list[int], field: str) -> 
 
 
 def _key(value: Any, locale: Any) -> tuple[str, Any]:
-    """What a category is matched by: its number when it is or reads as one, else its text."""
+    """What a category is matched by: its number when it is or reads as one, else its text
+    (a date's as its label writes it)."""
     if sources.number(value):
         return ("n", float(value))
+    if isinstance(value, (dt.date, dt.time)):
+        return ("t", sources.label(value, locale))
     text = str(value).strip()
     separator = getattr(locale, "decimal_separator", ".")
     for candidate in (text, text.replace(separator, ".") if separator != "." else None):
