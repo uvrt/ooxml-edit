@@ -199,16 +199,29 @@ Where it is kept:
   `<uvp:record json="..."/>` in the namespace `urn:uvrt:ooxml-edit:provenance:v1`. It goes
   wherever the chart goes. PowerPoint and Word for Mac both kept an own `c:ext` there
   through open, edit and save (measured 2026-10-14; they re-serialise the part around it).
-  Office's own extensions keep their order; a record already there is replaced where it
-  stands, so `set_values` and `add_series` from a source replace the chart's record with
-  their own. An edit without `from` leaves the record as it is.
+  Office's own extensions keep their order, and a record already there is replaced where
+  it stands. The chart's record is merged, never left saying what is no longer true:
+  - `add` from a source writes a new record;
+  - `set_values` from a source replaces the categories' entry and that series' entry, and
+    `add_series` from a source adds or replaces that series' entry (by name); the other
+    series' entries stay. An entry whose source is not the record's names its own
+    (`source`, `document`, `version`, `stale`);
+  - without `from`: `rename_series` renames the series' entry; `remove_series` drops it;
+    `set_values` and `set_value` drop it (its values no longer come from the source);
+    `rename_category` drops the categories' entry; `add_category` and `remove_category`
+    drop the record (every series' rows changed). A record left with neither categories
+    nor series is dropped. A stale address is worse than none.
+
+  The format's copy gets the same merged record, or `None` when the record is dropped.
 - **By the format**, for a table or a chart: `DocumentFormat.store_provenance(document,
-  address, record)`, called inside the call's undo step after the placement succeeded.
+  address, record)` -- `record` `None` drops the address' record -- called inside the
+  call's undo step after the placement (or the edit) succeeded.
   The shared `edit_chart` calls it with the chart's address -- for `add`, the last of the
   result's `created`; otherwise the first of its `changed`, else `target`. A format's own
   table tool calls it through `call.keep_provenance(address, rows, placed)` (`rows` what
   `call.source` returned, `placed` the result's `from`), which builds the record, hands it
-  to the hook and returns it. Measured (2026-10-14), PowerPoint keeps a shape's tags part
+  to the hook and returns it; `call.store_provenance(address, record_or_None)` hands a
+  record (or a drop) to the hook as it is. Measured (2026-10-14), PowerPoint keeps a shape's tags part
   (`p:nvPr/p:custDataLst/p:tags r:id`, a `ppt/tags/tagN.xml` part) and Word a customXml item
   related from the document part, keyed by a table's first-row `w14:paraId` or a chart's
   `wp:docPr/@id`; alt text, and a PowerPoint `p:custData` item the presentation part does

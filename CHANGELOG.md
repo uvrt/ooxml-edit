@@ -12,20 +12,27 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet.
     (`RecordError` for what is not a record; a later version is returned as it is).
   - The chart part's copy: `edit_chart` with `from` writes the record into the chart part,
     an own `c:ext` (`urn:uvrt:ooxml-edit:provenance:v1`) at the end of
-    `c:chartSpace/c:extLst`, holding `<uvp:record json="..."/>`; `set_values` and
-    `add_series` from a source replace it where it stands, Office's own extensions keep
-    their order, and an edit without `from` leaves it. PowerPoint and Word for Mac keep an
+    `c:chartSpace/c:extLst`, holding `<uvp:record json="..."/>`, replaced where it
+    stands so Office's own extensions keep their order. The record is merged: `add`
+    replaces it; `set_values` from a source replaces the categories and that series'
+    entry, `add_series` adds or replaces that series' entry (by name), the others stay,
+    and an entry from another source names its own `source`, `document`, `version`.
+    Without `from`, `rename_series` renames the entry, `remove_series`, `set_values` and
+    `set_value` drop it, `rename_category` drops the categories' entry, and
+    `add_category`/`remove_category` drop the record: it never names a series the chart
+    no longer has, nor values no longer from their source. PowerPoint and Word for Mac keep an
     own `c:ext` there through open, edit and save (measured 2026-10-14).
     `ooxml_edit.charts.provenance(chart | package[, part])` reads it back, and
     `charts.store_provenance(package, part, record)` writes it. The wrapper finds the chart
     without knowing the format: a `Chart` notes its part, and `add_chart` the new one, as
     a `provenance.Holder` while a placement watches (`provenance.watch`).
-  - The format's copy: `DocumentFormat.store_provenance(document, address, record)`, called
-    inside the call's undo step after the placement succeeded -- by `edit_chart` with the
+  - The format's copy: `DocumentFormat.store_provenance(document, address, record)`
+    (`None`: drop it), called inside the call's undo step after the placement succeeded -- by `edit_chart` with the
     chart's address (`add`: the last of `created`; otherwise the first of `changed`, else
     `target`), and by a format's own table tool through the new
     `Call.keep_provenance(address, rows, placed)`, which builds the record, hands it over
-    and returns it (a reading call may not). `DocumentFormat.read_provenance(document) ->
+    and returns it (a reading call may not); `Call.store_provenance(address, record)`
+    hands a record as it is, or `None` to drop one. `DocumentFormat.read_provenance(document) ->
     {address: record}` reads them back, through `Session.provenance(doc)`.
   - `edit_chart` with `action: "read"` returns the chart part's record as `from` when there
     is one. Definitions unchanged: no tool and no parameter added (0 tokens); every

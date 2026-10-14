@@ -232,7 +232,11 @@ class ChartBook:
 
 
 def _store(book: ChartBook, address: str, found) -> None:
-    book.frame(address).set("prov", provenance.dumps(found))
+    frame = book.frame(address)
+    if found is None:
+        frame.attrib.pop("prov", None)
+    else:
+        frame.set("prov", provenance.dumps(found))
     book.package.mark_dirty(cs.MAIN)
 
 
@@ -266,10 +270,26 @@ def toy_chart(call, doc, target, action, **arguments):
     chart = book.chart(target)
     if action == "read":
         return Result(summary="Read", data=_chart_json(chart))
+
+    def series():
+        which = arguments["series"]
+        names = [s.name for s in chart.series]
+        return chart.series[int(which)] if which not in names else chart.series_named(which)
+
     if action == "set_values":
-        chart.series_named(arguments["series"]).set_values(arguments["values"])
+        series().set_values(arguments["values"])
+    elif action == "set_value":
+        series().set_value(int(arguments["category"]), arguments["value"])
     elif action == "add_series":
         chart.add_series(arguments["text"], arguments["values"])
+    elif action == "rename_series":
+        series().set_name(arguments["text"])
+    elif action == "remove_series":
+        chart.remove_series(series().index)
+    elif action == "add_category":
+        chart.add_category(arguments["text"], arguments["values"])
+    elif action == "rename_category":
+        chart.set_category(int(arguments["category"]), arguments["text"])
     elif action == "set_title":
         chart.set_title(arguments.get("text"))
     return Result(summary=action, changed=[target], data=_chart_json(book.chart(target)))
@@ -388,22 +408,128 @@ def test_the_record_is_part_of_the_calls_one_undo_step(toolbox, session):
     assert session.provenance("d1") == {}
 
 
-def test_set_values_and_add_series_replace_the_record(toolbox, session):
-    part = book(session).chart("bar").part
-    ok(call(toolbox, session, "edit_chart", doc="d1", target="bar", action="set_values",
-            series="North", columns=["quarter", "north"], **{"from": "t:sales"}))
-    first = chart_provenance(book(session).package, part)
-    assert first["series"] == [{"name": "North", "column": "north", "rows": "1-4",
-                                "sources": ["G!B2:B5"]}]
-    ok(call(toolbox, session, "edit_chart", doc="d1", target="bar", action="add_series",
-            columns=["quarter", "east"], **{"from": "t:sales"}))
-    second = chart_provenance(book(session).package, part)
-    assert second["series"] == [{"name": "east", "column": "east", "rows": "1-4",
-                                 "sources": ["G!C2:C5"]}]
-    root = book(session).package.tree(part)
+def _place(toolbox, session, action, columns, source="t:sales", **arguments):
+    return ok(call(toolbox, session, "edit_chart", doc="d1", target="bar", action=action,
+                   columns=columns, **{"from": source}, **arguments))
+
+
+def _edit(toolbox, session, action, **arguments):
+    return ok(call(toolbox, session, "edit_chart", doc="d1", target="bar", action=action,
+                   **arguments))
+
+
+def _bar(session):
+    return chart_provenance(book(session).chart("bar"))
+
+
+NORTH = {"name": "North", "column": "north", "rows": "1-4", "sources": ["G!B2:B5"]}
+EAST = {"name": "east", "column": "east", "rows": "1-4", "sources": ["G!C2:C5"]}
+QUARTERS = {"column": "quarter", "rows": "1-4", "sources": ["G!A2:A5"]}
+
+
+def test_add_series_adds_its_entry_and_keeps_the_others(toolbox, session):
+    _place(toolbox, session, "set_values", ["quarter", "north"], series="North")
+    _place(toolbox, session, "add_series", ["quarter", "east"])
+    found = _bar(session)
+    assert found["categories"] == QUARTERS and found["series"] == [NORTH, EAST]
+    assert found["source"] == "t:sales"
+    root = book(session).package.tree(book(session).chart("bar").part)
     assert _uris(root).count(PROVENANCE_URI) == 1
-    assert session.provenance("d1")["bar"] == second
+    assert session.provenance("d1")["bar"] == found      # the format's copy is the same
     assert book(session).chart("bar").series_named("east").values == [5, 6, 7, 8]
+
+
+def test_set_values_again_replaces_that_series_entry_where_it_stands(toolbox, session):
+    _place(toolbox, session, "set_values", ["quarter", "north"], series="North")
+    _place(toolbox, session, "set_values", ["quarter", "east"], series="South")
+    _place(toolbox, session, "set_values", ["quarter", "east"], series="North")
+    assert [entry["name"] for entry in _bar(session)["series"]] == ["North", "South"]
+    assert _bar(session)["series"][0]["column"] == "east"
+
+
+def _with_dataset(toolbox_session, run):
+    @tool("ds_keep", "Keep a made-up dataset.", {"id": string("Its id.")}, documents=())
+    def ds_keep(call, id):
+        call.define_dataset(id, Dataset(("quarter", "west"), [("Q1", 9), ("Q2", 9),
+                                                              ("Q3", 9), ("Q4", 9)], keys=1),
+                            source="d2")
+        return Result(summary="kept")
+
+    with Toolbox([*TOOLS, ds_keep], formats=[BOOK, PLAIN, GRID], groups=shared.GROUPS,
+                 workers=0) as box:
+        ok(call(box, toolbox_session, "ds_keep", id="w"))
+        run(box)
+
+
+def test_an_entry_from_another_source_names_its_own(session):
+    def run(box):
+        _place(box, session, "set_values", ["quarter", "north"], series="North")
+        _place(box, session, "add_series", ["quarter", "west"], source="d:w")
+        found = _bar(session)
+        assert found["source"] == "t:sales" and found["series"][0] == NORTH
+        assert found["series"][1] == {"name": "west", "source": "d:w",
+                                      "document": "made-up-budget.ods", "version": 0,
+                                      "column": "west", "rows": "1-4"}
+        # set_values from the dataset: its origin becomes the record's, and the entry from
+        # the table now names the table.
+        _place(box, session, "set_values", ["quarter", "west"], source="d:w", series="South")
+        found = _bar(session)
+        assert found["source"] == "d:w" and "sources" not in found["categories"]
+        assert found["series"][0] == {"name": "North", "source": "t:sales",
+                                      "document": "made-up-budget.ods", "version": 0,
+                                      **{k: v for k, v in NORTH.items() if k != "name"}}
+        assert [e["name"] for e in found["series"]] == ["North", "west", "South"]
+        assert "source" not in found["series"][1] and "source" not in found["series"][2]
+
+    _with_dataset(session, run)
+
+
+def test_rename_series_renames_its_entry_by_name_or_position(toolbox, session):
+    _place(toolbox, session, "set_values", ["quarter", "north"], series="North")
+    _edit(toolbox, session, "rename_series", series="North", text="Noord")
+    assert _bar(session)["series"] == [{**NORTH, "name": "Noord"}]
+    _edit(toolbox, session, "rename_series", series="0", text="N")
+    assert _bar(session)["series"] == [{**NORTH, "name": "N"}]
+    assert session.provenance("d1")["bar"]["series"][0]["name"] == "N"
+
+
+def test_remove_series_drops_its_entry(toolbox, session):
+    _place(toolbox, session, "set_values", ["quarter", "north"], series="North")
+    _place(toolbox, session, "add_series", ["quarter", "east"])
+    _edit(toolbox, session, "remove_series", series="North")
+    assert _bar(session)["series"] == [EAST]
+    assert session.provenance("d1")["bar"]["series"] == [EAST]
+
+
+def test_values_set_without_from_drop_the_series_entry(toolbox, session):
+    _place(toolbox, session, "set_values", ["quarter", "north"], series="North")
+    _place(toolbox, session, "add_series", ["quarter", "east"])
+    _edit(toolbox, session, "set_value", series="east", category="0", value=42)
+    assert _bar(session)["series"] == [NORTH]
+    _edit(toolbox, session, "set_values", series="0", values=[1, 1, 1, 1])
+    # The categories still came from the table: the record says that much.
+    assert _bar(session) == {"v": 1, "source": "t:sales", "document": "made-up-budget.ods",
+                             "version": 0, "categories": QUARTERS}
+    assert session.provenance("d1")["bar"] == _bar(session)
+
+
+def test_category_edits_without_from_drop_what_they_make_stale(toolbox, session):
+    _place(toolbox, session, "set_values", ["quarter", "north"], series="North")
+    _edit(toolbox, session, "rename_category", category="0", text="Jan")
+    assert "categories" not in _bar(session) and _bar(session)["series"] == [NORTH]
+    _edit(toolbox, session, "add_category", text="Q5", values=[1, 2])
+    assert _bar(session) is None
+    assert session.provenance("d1") == {}
+    session.undo("d1")
+    assert _bar(session)["series"] == [NORTH]
+
+
+def test_add_replaces_the_whole_record(toolbox, session):
+    result = ok(call(toolbox, session, "edit_chart", doc="d1", target="p:x", action="add",
+                     chart_type="column", columns=["quarter", "east"], **{"from": "t:sales"}))
+    name = result.created[-1]
+    assert chart_provenance(book(session).chart(name))["series"] == [
+        {**EAST, "name": "east"}]
 
 
 def test_read_returns_the_chart_parts_record_as_from(toolbox, session):

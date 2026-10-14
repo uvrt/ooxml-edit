@@ -278,13 +278,19 @@ class Call:
         format's :attr:`~.session.DocumentFormat.store_provenance`, inside this call's
         undo step.  Call it after the placement succeeded.  Returns the record (also when
         the format keeps none)."""
-        if self.entry is None or not self.changing:
-            raise RuntimeError("keep_provenance is for a call that changes its document")
         found = provenance.record(placed, document=rows.name)
+        self.store_provenance(address, found)
+        return found
+
+    def store_provenance(self, address: str, found: Mapping[str, Any] | None) -> None:
+        """Hand ``found`` -- a record as it is, or ``None`` to drop the one ``address`` has
+        -- to the format's :attr:`~.session.DocumentFormat.store_provenance`, if it has
+        one.  For a call that changes its document, inside its undo step."""
+        if self.entry is None or not self.changing:
+            raise RuntimeError("provenance is kept by a call that changes its document")
         hook = getattr(self.session.formats.get(self.entry.kind), "store_provenance", None)
         if hook is not None:
             hook(self.entry.document, address, found)
-        return found
 
     @property
     def document(self) -> Any:

@@ -134,8 +134,8 @@ class DocumentFormat:
     #: Keeps where values placed from a source came from, in the saved document:
     #: ``store_provenance(document, address, record)``, with ``address`` the table or chart
     #: the values went into and ``record`` an :mod:`ooxml_edit.provenance` record (a dict:
-    #: write it with :func:`ooxml_edit.provenance.dumps`).  It replaces the record the
-    #: address had.  Called inside the call's undo step, after the placement succeeded:
+    #: write it with :func:`ooxml_edit.provenance.dumps`), or ``None``: drop the address'
+    #: record.  It replaces the record the address had.  Called inside the call's undo step, after the placement succeeded:
     #: by the shared ``edit_chart`` for a chart from ``from``, and by a tool's handler
     #: through :meth:`~.dispatch.Call.keep_provenance`.  ``None``: the format keeps none
     #: (a chart still keeps its own copy in its part).
