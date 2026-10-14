@@ -61,6 +61,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import ExitStack, contextmanager
 from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 
+from .. import provenance
 from . import adapters, prompts
 from .datasets import (DATASET_PREFIX, Dataset, DatasetEntry, check_dataset_id,
                        dataset_id)
@@ -268,6 +269,22 @@ class Call:
                             field=field)
         return Rows(f"{doc}/{address}", dataset, doc=doc, kind=entry.kind, name=entry.name,
                     version=entry.version, merge=fmt.merge_sources)
+
+    def keep_provenance(self, address: str, rows: Rows,
+                        placed: Mapping[str, Any]) -> dict[str, Any]:
+        """Keep, in the call's document, where the values just placed at ``address`` came
+        from: the :mod:`ooxml_edit.provenance` record of ``placed`` (the result's
+        ``data.from``, from ``rows`` -- what :meth:`source` returned), handed to the
+        format's :attr:`~.session.DocumentFormat.store_provenance`, inside this call's
+        undo step.  Call it after the placement succeeded.  Returns the record (also when
+        the format keeps none)."""
+        if self.entry is None or not self.changing:
+            raise RuntimeError("keep_provenance is for a call that changes its document")
+        found = provenance.record(placed, document=rows.name)
+        hook = getattr(self.session.formats.get(self.entry.kind), "store_provenance", None)
+        if hook is not None:
+            hook(self.entry.document, address, found)
+        return found
 
     @property
     def document(self) -> Any:

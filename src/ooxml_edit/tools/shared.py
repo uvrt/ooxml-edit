@@ -50,6 +50,7 @@ from __future__ import annotations
 import functools
 from typing import Any, Callable, Mapping
 
+from .. import provenance
 from . import sources
 from .registry import (CORE, Param, Tool, ToolGroup, array, boolean, build_schema,
                        free_object, integer, number, obj, string)
@@ -391,7 +392,15 @@ def _chart_rows(handler: Callable[..., Any]) -> Callable[..., Any]:
     and never sees ``from``.
     Its result gets ``from``: the source, its document and version, and per category and
     series column the rows placed (from 1, as runs) and their sources, merged.  A series
-    value that is not a number is refused, naming its cell: text is never converted."""
+    value that is not a number is refused, naming its cell: text is never converted.
+
+    The placement is also kept in the saved document, in the call's undo step: its
+    :mod:`ooxml_edit.provenance` record goes into the chart part (``ooxml_edit.charts``
+    notes the chart the handler used) and to the format's
+    :attr:`~.session.DocumentFormat.store_provenance`, with the chart's address -- for
+    ``add`` the last of the result's ``created``, else the first of its ``changed`` (else
+    ``target``).  ``action: "read"`` returns the chart part's record as ``from``, when it
+    has one."""
 
     @functools.wraps(handler)
     def run(call: Any, **arguments: Any) -> Any:
@@ -401,10 +410,24 @@ def _chart_rows(handler: Callable[..., Any]) -> Callable[..., Any]:
             if columns is not None:
                 raise ToolError("invalid_arguments", "columns name the columns of from; "
                                 "give from too, or the values in data", field="columns")
+            if arguments.get("action") == "read":
+                return _read_record(handler, call, arguments)
             return handler(call, **arguments)
         return _from_rows(handler, call, source, columns, arguments)
 
     return run
+
+
+def _read_record(handler: Callable[..., Any], call: Any, arguments: dict[str, Any]) -> Any:
+    """``action: "read"`` with the record kept in the chart's part, as ``from``."""
+    with provenance.watch() as used:
+        returned = handler(call, **arguments)
+    data = returned.data if isinstance(returned, Result) else returned
+    if len(used) == 1 and isinstance(data, dict) and "from" not in data:
+        found = used[0].read()
+        if found is not None:
+            data["from"] = found
+    return returned
 
 
 def _from_rows(handler: Callable[..., Any], call: Any, source: str, columns: Any,
@@ -466,17 +489,38 @@ def _from_rows(handler: Callable[..., Any], call: Any, source: str, columns: Any
             arguments["text"] = names[at[1]]
         series = [arguments.get("text") if action == "add_series"
                   else arguments.get("series")]
-    returned = handler(call, **arguments)
+    with provenance.watch() as used:
+        returned = handler(call, **arguments)
     result = returned if isinstance(returned, Result) else Result(data=returned)
     placed = rows.describe()
     placed["categories"] = rows.provenance(at[0], order)
     placed["series"] = [{"name": name, **rows.provenance(column, order)}
                         for name, column in zip(series, at[1:])]
+    if result.ok:
+        _keep(call, rows, placed, used, _chart_address(action, result, arguments))
     if isinstance(result.data, dict):
         result.data["from"] = placed
     else:
         result.data = {"chart": result.data, "from": placed}
     return result
+
+
+def _chart_address(action: str, result: Result, arguments: Mapping[str, Any]) -> str | None:
+    """The chart a placement went into: a new one last in ``created``, else the first
+    ``changed``, else the call's ``target``."""
+    if action == "add":
+        return result.created[-1] if result.created else None
+    return result.changed[0] if result.changed else arguments.get("target")
+
+
+def _keep(call: Any, rows: Any, placed: Mapping[str, Any], used: list[Any],
+          address: str | None) -> None:
+    """Keep a chart placement's record: in the chart's part, when the handler used one chart,
+    and with the format, when the chart has an address."""
+    found = (call.keep_provenance(address, rows, placed) if address is not None
+             else provenance.record(placed, document=rows.name))
+    if len(used) == 1:
+        used[0].store(found)
 
 
 def _numbers(rows: Any, column: int, order: list[int], field: str) -> list[Any]:

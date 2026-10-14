@@ -131,6 +131,19 @@ class DocumentFormat:
     #: own drawings, not a dataset).  It only adds wording: what resolves never changes,
     #: and a hint that raises is ignored.  ``None``: the message is left as it is.
     source_hint: Callable[[Any, str], str | None] | None = None
+    #: Keeps where values placed from a source came from, in the saved document:
+    #: ``store_provenance(document, address, record)``, with ``address`` the table or chart
+    #: the values went into and ``record`` an :mod:`ooxml_edit.provenance` record (a dict:
+    #: write it with :func:`ooxml_edit.provenance.dumps`).  It replaces the record the
+    #: address had.  Called inside the call's undo step, after the placement succeeded:
+    #: by the shared ``edit_chart`` for a chart from ``from``, and by a tool's handler
+    #: through :meth:`~.dispatch.Call.keep_provenance`.  ``None``: the format keeps none
+    #: (a chart still keeps its own copy in its part).
+    store_provenance: Callable[[Any, str, Any], None] | None = None
+    #: The records the document keeps: ``read_provenance(document) -> {address: record}``,
+    #: each as :func:`ooxml_edit.provenance.loads` reads it, under the addresses the
+    #: format's tools take now.  :meth:`Session.provenance` asks it.  ``None``: none.
+    read_provenance: Callable[[Any], Any] | None = None
 
 
 class LRU:
@@ -451,6 +464,18 @@ class Session:
                 raise ToolError("not_found", f"no open document {doc_id!r}", field="doc",
                                 valid_options=sorted(self.documents, key=doc_order))
             return entry
+
+    def provenance(self, doc_id: str) -> dict[str, dict[str, Any]]:
+        """Where the values placed in ``doc_id`` from sources came from, as the saved
+        document keeps it (:attr:`DocumentFormat.read_provenance`): ``{address: record}``,
+        empty when the format keeps none."""
+        entry = self.entry(doc_id)
+        hook = getattr(self.formats.get(entry.kind), "read_provenance", None)
+        if hook is None:
+            return {}
+        with entry.lock:
+            return {str(address): dict(found)
+                    for address, found in (hook(entry.document) or {}).items()}
 
     def close(self, doc_id: str) -> list[str]:
         """Close a document; the addresses of the datasets derived from it, which stay,
