@@ -48,7 +48,8 @@ document, the facts (`checks`) computed once at the end. Each op applies on its 
 that fails (an unknown tool, arguments its schema refuses, an address or document that
 names nothing, an error while it runs) is rolled back alone and reported, and the ops after
 it still run. What applied is one undo step and one version. The result's `data` is
-`{"applied": n, "failed": [indexes], "ops": [...]}`, an outcome per op in order -- `op`,
+`{"ops": [...]}` when every op applied, as before, and `{"applied": n, "failed": [indexes],
+"ops": [...]}` when one failed: an outcome per op in order -- `op`,
 `tool`, and its `summary`, `created` and `data`, or its `error` (`code`, `message`, and
 `field` -- `tool` or `arguments.<path>` -- `valid_options` and `details` when it has them);
 the summary names the failed ops to fix and resend. A `$ref` a failed op would have made

@@ -9,13 +9,15 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet.
   with its error, and the ops after it still run. What applied is one undo step and one
   version, and the checks run once on the result, as before. Schema-invalid ops no longer
   block the rest.
-  - The result: `data` is `{"applied": n, "failed": [indexes], "ops": [...]}`, an outcome
-    per op in order -- `op`, `tool`, and `summary`, `created`, `data`, or `error` (`code`,
+  - The result: when an op failed, `data` is `{"applied": n, "failed": [indexes], "ops":
+    [...]}`, an outcome per op in order -- `op`, `tool`, and `summary`, `created`, `data`, or `error` (`code`,
     `message`; `field` as the op's own path, `tool` or `arguments.<path>`;
     `valid_options` and `details` when there are any). The summary names the failed ops
     to fix and resend. `ok` is true when at least one op applied; when none did, the
     result is an error with the first failure's code, field (`ops[i].<path>`) and valid
-    options, and every outcome in `details` -- nothing changed, no version.
+    options, and every outcome in `details` -- nothing changed, no version. When every op
+    applied, the result is the one an all-or-none batch gave (`data: {"ops": [...]}`), so
+    recorded transcripts of successful batches replay unchanged.
   - A `$ref` that a failed op would have made (any `ref` in its arguments) fails naming
     that op: "$chart1 was to be made by ops[3], which failed: fix that op and resend
     both", `details.op`.

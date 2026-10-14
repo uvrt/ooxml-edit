@@ -1118,9 +1118,10 @@ class Toolbox:
             combined.summary = (f"Ran {len(done)} of {len(outcomes)} ops as one step: "
                                 + _summaries(done) + ". Not applied -- fix and resend only "
                                 "these: " + _failures(outcomes, errors))
-        else:
+            combined.data = {"applied": len(done), "failed": list(errors), "ops": outcomes}
+        else:       # every op applied: the result an all-or-none batch gives
             combined.summary = f"Ran {len(done)} op(s) as one step: " + _summaries(done)
-        combined.data = {"applied": len(done), "failed": list(errors), "ops": outcomes}
+            combined.data = {"ops": outcomes}
         return combined
 
     def _run_alone(self, session: Session, index: int, tool: Tool, arguments: dict[str, Any],

@@ -339,6 +339,7 @@ def test_a_batch_runs_its_ops_in_order_as_one_undo_step_with_refs(toolbox, sessi
     assert entry.version == before + 1
     assert result.refs == {"x": "item:1", "y": "item:2"} and entry.refs == result.refs
     assert [op["tool"] for op in result.data["ops"]] == ["t_add", "t_add", "t_set", "t_read"]
+    assert set(result.data) == {"ops"}          # as an all-or-none batch's: no failures to list
     assert result.data["ops"][3]["data"] == ["A", "b"]
     assert CHECKS == [("d1", ["item:1", "item:2"])]
     assert result.checks["items"] == 2
