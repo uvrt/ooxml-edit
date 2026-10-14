@@ -2,6 +2,17 @@
 
 Versions are those in `pyproject.toml`; none is published to PyPI yet.
 
+## 0.24.0 -- unreleased
+- `edit_chart` with `from` and no `columns`, as the table tools take `from` without
+  `from_columns`: `add` places every column, the first as the categories (a scatter
+  chart's x values) and each following one as a series; `set_values` and `add_series` take
+  a source of exactly two columns (categories, then values) and still need `columns`
+  otherwise. A defaulted column that is not all numbers is refused as before, naming the
+  cell, with `field: "from"` and a message suggesting `columns`. An empty `columns` is now
+  the default rather than a refusal. The `columns` description gains "default all" (+4
+  estimated tokens on the all-loaded definitions). A minor version, not a patch: calls that
+  were refused now succeed, and the shared definition text changes.
+
 ## 0.23.0 -- unreleased
 - A format's hint for a source that names nothing: `DocumentFormat.source_hint(document,
   value) -> str | None`. When a declared source (`Tool.sources`) is a `d:` that is no

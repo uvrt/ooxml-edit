@@ -330,7 +330,7 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
           "ref": string("add: ref name for the new chart.", optional=True),
           "from": string("add, set_values, add_series: rows of d:<id> or table t:<name>.",
                          optional=True),
-          "columns": array(string(), "from's category column, then series columns.",
+          "columns": array(string(), "from's category column, then series columns; default all.",
                            optional=True)},
          group=MISC, mutates=True, refs=("target",), sources=("from",),
          reads=_reading_action, wrap=lambda fn: _chart_rows(fn)),
@@ -385,8 +385,10 @@ def _chart_rows(handler: Callable[..., Any]) -> Callable[..., Any]:
     :mod:`.sources`) the categories and series come from the source's columns by name:
     ``columns`` is the category column (a scatter chart's x values), then a column per
     series (``add``), or one, the values (``set_values``, ``add_series``, matched to the
-    chart's categories by label).  The kind's handler gets literal ``categories``,
-    ``data`` and ``values``, as if the model had written them, and never sees ``from``.
+    chart's categories by label).  Without ``columns``, ``add`` takes every column, the first
+    as the categories, and the others take a source of just two columns.  The kind's handler
+    gets literal ``categories``, ``data`` and ``values``, as if the model had written them,
+    and never sees ``from``.
     Its result gets ``from``: the source, its document and version, and per category and
     series column the rows placed (from 1, as runs) and their sources, merged.  A series
     value that is not a number is refused, naming its cell: text is never converted."""
@@ -416,14 +418,22 @@ def _from_rows(handler: Callable[..., Any], call: Any, source: str, columns: Any
         if arguments.get(name) is not None:
             raise ToolError("invalid_arguments", f"from replaces {name}: name the columns "
                             "in columns instead", field=name)
-    if not columns:
-        raise ToolError("invalid_arguments", "from needs columns: the category column, "
-                        "then each series' column", field="columns")
     rows = call.source(source, field="from")
-    at = [rows.column(name, field=f"columns[{i}]") for i, name in enumerate(columns)]
-    if len(set(at)) != len(at):
-        raise ToolError("invalid_arguments", "a column is named twice", field="columns")
     names = rows.dataset.columns
+    if columns:
+        at = [rows.column(name, field=f"columns[{i}]") for i, name in enumerate(columns)]
+        if len(set(at)) != len(at):
+            raise ToolError("invalid_arguments", "a column is named twice", field="columns")
+        fields = [f"columns[{i}]" for i in range(len(at))]
+    else:
+        # Every column, the first the categories, as the table tools place every column when
+        # from_columns is left out; set_values and add_series only when there are just two.
+        if action != "add" and len(names) != 2:
+            raise ToolError("invalid_arguments", f"{rows.address} has {len(names)} columns: "
+                            "name the category column and the values' in columns",
+                            field="columns")
+        at = list(range(len(names)))
+        fields = ["from"] * len(at)
     chart_type = arguments.get("chart_type")
     if action == "add":
         if len(at) < 2:
@@ -436,12 +446,12 @@ def _from_rows(handler: Callable[..., Any], call: Any, source: str, columns: Any
             raise ToolError("refused", f"{rows.address} has no rows", field="from")
         order = list(range(len(rows.dataset.rows)))
         if chart_type == "scatter":
-            arguments["values"] = _numbers(rows, at[0], order, "columns[0]")
+            arguments["values"] = _numbers(rows, at[0], order, fields[0])
         else:
-            arguments["categories"] = _labels(call, rows, at[0], order)
+            arguments["categories"] = _labels(call, rows, at[0], order, fields[0])
         arguments["data"] = [{"name": names[column],
-                              "values": _numbers(rows, column, order, f"columns[{i + 1}]")}
-                             for i, column in enumerate(at[1:])]
+                              "values": _numbers(rows, column, order, field)}
+                             for column, field in zip(at[1:], fields[1:])]
         series = [names[column] for column in at[1:]]
     else:
         if len(at) != 2:
@@ -449,8 +459,9 @@ def _from_rows(handler: Callable[..., Any], call: Any, source: str, columns: Any
                             "the category column, then the values'", field="columns")
         read = handler(call, doc=arguments["doc"], target=arguments["target"], action="read")
         data = read.data if isinstance(read, Result) else read
-        order = _matched(call, rows, at[0], list((data or {}).get("categories") or []))
-        arguments["values"] = _numbers(rows, at[1], order, "columns[1]")
+        order = _matched(call, rows, at[0], list((data or {}).get("categories") or []),
+                         fields[0])
+        arguments["values"] = _numbers(rows, at[1], order, fields[1])
         if action == "add_series" and arguments.get("text") is None:
             arguments["text"] = names[at[1]]
         series = [arguments.get("text") if action == "add_series"
@@ -474,15 +485,18 @@ def _numbers(rows: Any, column: int, order: list[int], field: str) -> list[Any]:
     for row in order:
         value = rows.dataset.rows[row][column]
         if not sources.number(value):
+            choose = ("name the category and series columns in columns, as without columns "
+                      "every column after the first is a series" if field == "from"
+                      else "choose another column")
             raise ToolError("invalid_arguments", f"{rows.where(row, column)} is "
                             f"{sources.what(value)}, not a number: a series takes numbers and "
-                            "text is never converted; fix the source or choose another column",
+                            f"text is never converted; fix the source or {choose}",
                             field=field)
         out.append(value)
     return out
 
 
-def _labels(call: Any, rows: Any, column: int, order: list[int]) -> list[str]:
+def _labels(call: Any, rows: Any, column: int, order: list[int], field: str) -> list[str]:
     """Category labels from a column, in ``order``: text as it is, numbers written in the
     session's locale; a blank is refused, naming its cell."""
     out = []
@@ -490,7 +504,7 @@ def _labels(call: Any, rows: Any, column: int, order: list[int]) -> list[str]:
         text = sources.label(rows.dataset.rows[row][column], call.locale)
         if text is None:
             raise ToolError("invalid_arguments", f"{rows.where(row, column)} is blank: "
-                            "a category needs a label", field="columns[0]")
+                            "a category needs a label", field=field)
         out.append(text)
     return out
 
@@ -512,7 +526,8 @@ def _key(value: Any, locale: Any) -> tuple[str, Any]:
     return ("t", str(value))
 
 
-def _matched(call: Any, rows: Any, column: int, categories: list[Any]) -> list[int]:
+def _matched(call: Any, rows: Any, column: int, categories: list[Any],
+             field: str) -> list[int]:
     """The row for each of the chart's categories, matched by label (a number by value):
     every category needs exactly one row, and every row a category."""
     locale = call.locale
@@ -526,19 +541,18 @@ def _matched(call: Any, rows: Any, column: int, categories: list[Any]) -> list[i
         value = record[column]
         if sources.label(value, locale) is None:
             raise ToolError("invalid_arguments", f"{rows.where(row, column)} is blank: "
-                            "a row is matched to a category by its label",
-                            field="columns[0]")
+                            "a row is matched to a category by its label", field=field)
         key = _key(value, locale)
         if key in found:
             raise ToolError("ambiguous", f"rows {found[key] + 1} and {row + 1} of "
-                            f"{rows.address} have the same category", field="columns[0]")
+                            f"{rows.address} have the same category", field=field)
         found[key] = row
     missing = [str(category) for category, key in zip(categories, wanted) if key not in found]
     if missing:
         raise ToolError("not_found", f"no row of {rows.address} for the chart's "
                         f"categor{'y' if len(missing) == 1 else 'ies'} "
                         f"{', '.join(missing[:5])}" + (" and more" if len(missing) > 5 else ""),
-                        field="columns[0]", valid_options=[str(c) for c in categories][:50])
+                        field=field, valid_options=[str(c) for c in categories][:50])
     extra = sorted(set(found.values()) - {found[key] for key in wanted})
     if extra:
         raise ToolError("refused", f"row{'s' if len(extra) > 1 else ''} "

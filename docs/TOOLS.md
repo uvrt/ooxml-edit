@@ -140,7 +140,11 @@ The shared `edit_chart` takes a source for `add`, `set_values` and `add_series`:
 `from` names it and `columns` its columns by name -- the category column (a scatter chart's
 x values), then a column per series (`add`) or the one column of values (`set_values`,
 `add_series`, whose rows are matched to the chart's categories by label, a number by value:
-every category needs exactly one row and every row a category, or the call is refused):
+every category needs exactly one row and every row a category, or the call is refused).
+Without `columns`, as the table tools without `from_columns`, `add` takes every column,
+the first as the categories, and `set_values`/`add_series` take a two-column source; a
+defaulted column that is not all numbers is refused, naming the cell and suggesting
+`columns`:
 
 ```json
 {"doc": "d1", "target": "256", "action": "add", "chart_type": "column",
