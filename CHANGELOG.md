@@ -2,6 +2,38 @@
 
 Versions are those in `pyproject.toml`; none is published to PyPI yet.
 
+## 0.27.0 -- unreleased
+- Aliases and refusals that say what would do (round 5, T6, T7, T8), at no cost in tool
+  definitions: what follows is never sent to a provider.
+  - Value aliases: `string(..., aliases={"shrink": "normal"})` writes `valueAliases` into
+    the validation schema (`schema.BOUND_KEYWORDS`, stripped by `canonical`); the
+    validator reads an alias, ignoring case, as its value, and the result's `warnings`
+    say so (`frame.autofit 'shrink' read as 'normal'`). `validate_call(schema, arguments,
+    notes)` collects those lines. An alias must read as an enum value and not be one.
+  - Argument-name aliases: `Tool.aliases` (`tool(..., aliases=)`, `Spec(aliases=)`),
+    `{alias: name}` or `{alias: function(arguments) -> name or None}`; the dispatcher
+    renames before validating, with a warning (`from_columns read as columns`), in a
+    batch's ops too (`ops[1]: ...`). An alias and its name given together are refused. A
+    function may take one of the tool's own names whose value can only mean another (a
+    list of column names given as a count). `edit_chart` reads `slide` as `target` when
+    adding, and `from_columns` as `columns`.
+  - "Did you mean": an enum value or an unknown argument name close to an allowed one
+    (the same ignoring case and `-`/`_`/spaces, else `difflib`'s nearest) adds "; did you
+    mean 'x'?" to the message; `valid_options` is unchanged. `schema.close_match`.
+  - `key` on a changing tool that takes none says why: keys are for the tools that
+    create something; this one is safe to repeat as it is.
+  - A ref name that is not one says the rule in words -- a lowercase letter, then up to
+    31 lowercase letters, digits or `_` -- and a name that would do (`catChart`:
+    `'cat_chart'`; `dispatch.ref_rule`), instead of the pattern. A `$Name` in a target
+    that is no ref name but folds to a known ref (`$catChart` for `$cat_chart`) is
+    `not_found`, "did you mean $cat_chart?"; anything else (`$A$1`) stays an address.
+  - Chart colours: Office's names for the theme colours are read as the scheme names --
+    PowerPoint's `text1`, `text2`, `background1`, `background2` (`tx1`...), Word's
+    `dark1`...`light2`, `hyperlink`, `followedHyperlink` (`dk1`..., `hlink`,
+    `folHlink`), any case, and with a space before the number (`"Accent 1"`, `"Text 2
+    lumMod=75%"`). `charts.format.scheme_color`, `split_color`, `THEME_COLOR_ALIASES`; the
+    refusal still lists the scheme names, and mentions the Office ones.
+
 ## 0.26.0 -- unreleased
 - `batch` applies its ops one by one by default (round 5, T1; TOOLS-ROADMAP D14, amended):
   an op that fails -- an unknown tool, arguments its schema refuses, an address, ref or

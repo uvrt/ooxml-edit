@@ -62,13 +62,16 @@ def _param(schema: dict[str, Any], optional: bool, **bounds: Any) -> Param:
 def string(description: str | None = None, *, enum: Sequence[str] | None = None,
            format: str | None = None, min_length: int | None = None,
            max_length: int | None = None, or_integer: int | None = None,
-           optional: bool = False) -> Param:
+           aliases: Mapping[str, str] | None = None, optional: bool = False) -> Param:
     """A string; with ``or_integer``, the dispatcher also takes a whole number of at least
     that in its place (``orInteger``, :data:`~.schema.BOUND_KEYWORDS`): the provider is sent
-    a plain string."""
+    a plain string.  ``aliases`` are values read as another (``{"shrink": "normal"}``,
+    ``valueAliases``), never sent: the result's warnings say what was read."""
     schema = _described("string", description)
     if enum is not None:
         schema["enum"] = list(enum)
+    if aliases:
+        schema["valueAliases"] = dict(aliases)
     if format is not None:
         schema["format"] = format
     return _param(schema, optional, minLength=min_length, maxLength=max_length,
@@ -184,6 +187,15 @@ class Tool:
     #: measure-only call): a function of the arguments, true when the call changes nothing.
     #: Such a call runs as a reading one: no undo step, no version, no checks, no retry key.
     reads: Callable[[Mapping[str, Any]], bool] | None = None
+    #: Argument names a model naturally writes for one of the tool's own, never sent:
+    #: ``{alias: name}``, or ``{alias: function(arguments) -> name or None}`` where the
+    #: alias means the name only in some calls (a page is ``edit_chart``'s ``target``
+    #: for ``add``) -- such a function may also take one of the tool's own names whose value
+    #: can only mean another (a list of names given as a count).  The dispatcher renames the
+    #: argument before validating and says so in the result's warnings.  Only where the
+    #: meaning is the same.
+    aliases: Mapping[str, str | Callable[[Mapping[str, Any]], str | None]] = field(
+        default_factory=dict)
 
     def __post_init__(self) -> None:
         problems = definition_problems(self)
@@ -237,7 +249,8 @@ class Tool:
             other.name, other.description, other.schema, other.group, other.mutates,
             other.route, other.strict, other.batchable, other.composite, tuple(other.refs),
             other.reads) and tuple(self.datasets) == tuple(other.datasets) \
-            and tuple(self.sources) == tuple(other.sources)
+            and tuple(self.sources) == tuple(other.sources) \
+            and dict(self.aliases) == dict(other.aliases)
 
     def merged(self, other: "Tool") -> "Tool":
         """One definition serving both tools' kinds: a shared tool two libraries implement."""
@@ -278,6 +291,13 @@ def definition_problems(tool: Tool) -> list[str]:
                 problems.append(f"exactly_one names {name!r}, which is not a parameter")
             elif name in required:
                 problems.append(f"exactly_one names {name!r}, which is required")
+    for alias, name in tool.aliases.items():
+        if callable(name):
+            continue
+        if alias in properties:
+            problems.append(f"aliases names {alias!r}, which is a parameter")
+        if name not in properties:
+            problems.append(f"aliases reads {alias!r} as {name!r}, which is not a parameter")
     if tool.route is not None and tool.route not in properties:
         problems.append(f"route names {tool.route!r}, which is not a parameter")
     if not callable(tool.documents):
@@ -309,9 +329,11 @@ def tool(name: str, description: str, params: Mapping[str, Param] | None = None,
          exactly_one: Sequence[Sequence[str]] = (),
          priority: int | None = None, strict: bool = True, batchable: bool = True,
          refs: Sequence[str] = (), datasets: Sequence[str] = (), sources: Sequence[str] = (),
-         reads: Callable[[Mapping[str, Any]], bool] | None = None) -> Callable[[Handler], Tool]:
+         reads: Callable[[Mapping[str, Any]], bool] | None = None,
+         aliases: Mapping[str, Any] | None = None) -> Callable[[Handler], Tool]:
     """Make a :class:`Tool` of a handler.  ``kind`` restricts it to one document kind;
     ``reads`` marks the calls of a changing tool that only read (:attr:`Tool.reads`);
+    ``aliases`` the argument names read as its own (:attr:`Tool.aliases`);
     ``refs``, ``datasets`` and ``sources`` declare the arguments that may hold a ref, a
     dataset, or a source (a dataset or another document's rows)."""
 
@@ -320,7 +342,8 @@ def tool(name: str, description: str, params: Mapping[str, Param] | None = None,
                     handlers={kind: handler}, group=group, mutates=mutates,
                     documents=documents, exactly_one=exactly_one, priority=priority,
                     strict=strict, batchable=batchable, refs=tuple(refs),
-                    datasets=tuple(datasets), sources=tuple(sources), reads=reads)
+                    datasets=tuple(datasets), sources=tuple(sources), reads=reads,
+                    aliases=dict(aliases or {}))
 
     return make
 

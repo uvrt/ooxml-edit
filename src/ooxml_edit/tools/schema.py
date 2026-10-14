@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import copy
 import datetime as _dt
+import difflib
 import re
 from typing import Any, Iterable, Mapping
 
@@ -60,8 +61,12 @@ SUBSET_KEYWORDS = frozenset({
 #: position (``2``, or an id such as ``"n:257"``) is a string to a strict
 #: decoder -- the subset has no unions -- while a call written without one, or before the
 #: change, still passes its number.
+#: ``valueAliases`` (on a string, ``{alias: value}``) are values a model naturally writes for
+#: one it may give -- an application's own word for an enum value (``shrink`` for
+#: ``normal``): the dispatcher reads the alias, matched ignoring case, as its value and says
+#: so in the result's warnings.  The provider is never sent them, so they cost no tokens.
 BOUND_KEYWORDS = frozenset({"minimum", "maximum", "minLength", "maxLength", "maxItems",
-                            "orInteger"})
+                            "orInteger", "valueAliases"})
 
 #: Words that make a property name a file-system path.  The tool layer has no paths: inputs
 #: are blob handles, outputs go to the application.
@@ -168,6 +173,18 @@ def _check_node(node: Any, where: str, depth: int, problems: list[str], enum_tot
     if "orInteger" in node and (kind != "string" or isinstance(node["orInteger"], bool)
                                 or not isinstance(node["orInteger"], int)):
         problems.append(f"{where}: orInteger must be a whole number, on a string")
+    if "valueAliases" in node:
+        aliases = node["valueAliases"]
+        if kind != "string" or not isinstance(aliases, Mapping) or not aliases or not all(
+                isinstance(k, str) and isinstance(v, str) for k, v in aliases.items()):
+            problems.append(f"{where}: valueAliases must map strings to strings, on a string")
+        elif "enum" in node:
+            for alias, value in aliases.items():
+                if value not in node["enum"]:
+                    problems.append(f"{where}: valueAliases reads {alias!r} as {value!r}, "
+                                    "which is not in the enum")
+                if alias in node["enum"]:
+                    problems.append(f"{where}: valueAliases names {alias!r}, an enum value")
 
     if kind == "object":
         if depth > MAX_DEPTH:
@@ -349,20 +366,44 @@ class CallError(ValueError):
         self.valid_options = valid_options or []
 
 
-def validate_call(schema: Mapping[str, Any], arguments: Any) -> dict[str, Any]:
+def validate_call(schema: Mapping[str, Any], arguments: Any,
+                  notes: list[str] | None = None) -> dict[str, Any]:
     """Check ``arguments`` against a (validation) schema and return them normalised.
 
     Normalising drops an optional property given as ``null`` -- the OpenAI adapters send
     every optional property, as ``null`` when unused -- so a handler sees it as absent
-    either way.  An integer given as ``3.0`` becomes ``3``.  Raises :class:`CallError` on
-    the first problem.
+    either way.  An integer given as ``3.0`` becomes ``3``, and a value a string's
+    ``valueAliases`` name becomes its value, a line added to ``notes`` saying so
+    (``frame.autofit 'shrink' read as 'normal'``).  Raises :class:`CallError` on the
+    first problem; an unknown name or an enum value close to a known one says "did you
+    mean".
     """
     if not isinstance(arguments, Mapping):
         raise CallError("the arguments must be a JSON object")
-    return _validate(schema, arguments, "")
+    return _validate(schema, arguments, "", notes if notes is not None else [])
 
 
-def _validate(node: Mapping[str, Any], value: Any, where: str) -> Any:
+def close_match(value: str, options: Iterable[str]) -> str | None:
+    """The option ``value`` most likely meant: the same ignoring case and ``-``/``_``/space,
+    else the nearest by :func:`difflib.get_close_matches`; ``None`` when none is close."""
+    options = [option for option in options if isinstance(option, str)]
+    folded = {_fold(option): option for option in options}
+    if _fold(value) in folded:
+        return folded[_fold(value)]
+    found = difflib.get_close_matches(_fold(value), list(folded), 1, 0.6)
+    return folded[found[0]] if found else None
+
+
+def _fold(text: str) -> str:
+    return re.sub(r"[\s_-]+", "", text.lower())
+
+
+def _did_you_mean(value: str, options: Iterable[str]) -> str:
+    match = close_match(value, options)
+    return f"; did you mean {match!r}?" if match is not None and match != value else ""
+
+
+def _validate(node: Mapping[str, Any], value: Any, where: str, notes: list[str]) -> Any:
     kind = node.get("type")
     label = where or "the arguments"
     if kind == "object":
@@ -375,7 +416,8 @@ def _validate(node: Mapping[str, Any], value: Any, where: str) -> Any:
         unknown = [key for key in value if key not in properties]
         if unknown:
             name = _join(where, unknown[0])
-            raise CallError(f"unknown argument {name!r}", name, sorted(properties))
+            raise CallError(f"unknown argument {name!r}" + _did_you_mean(unknown[0], properties),
+                            name, sorted(properties))
         result: dict[str, Any] = {}
         for name, child in properties.items():
             path = _join(where, name)
@@ -383,7 +425,7 @@ def _validate(node: Mapping[str, Any], value: Any, where: str) -> Any:
                 if name in required:
                     raise CallError(f"{path!r} is required", path)
                 continue
-            result[name] = _validate(child, value[name], path)
+            result[name] = _validate(child, value[name], path, notes)
         return result
     if kind == "array":
         if not isinstance(value, list):
@@ -393,17 +435,25 @@ def _validate(node: Mapping[str, Any], value: Any, where: str) -> Any:
         if "maxItems" in node and len(value) > node["maxItems"]:
             raise CallError(f"{label} has {len(value)} items; at most {node['maxItems']}", where)
         items = node.get("items") or {}
-        return [_validate(items, item, f"{where}[{index}]") for index, item in enumerate(value)]
+        return [_validate(items, item, f"{where}[{index}]", notes)
+                for index, item in enumerate(value)]
     if kind == "string":
         if "orInteger" in node and not isinstance(value, (str, bool)) and isinstance(value, (int, float)):
-            return _validate({"type": "integer", "minimum": node["orInteger"]}, value, where)
+            return _validate({"type": "integer", "minimum": node["orInteger"]}, value, where,
+                             notes)
         if not isinstance(value, str):
             if "orInteger" in node:
                 raise CallError(f"{label} must be a whole number or a string", where)
             raise CallError(f"{label} must be a string", where)
+        aliases = node.get("valueAliases")
+        if aliases and value not in node.get("enum", ()):
+            read = {alias.lower(): meant for alias, meant in aliases.items()}.get(value.lower())
+            if read is not None:
+                notes.append(f"{label} {value!r} read as {read!r}")
+                value = read
         if "enum" in node and value not in node["enum"]:
-            raise CallError(f"{label} is {value!r}; not one of the allowed values", where,
-                            list(node["enum"]))
+            raise CallError(f"{label} is {value!r}; not one of the allowed values"
+                            + _did_you_mean(value, node["enum"]), where, list(node["enum"]))
         if "minLength" in node and len(value) < node["minLength"]:
             raise CallError(f"{label} must be at least {node['minLength']} characters", where)
         if "maxLength" in node and len(value) > node["maxLength"]:
