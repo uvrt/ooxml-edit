@@ -2,6 +2,21 @@
 
 Versions are those in `pyproject.toml`; none is published to PyPI yet.
 
+## 0.30.0 -- unreleased
+- `describe` lists the session's datasets (round 5, T11), at no cost in tool definitions:
+  a reviewer could not see where a figure placed from `d:<id>` came from.
+  - Every kind's `describe` result gets `datasets` (and `more_datasets` past the latest
+    20): each one's id, columns (at most 20, then `more_columns`), `types` (the labels it
+    has, by column), `rows` (a count), `from` and, when true, `stale` and `closed`. Never a
+    value. Whichever document is described, all of the session's are listed, those an
+    earlier op of a batch defined too; a session without datasets describes as before.
+  - `from`: `d3/t:sales` (the document and the address it was derived from), `d:base`
+    (derived from a dataset), `d3` (no address given) or `application` (kept by the
+    application with `session.keep_datasets`).
+  - `Call.define_dataset(..., origin=None)`: the address in the source it was derived
+    from; `DatasetEntry.origin`, `DatasetEntry.brief()`, `datasets.briefs()`,
+    `Session.dataset_entries()`.
+
 ## 0.29.0 -- unreleased
 - Dates placed in the locale wherever they come from (round 5, T18b), at no cost in tool
   definitions.

@@ -163,6 +163,18 @@ application may forget one with `session.drop_dataset(address)` (no tool does). 
 stay in the session and are never sent to worker processes; a handler that needs one there
 passes the `Dataset`, which pickles when its `detail` does.
 
+`describe` lists the session's datasets, whichever document it describes (datasets are the
+session's, and a figure in a deck placed from one is then seen to have a source; there is
+no separate session-level describe). Every kind's result gets `datasets` -- each one's id,
+columns (the first 20, the rest counted in `more_columns`), the type labels it has
+(`types`, by column), its row count and `from`, and `stale` or `closed` when true -- and
+`more_datasets` past the latest 20; never a value. `from` is the document address it was
+derived from (`d3/t:sales`: `define_dataset(..., origin="t:sales")`), the dataset it was
+derived from (`d:by_region`), the document alone when the producer gave no address (`d3`),
+or `application` for one the application kept itself (`session.keep_datasets`). A batch's
+`describe` lists those its earlier ops defined. No key when there are none, so a session
+without datasets describes as before.
+
 **Sources: charts from rows.** A tool that places values may take them from a *source*
 instead of literal arrays (`Tool.sources`, paths as for `Tool.refs`): a dataset, or an
 address in another open document that the document's format turns into rows -- a table
