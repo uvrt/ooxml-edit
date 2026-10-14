@@ -43,8 +43,8 @@ Use find_text when you know the words but not the address.
 
 Fewer, larger calls
 - Tools that take items[] change many objects in one call. batch runs calls to several \
-tools in one call: in order, all or nothing, one undo step. Prefer these to a call per \
-object.
+tools in one call: in order, one undo step; a failing op is skipped and named, the rest \
+apply. Prefer these to a call per object.
 
 Results
 - Every result is JSON: ok, summary, what changed, was created or removed, warnings, and \

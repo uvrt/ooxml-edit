@@ -335,16 +335,21 @@ def test_a_dataset_derived_before_a_later_op_changed_its_source_is_stale_from_th
     assert before.stale and after.stale       # the state it came from never had a version
 
 
-def test_a_failed_batch_defines_nothing(toolbox, session):
-    result = call(toolbox, session, "batch", ops=[
-        {"tool": "ds_derive", "arguments": {"doc": "d1", "id": "titles"}},
-        {"tool": "ds_insert", "arguments": {"doc": "d2",
-                                            "items": [{"from": "d:nope", "column": "title"}]}},
-    ])
+def test_a_failed_atomic_batch_defines_nothing(toolbox, session):
+    ops = [{"tool": "ds_derive", "arguments": {"doc": "d1", "id": "titles"}},
+           {"tool": "ds_insert", "arguments": {"doc": "d2",
+                                               "items": [{"from": "d:nope", "column": "title"}]}}]
+    result = call(toolbox, session, "batch", ops=ops, atomic=True)
     assert result.error.code == "not_found"
     assert result.error.field == "ops[1].arguments.items[0].from"
     assert result.error.valid_options == ["d:titles"]
     assert not session.datasets
+    # By default the op that applied keeps its dataset; the failing one names what exists.
+    result = call(toolbox, session, "batch", ops=ops)
+    assert result.ok and result.data["failed"] == [1]
+    assert result.data["ops"][1]["error"]["field"] == "arguments.items[0].from"
+    assert result.data["ops"][1]["error"]["valid_options"] == ["d:titles"]
+    assert [entry.address for entry in session.datasets.values()] == ["d:titles"]
 
 
 # -- limits --------------------------------------------------------------------------------------
