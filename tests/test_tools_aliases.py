@@ -8,7 +8,7 @@ import datetime as dt
 import pytest
 
 from ooxml_edit.tools import (Result, SubsetError, Toolbox, array, check_subset, integer,
-                              shared, string, tool, validate_call)
+                              names_as, shared, string, tool, validate_call)
 from ooxml_edit.tools.dispatch import ref_rule
 from ooxml_edit.tools.registry import build_schema
 from ooxml_edit.tools.schema import CallError, canonical, close_match
@@ -42,8 +42,7 @@ def t_set(call, doc, item, text, color=None):
       {"doc": string("Document id."), "columns": integer("How many.", minimum=1, optional=True),
        "from_columns": array(string(), "Columns by name.", optional=True)},
       kind="docx",
-      aliases={"columns": lambda a: "from_columns" if isinstance(a.get("columns"), list)
-               and "from_columns" not in a else None})
+      aliases={"columns": names_as("columns", "from_columns")})
 def t_count(call, doc, columns=None, from_columns=None):
     return Result(summary="counted", data={"columns": columns, "from_columns": from_columns})
 
@@ -185,6 +184,12 @@ def test_a_parameter_whose_value_can_only_mean_another(toolbox, session):
     result = toolbox.dispatch(session, "t_count", {"doc": "d1", "columns": 3})
     assert result.ok and result.data == {"columns": 3, "from_columns": None}
     assert result.warnings == []
+    # Numbers written as strings, or names given with from_columns, are not read as it.
+    result = toolbox.dispatch(session, "t_count", {"doc": "d1", "columns": ["3"]})
+    assert result.error.field == "columns" and not result.warnings
+    result = toolbox.dispatch(session, "t_count", {"doc": "d1", "columns": ["a"],
+                                                   "from_columns": ["a"]})
+    assert result.error.field == "columns"
 
 
 def test_alias_definitions_are_checked():

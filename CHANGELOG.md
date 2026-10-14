@@ -15,7 +15,8 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet.
     renames before validating, with a warning (`from_columns read as columns`), in a
     batch's ops too (`ops[1]: ...`). An alias and its name given together are refused. A
     function may take one of the tool's own names whose value can only mean another (a
-    list of column names given as a count). `edit_chart` reads `slide` as `target` when
+    list of column names given as a count): `registry.names_as(alias, name)` makes one for
+    a parameter that takes no names. `edit_chart` reads `slide` as `target` when
     adding, and `from_columns` as `columns`.
   - "Did you mean": an enum value or an unknown argument name close to an allowed one
     (the same ignoring case and `-`/`_`/spaces, else `difflib`'s nearest) adds "; did you

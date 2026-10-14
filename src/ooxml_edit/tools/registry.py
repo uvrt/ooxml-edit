@@ -348,6 +348,31 @@ def tool(name: str, description: str, params: Mapping[str, Param] | None = None,
     return make
 
 
+def names_as(alias: str, name: str) -> Callable[[Mapping[str, Any]], str | None]:
+    """A :attr:`Tool.aliases` function for a parameter ``alias`` of the tool's own that
+    takes no names (a count, numbers): given a list of names -- strings that are not
+    numbers -- it can only mean ``name`` (``columns: ["region", "total"]`` for
+    ``from_columns``), unless ``name`` is given too."""
+
+    def meant(arguments: Mapping[str, Any]) -> str | None:
+        value = arguments.get(alias)
+        if arguments.get(name) is not None or not isinstance(value, list) or not value:
+            return None
+        if all(isinstance(item, str) and not _is_number(item) for item in value):
+            return name
+        return None
+
+    return meant
+
+
+def _is_number(text: str) -> bool:
+    try:
+        float(text)
+    except ValueError:
+        return False
+    return True
+
+
 @dataclass(frozen=True)
 class ToolGroup:
     """A named group of tools: loaded together, and an OpenAI namespace."""
