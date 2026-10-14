@@ -310,7 +310,7 @@ def test_a_blank_category_is_refused(toolbox):
     ({"from": "t:sales", "columns": ["region", "units"], "data": [{"name": "x", "values": [1]}]},
      "data"),
     ({"from": "t:sales", "columns": ["region", "units"], "categories": ["a"]}, "categories"),
-    ({"from": "t:sales"}, "columns"),
+    ({"from": "t:sales"}, "from"),               # the note column is text
     ({"from": "t:sales", "columns": ["region"]}, "columns"),
     ({"from": "t:sales", "columns": ["region", "units", "units"]}, "columns"),
     ({"from": "t:sales", "columns": ["region", "price"]}, "columns[1]"),
@@ -321,6 +321,25 @@ def test_from_and_columns_are_checked(toolbox, session, arguments, field):
     result = add(toolbox, session, **arguments)
     assert not result.ok and result.error.field == field, result.to_json()
     assert not SEEN
+
+
+def test_add_without_columns_takes_every_column_the_first_as_categories(toolbox):
+    session = toolbox.session(clock=CLOCK)
+    session.open(synthetic.outer_package(), "deck.pptx")
+    session.adopt(Grid({"t": (("k", "v", "w"), [("a", 1, 4), ("b", 2, 5)])}), "xlsx", "b.xlsx")
+    result = ok(add(toolbox, session, **{"from": "t:t"}))
+    assert SEEN[-1] == ("add", {"chart_type": "column", "categories": ["a", "b"],
+                                "data": [{"name": "v", "values": [1, 2]},
+                                         {"name": "w", "values": [4, 5]}]})
+    placed = result.data["from"]
+    assert placed["categories"]["column"] == "k"
+    assert [s["column"] for s in placed["series"]] == ["v", "w"]
+
+
+def test_a_text_column_without_columns_is_refused_suggesting_columns(toolbox, session):
+    error = failed(add(toolbox, session, **{"from": "t:sales"}), "invalid_arguments")
+    assert "G!C2" in error.message and "columns" in error.message
+    assert error.field == "from" and not SEEN
 
 
 def test_from_is_for_three_actions(toolbox, session):
@@ -398,6 +417,27 @@ def test_set_values_takes_two_columns(toolbox, session):
     failed(call(toolbox, session, "edit_chart", doc="d1", target="c1", action="set_values",
                 series="units", **{"from": "t:sales", "columns": ["region", "units", "year"]}),
            "invalid_arguments")
+
+
+def test_set_values_and_add_series_default_to_a_two_column_source(toolbox, session):
+    _chart(toolbox, session, ["b", "a"])
+    session.adopt(Grid({"t": (("k", "v"), [("a", 1), ("b", 2)])}), "xlsx", "c.xlsx")   # d3
+    result = ok(call(toolbox, session, "edit_chart", doc="d1", target="c1", action="set_values",
+                     series="units", **{"from": "d3/t:t"}))
+    assert SEEN[-1] == ("set_values", {"series": "units", "values": [2, 1]})
+    assert result.data["from"]["categories"]["column"] == "k"
+    ok(call(toolbox, session, "edit_chart", doc="d1", target="c1", action="add_series",
+            **{"from": "d3/t:t"}))
+    assert SEEN[-1] == ("add_series", {"text": "v", "values": [2, 1]})
+
+
+def test_set_values_without_columns_needs_a_two_column_source(toolbox, session):
+    _chart(toolbox, session, ["North", "South", "East"])
+    error = failed(call(toolbox, session, "edit_chart", doc="d1", target="c1",
+                        action="set_values", series="units", **{"from": "t:sales"}),
+                   "invalid_arguments")
+    assert error.field == "columns" and "4 columns" in error.message
+    assert SEEN[-1][0] == "add"
 
 
 # -- the session: stale datasets, batches, limits, parallel calls --------------------------------
