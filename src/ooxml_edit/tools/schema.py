@@ -384,14 +384,45 @@ def validate_call(schema: Mapping[str, Any], arguments: Any,
 
 
 def close_match(value: str, options: Iterable[str]) -> str | None:
-    """The option ``value`` most likely meant: the same ignoring case and ``-``/``_``/space,
-    else the nearest by :func:`difflib.get_close_matches`; ``None`` when none is close."""
+    """The option ``value`` most likely meant, ``None`` when none is close.  Ranked:
+
+    1. the same ignoring case and ``-``/``_``/spaces (``Normal``: ``normal``);
+    2. a prefix either way (``rectangle``: ``rect``; ``round``: ``roundRect``) -- the
+       longest shared prefix, then the nearest by :class:`difflib.SequenceMatcher`;
+    3. an abbreviation: the option's letters in order inside the value, or the value's in
+       the option, from the same first letter (``rndrect``: ``roundRect``) -- the nearest;
+    4. :func:`difflib.get_close_matches`' nearest at 0.6 (``nomral``: ``normal``).
+
+    Prefixes and abbreviations need three letters, so a short value matches nothing
+    by chance."""
     options = [option for option in options if isinstance(option, str)]
     folded = {_fold(option): option for option in options}
-    if _fold(value) in folded:
-        return folded[_fold(value)]
-    found = difflib.get_close_matches(_fold(value), list(folded), 1, 0.6)
+    given = _fold(value)
+    if given in folded:
+        return folded[given]
+    if not given:
+        return None
+
+    def ratio(key: str) -> float:
+        return difflib.SequenceMatcher(None, given, key).ratio()
+
+    prefixed = [key for key in folded if min(len(key), len(given)) >= 3
+                and (given.startswith(key) or key.startswith(given))]
+    if prefixed:
+        return folded[max(prefixed, key=lambda key: (min(len(key), len(given)), ratio(key)))]
+    abbreviated = [key for key in folded if min(len(key), len(given)) >= 3
+                   and key[0] == given[0]
+                   and (_in_order(key, given) or _in_order(given, key))]
+    if abbreviated:
+        return folded[max(abbreviated, key=ratio)]
+    found = difflib.get_close_matches(given, list(folded), 1, 0.6)
     return folded[found[0]] if found else None
+
+
+def _in_order(short: str, long: str) -> bool:
+    """Whether ``short``'s letters appear in ``long`` in order."""
+    letters = iter(long)
+    return all(letter in letters for letter in short)
 
 
 def _fold(text: str) -> str:

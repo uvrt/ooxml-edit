@@ -19,8 +19,11 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet.
     a parameter that takes no names. `edit_chart` reads `slide` as `target` when
     adding, and `from_columns` as `columns`.
   - "Did you mean": an enum value or an unknown argument name close to an allowed one
-    (the same ignoring case and `-`/`_`/spaces, else `difflib`'s nearest) adds "; did you
-    mean 'x'?" to the message; `valid_options` is unchanged. `schema.close_match`.
+    adds "; did you mean 'x'?" to the message; `valid_options` is unchanged.
+    `schema.close_match` ranks: the same ignoring case and `-`/`_`/spaces; a prefix either
+    way, the longest shared one first (`rectangle`: `rect`, not difflib's `triangle`); an
+    abbreviation, the option's letters in order (`rndrect`: `roundRect`); then
+    `difflib`'s nearest at 0.6 (`nomral`: `normal`).
   - `key` on a changing tool that takes none says why: keys are for the tools that
     create something; this one is safe to repeat as it is.
   - A ref name that is not one says the rule in words -- a lowercase letter, then up to

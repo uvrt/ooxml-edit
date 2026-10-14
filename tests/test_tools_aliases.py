@@ -132,6 +132,25 @@ def test_an_unknown_argument_says_did_you_mean(toolbox, session):
     assert result.error.message == "unknown argument 'colour'; did you mean 'color'?"
 
 
+PRESETS = ["textbox", "rect", "roundRect", "round1Rect", "ellipse", "triangle", "other"]
+
+
+@pytest.mark.parametrize("given, meant", [
+    ("rectangle", "rect"),            # a prefix beats difflib's 'triangle'
+    ("round", "roundRect"),           # the longest shared prefix, then the nearest
+    ("roundRectangle", "roundRect"),
+    ("rndrect", "roundRect"),         # an abbreviation
+    ("Round-Rect", "roundRect"),      # case and separators
+    ("trinagle", "triangle"),         # difflib
+    ("x", None), ("zzz", None)])
+def test_close_match_ranks_prefixes_and_abbreviations_before_difflib(given, meant):
+    assert close_match(given, PRESETS) == meant
+
+
+def test_close_match_still_finds_a_typo():
+    assert close_match("nomral", ["none", "normal", "shape"]) == "normal"
+
+
 def test_close_match():
     assert close_match("Accent-1", ["accent_1", "b"]) == "accent_1"
     assert close_match("insde_end", ["inside_end", "inside_base"]) == "inside_end"
