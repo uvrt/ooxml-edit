@@ -2,6 +2,37 @@
 
 Versions are those in `pyproject.toml`; none is published to PyPI yet.
 
+## 0.26.0 -- unreleased
+- `batch` applies its ops one by one by default (round 5, T1; TOOLS-ROADMAP D14, amended):
+  an op that fails -- an unknown tool, arguments its schema refuses, an address, ref or
+  document that names nothing, an error while it runs -- is rolled back alone and reported
+  with its error, and the ops after it still run. What applied is one undo step and one
+  version, and the checks run once on the result, as before. Schema-invalid ops no longer
+  block the rest.
+  - The result: `data` is `{"applied": n, "failed": [indexes], "ops": [...]}`, an outcome
+    per op in order -- `op`, `tool`, and `summary`, `created`, `data`, or `error` (`code`,
+    `message`; `field` as the op's own path, `tool` or `arguments.<path>`;
+    `valid_options` and `details` when there are any). The summary names the failed ops
+    to fix and resend. `ok` is true when at least one op applied; when none did, the
+    result is an error with the first failure's code, field (`ops[i].<path>`) and valid
+    options, and every outcome in `details` -- nothing changed, no version.
+  - A `$ref` that a failed op would have made (any `ref` in its arguments) fails naming
+    that op: "$chart1 was to be made by ops[3], which failed: fix that op and resend
+    both", `details.op`.
+  - `atomic: true` keeps the all-or-none batch exactly as it was: every op validated
+    before any runs, the first failure rolls everything back.
+  - An op naming a document that is not open fails alone (it no longer refuses the whole
+    batch before it starts); an op past the batch deadline is reported "not run".
+  - The rollback of one op: `History.savepoint()` (inside a batch, roll back to here if
+    the code inside raises, the batch staying open; outside one, a batch) and
+    `DocumentEntry.savepoint()` (the document's `savepoint()`, else its history's), after
+    which the format's `DocumentFormat.restored` hook is called, so it drops its caches.
+  - Definitions: `batch` gains the optional `atomic` and a reworded description, +22
+    estimated tokens on the loaded core and on every definition (pptx-agent core 3,504 ->
+    3,526, all 12,096 -> 12,119; docx-agent core 2,535 -> 2,558, all 12,131 -> 12,153).
+    The strict set is unchanged: `batch` is never strict. The system prompt's batch line
+    says the same.
+
 ## 0.25.0 -- unreleased
 - Source addresses in the saved file: where values placed from a source came from is now
   kept in the document, not only reported in the result's `from`.

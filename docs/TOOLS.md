@@ -43,11 +43,24 @@ model) passes `allow_new_problems=True`.
 
 **Refs and batches.** A creating call may name what it makes (`"ref": "step1"`); a later
 call writes `$step1` wherever its tool takes a target, and the dispatcher puts the address
-in. The `batch` tool runs many calls in one round trip -- in order, all or none, one undo
-step per document, the facts (`checks`) computed once at the end -- and names the failing op
-and its valid options when one fails. Its ops' arguments are free-form objects, so `batch`
-is the one tool never sent strict: each op is validated by the dispatcher against its own
-tool's schema instead of by constrained decoding.
+in. The `batch` tool runs many calls in one round trip -- in order, one undo step per
+document, the facts (`checks`) computed once at the end. Each op applies on its own: one
+that fails (an unknown tool, arguments its schema refuses, an address or document that
+names nothing, an error while it runs) is rolled back alone and reported, and the ops after
+it still run. What applied is one undo step and one version. The result's `data` is
+`{"applied": n, "failed": [indexes], "ops": [...]}`, an outcome per op in order -- `op`,
+`tool`, and its `summary`, `created` and `data`, or its `error` (`code`, `message`, and
+`field` -- `tool` or `arguments.<path>` -- `valid_options` and `details` when it has them);
+the summary names the failed ops to fix and resend. A `$ref` a failed op would have made
+fails naming that op (`details.op`). Only when no op applied is the result an error, whose
+`details` hold the same outcomes (`field` and `valid_options` are the first failure's).
+`atomic: true` makes it all or none instead: every op is validated before any runs, and the
+first failing op rolls the batch back and is named, with its valid options. The rollback of
+one op is `DocumentEntry.savepoint()` -- the document's `savepoint()`, else its history's
+(`History.savepoint`) -- after which the format's `restored` hook is called; a document
+with neither keeps what a failing op did. Its ops' arguments are free-form objects, so
+`batch` is the one tool never sent strict: each op is validated by the dispatcher against
+its own tool's schema instead of by constrained decoding.
 
 **Datasets.** A call that derives figures from a document -- counts, sums, groups -- may
 keep them for the session as a `Dataset`: columns, rows, and beside every value its
