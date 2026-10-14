@@ -29,6 +29,44 @@ SCHEME_COLORS = frozenset({
     "bg1", "tx1", "bg2", "tx2", "accent1", "accent2", "accent3", "accent4", "accent5",
     "accent6", "hlink", "folHlink", "dk1", "lt1", "dk2", "lt2",
 })
+#: Office's own names for the theme colours, read as the scheme names above: PowerPoint's
+#: ("Text 1", "Background 2") and Word's (the ``ST_ThemeColor`` names: ``text1``,
+#: ``dark1``, ``followedHyperlink``...), each naming the same slot -- ``text1`` through the
+#: colour map, as ``tx1`` does, ``dark1`` directly, as ``dk1`` does.  Keys are folded:
+#: lowercase, no spaces.
+THEME_COLOR_ALIASES = {
+    "text1": "tx1", "text2": "tx2", "background1": "bg1", "background2": "bg2",
+    "dark1": "dk1", "light1": "lt1", "dark2": "dk2", "light2": "lt2",
+    "hyperlink": "hlink", "followedhyperlink": "folHlink",
+}
+
+
+def scheme_color(name: str, names: frozenset[str] | set[str] = SCHEME_COLORS) -> str | None:
+    """The scheme name ``name`` means, ignoring case and spaces (``"Text 1"`` -> ``tx1``,
+    ``"Accent1"`` -> ``accent1``), if it is one of ``names`` or an Office name for one
+    (:data:`THEME_COLOR_ALIASES`); else ``None``."""
+    if not isinstance(name, str):
+        return None
+    if name in names:
+        return name
+    folded = "".join(name.split()).lower()
+    folded_names = {key.lower(): key for key in names}
+    if folded in folded_names:
+        return folded_names[folded]
+    meant = THEME_COLOR_ALIASES.get(folded)
+    return meant if meant in names else None
+
+
+def split_color(spec: str, names: frozenset[str] | set[str] = SCHEME_COLORS
+                ) -> tuple[str, list[str]]:
+    """A colour specification's base and its modifiers; a theme colour written with a
+    space before its number (``"Accent 1 lumMod=75%"``, ``"Text 2"``) is one base."""
+    base, *modifiers = spec.split()
+    if modifiers and modifiers[0].isdigit() and scheme_color(base + modifiers[0], names):
+        return base + modifiers[0], modifiers[1:]
+    return base, modifiers
+
+
 #: Colour modifiers with a value, as a colour specification may give them.
 _VALUED = frozenset({
     "tint", "shade", "alpha", "alphaOff", "alphaMod", "hue", "hueOff", "hueMod", "sat",
@@ -134,14 +172,16 @@ def color_element(spec: str) -> Element:
     if not isinstance(spec, str) or not spec.strip():
         raise FormatError(f"{spec!r} is not a colour; give a theme colour such as accent1 or "
                           f"tx2 (with modifiers like lumMod=75%), or a hex colour such as 1F4E79")
-    base, *modifiers = spec.split()
-    if base in SCHEME_COLORS:
-        element = make("a:schemeClr", val=base)
+    base, modifiers = split_color(spec)
+    scheme = scheme_color(base)
+    if scheme is not None:
+        element = make("a:schemeClr", val=scheme)
     else:
         match = _HEX.fullmatch(base)
         if match is None:
             raise FormatError(f"{base!r} is neither a hex colour nor a theme colour "
-                              f"({', '.join(sorted(SCHEME_COLORS))})")
+                              f"({', '.join(sorted(SCHEME_COLORS))}; Office's names such "
+                              "as text1 or background2 are read as these)")
         element = make("a:srgbClr", val=match.group(1).upper())
     for modifier in modifiers:
         name, separator, raw = modifier.partition("=")
