@@ -179,8 +179,7 @@ class Call:
     def define_ref(self, name: str, address: str, *, doc: str | None = None) -> None:
         """Name ``address`` ``name``, so later calls on the document may write ``$name``."""
         if not REF.match(name):
-            raise ToolError("invalid_arguments", f"ref {name!r} must match {REF.pattern}",
-                            field="ref")
+            raise ToolError("invalid_arguments", ref_rule(name), field="ref")
         doc = doc or (self.entry.doc_id if self.entry else None)
         if doc is None:
             raise ToolError("invalid_arguments", "a ref needs a document")
@@ -647,9 +646,10 @@ class Toolbox:
         primary: DocumentEntry | None = None
         entries: dict[str, DocumentEntry] = {}
         clean: Any = arguments
+        notes: list[str] = []       # aliases read: warnings first
         try:
             tool = self.tool(name)
-            clean = self._arguments(tool, arguments)
+            clean = self._arguments(tool, arguments, notes)
             if tool.composite:
                 doc_ids = self._batch_documents(clean)
                 if not clean.get("atomic"):
@@ -670,6 +670,7 @@ class Toolbox:
             result = Result.failure(error)
         except Exception as exc:  # noqa: BLE001 -- the model gets an error result
             result = Result.failure(self.map_exception(exc))
+        result.warnings[:0] = notes
         if primary is not None:
             result.doc = primary.doc_id
             if result.version is None:      # a snapshot's (Call.unlocked), else the latest
@@ -719,7 +720,11 @@ class Toolbox:
         except Exception:  # noqa: BLE001 -- the call will fail on its own, in order
             return frozenset()
 
-    def _arguments(self, tool: Tool, arguments: Any) -> dict[str, Any]:
+    def _arguments(self, tool: Tool, arguments: Any,
+                   notes: list[str] | None = None) -> dict[str, Any]:
+        """The call's arguments, parsed, aliases read (``notes`` gets a line for each) and
+        validated: ``invalid_arguments`` otherwise."""
+        notes = notes if notes is not None else []
         if isinstance(arguments, (str, bytes)):
             try:
                 arguments = json.loads(arguments or "{}")
@@ -727,11 +732,17 @@ class Toolbox:
                 raise ToolError("invalid_arguments", f"the arguments are not JSON: {exc}") from None
         if arguments is None:
             arguments = {}
+        arguments = _aliased(tool, arguments, notes)
         arguments = _json_strings(tool.schema, arguments)
         try:
-            clean = validate_call(tool.schema, arguments)
+            clean = validate_call(tool.schema, arguments, notes)
         except CallError as exc:
-            raise ToolError("invalid_arguments", exc.message, field=exc.field,
+            message = exc.message
+            if exc.field == "key" and tool.mutates:
+                message = (f"{tool.name} takes no key: a retry key is for the tools that "
+                           "create something, so a repeat makes nothing twice; this one is "
+                           "safe to repeat as it is -- resend without key")
+            raise ToolError("invalid_arguments", message, field=exc.field,
                             valid_options=exc.valid_options) from None
         for group in tool.exactly_one:
             given = [name for name in group if name in clean]
@@ -819,6 +830,11 @@ class Toolbox:
         def resolve(value: Any, where: str) -> Any:
             match = _REF_USE.match(value) if isinstance(value, str) else None
             if match is None:
+                meant = _misspelt_ref(value, known)
+                if meant is not None:
+                    raise ToolError("not_found", f"{value!r} is no ref; did you mean "
+                                    f"${meant}? A ref is lowercase", field=where,
+                                    valid_options=[f"${key}" for key in sorted(known)])
                 return value
             name, rest = match.group(1), match.group(2) or ""
             if name not in known:
@@ -956,9 +972,10 @@ class Toolbox:
 
     # -- batch -------------------------------------------------------------------------------
 
-    def _prepare(self, op: Any) -> tuple[Tool, dict[str, Any]]:
-        """One op's tool and its validated arguments.  A :class:`ToolError`'s ``field`` is
-        the op's own: ``tool``, or ``arguments`` and the path in them."""
+    def _prepare(self, op: Any, notes: list[str] | None = None) -> tuple[Tool, dict[str, Any]]:
+        """One op's tool and its validated arguments (the aliases read added to ``notes``).
+        A :class:`ToolError`'s ``field`` is the op's own: ``tool``, or ``arguments`` and the
+        path in them."""
         name = op.get("tool", "") if isinstance(op, Mapping) else ""
         if name not in self.tools:
             raise ToolError("invalid_arguments", f"no tool {name!r}", field="tool",
@@ -969,20 +986,24 @@ class Toolbox:
             raise ToolError("invalid_arguments", f"{name} cannot run inside a batch; call it "
                             "on its own", field="tool")
         try:
-            clean = self._arguments(tool, op.get("arguments") or {})
+            clean = self._arguments(tool, op.get("arguments") or {}, notes)
         except ToolError as error:
             raise ToolError(error.code, error.message, field="arguments" + (
                 f".{error.field}" if error.field else ""),
                 valid_options=error.valid_options) from None
         return tool, clean
 
-    def _ops(self, arguments: Mapping[str, Any]) -> list[tuple[int, Tool, dict[str, Any]]]:
-        """An atomic batch's ops, each validated against its own tool: before anything runs."""
+    def _ops(self, arguments: Mapping[str, Any],
+             notes: list[str]) -> list[tuple[int, Tool, dict[str, Any]]]:
+        """An atomic batch's ops, each validated against its own tool: before anything runs.
+        The aliases read go to ``notes``, each naming its op."""
         prepared = []
         for index, op in enumerate(arguments.get("ops") or []):
             where = f"ops[{index}]"
             try:
-                tool, clean = self._prepare(op)
+                read: list[str] = []
+                tool, clean = self._prepare(op, read)
+                notes += [f"{where}: {note}" for note in read]
             except ToolError as error:
                 said = where if error.field == "tool" else f"{where} ({op.get('tool', '')})"
                 raise ToolError(error.code, f"{said}: {error.message}",
@@ -1016,7 +1037,8 @@ class Toolbox:
                             field="ops")
         if not arguments.get("atomic"):
             return self._run_partial(session, ops, entries, reading or {})
-        prepared = self._ops(arguments)
+        notes: list[str] = []
+        prepared = self._ops(arguments, notes)
         context = CallContext()
         context.batch = True
         started = time.perf_counter()
@@ -1055,6 +1077,7 @@ class Toolbox:
             checks = {doc: self._checks(session, entries[doc], context)
                       for doc in sorted(entries, key=doc_order)} if changing else {}
             self._keep_datasets(session, context, combined)
+        combined.warnings[:0] = notes
         combined.warnings.extend(caught)
         _set_checks(combined, checks)
         combined.summary = f"Ran {len(done)} op(s) as one step: " + _summaries(done)
@@ -1085,7 +1108,9 @@ class Toolbox:
                         if time.perf_counter() - started > limits.batch_timeout:
                             raise ToolError("timeout", "not run: the batch passed its "
                                             f"{limits.batch_timeout:g} s deadline")
-                        tool, clean = self._prepare(op)
+                        read: list[str] = []
+                        tool, clean = self._prepare(op, read)
+                        combined.warnings += [f"ops[{index}]: {note}" for note in read]
                         outcome = self._run_alone(session, index, tool, clean, entries,
                                                   context, combined, reading)
                     except (ToolError, _OpFailed) as failure:
@@ -1224,6 +1249,50 @@ class Toolbox:
             entry.log.append(record)
         if logger.isEnabledFor(logging.INFO):
             log_call(record)
+
+
+def _aliased(tool: Tool, arguments: Any, notes: list[str]) -> Any:
+    """``arguments`` with every name in ``tool.aliases`` renamed to the tool's own, a note
+    for each (``from_columns read as columns``).  An alias given with the name it stands for is
+    refused: the call says one thing twice."""
+    if not tool.aliases or not isinstance(arguments, Mapping):
+        return arguments
+    renamed = dict(arguments)
+    for alias, name in tool.aliases.items():
+        if renamed.get(alias) is None:
+            continue
+        meant = name(renamed) if callable(name) else name
+        if meant is None or meant == alias:
+            continue
+        if renamed.get(meant) is not None:
+            raise ToolError("invalid_arguments", f"{alias} and {meant} say the same here; "
+                            f"give {meant} only", field=alias, valid_options=[meant])
+        renamed[meant] = renamed.pop(alias)
+        notes.append(f"{alias} read as {meant}")
+    return renamed
+
+
+def ref_rule(name: str) -> str:
+    """Why ``name`` is no ref name, in words, with one that would do."""
+    suggestion = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", name).lower()
+    suggestion = re.sub(r"[^a-z0-9_]+", "_", suggestion).strip("_")
+    if not suggestion or not suggestion[0].isalpha():
+        suggestion = "r_" + suggestion if suggestion else "r1"
+    suggestion = suggestion[:32].rstrip("_")
+    return (f"ref {name!r} is not a ref name: a ref starts with a lowercase letter, then "
+            f"up to 31 lowercase letters, digits or _ (no capitals, spaces or -); "
+            f"e.g. {suggestion!r}")
+
+
+def _misspelt_ref(value: Any, known: Mapping[str, str]) -> str | None:
+    """The known ref a ``$Name`` that is no ref name stands for (``$catChart`` for a ref
+    ``catchart`` or ``cat_chart``); ``None`` for anything else, which stays an address."""
+    if not isinstance(value, str) or not value.startswith("$"):
+        return None
+    head = value[1:].split("/", 1)[0]
+    folded = head.lower().replace("_", "").replace("-", "")
+    found = [name for name in known if name.replace("_", "") == folded]
+    return found[0] if len(found) == 1 else None
 
 
 def _walk(node: Any, parts: list[str], where: str, resolve: Callable[[Any, str], Any]) -> Any:

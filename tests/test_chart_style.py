@@ -588,3 +588,18 @@ def test_a_chart_without_a_workbook_refuses_value_from_cells():
     with pytest.raises(ChartDataError, match="Value From Cells needs"):
         chart.set_point_labels(0, ["x"] * chart.point_count, cells=True)
     assert document.to_bytes() == before
+
+
+@pytest.mark.parametrize("spec, scheme, modifiers", [
+    ("text1", "tx1", []), ("Text 2", "tx2", []), ("background1", "bg1", []),
+    ("BACKGROUND2", "bg2", []), ("Accent 1 lumMod=75%", "accent1", ["lumMod"]),
+    ("dark1", "dk1", []), ("followedHyperlink", "folHlink", []), ("TX1", "tx1", [])])
+def test_office_theme_colour_names_are_read_as_scheme_names(spec, scheme, modifiers):
+    element = color_element(spec)
+    assert element.tag.endswith("}schemeClr") and element.get("val") == scheme
+    assert [child.tag.split("}")[1] for child in element] == modifiers
+
+
+def test_an_unknown_colour_lists_the_scheme_names_and_mentions_offices():
+    with pytest.raises(FormatError, match=r"accent1, .*tx2; Office's names such as text1"):
+        color_element("text3")

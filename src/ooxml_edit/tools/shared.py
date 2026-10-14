@@ -107,7 +107,8 @@ class Spec:
                  refs: tuple[str, ...] = (), datasets: tuple[str, ...] = (),
                  sources: tuple[str, ...] = (),
                  reads: Callable[[Mapping[str, Any]], bool] | None = None,
-                 wrap: Callable[[Callable[..., Any]], Callable[..., Any]] | None = None) -> None:
+                 wrap: Callable[[Callable[..., Any]], Callable[..., Any]] | None = None,
+                 aliases: Mapping[str, Any] | None = None) -> None:
         self.name = name
         self.description = description
         self.params = dict(params)
@@ -123,6 +124,8 @@ class Spec:
         self.datasets = datasets
         self.sources = sources
         self.reads = reads
+        #: Argument names read as the tool's own (:attr:`~.registry.Tool.aliases`).
+        self.aliases = dict(aliases or {})
         #: What every kind's handler runs inside: the shared part of a tool's work (taking
         #: ``edit_chart``'s rows from a source), done once here for every library.
         self.wrap = wrap
@@ -135,7 +138,8 @@ class Spec:
                     group=self.group, mutates=self.mutates, documents=self.documents,
                     exactly_one=self.exactly_one, route=self.route, strict=self.strict,
                     batchable=self.batchable, composite=self.composite, refs=self.refs,
-                    datasets=self.datasets, sources=self.sources, reads=self.reads)
+                    datasets=self.datasets, sources=self.sources, reads=self.reads,
+                    aliases=self.aliases)
 
     @property
     def schema(self) -> dict[str, Any]:
@@ -144,6 +148,12 @@ class Spec:
 
 def _no_documents(arguments: Mapping[str, Any]) -> list[str]:
     return []
+
+
+def _slide_on_add(arguments: Mapping[str, Any]) -> str | None:
+    """``edit_chart``'s ``slide``: its ``target`` when adding (a deck's slide); in another
+    action the target is the chart, so ``slide`` stays an unknown argument."""
+    return "target" if arguments.get("action") == "add" else None
 
 
 def _reading_action(arguments: Mapping[str, Any]) -> bool:
@@ -334,7 +344,8 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
           "columns": array(string(), "from's category column, then series columns; default all.",
                            optional=True)},
          group=MISC, mutates=True, refs=("target",), sources=("from",),
-         reads=_reading_action, wrap=lambda fn: _chart_rows(fn)),
+         reads=_reading_action, wrap=lambda fn: _chart_rows(fn),
+         aliases={"slide": _slide_on_add, "from_columns": "columns"}),
     # S12
     Spec("edit_smartart",
          "Change a SmartArt diagram's node text, or add and remove nodes. Returns the nodes.",

@@ -63,6 +63,20 @@ with neither keeps what a failing op did. Its ops' arguments are free-form objec
 `batch` is the one tool never sent strict: each op is validated by the dispatcher against
 its own tool's schema instead of by constrained decoding.
 
+**Aliases and refusals.** What a model naturally writes for an argument or a value is read
+as the tool's own before validation, never sent, so it costs no tokens: a string's
+`aliases` (`string(enum=[...], aliases={"shrink": "normal"})`, the validation schema's
+`valueAliases`, matched ignoring case) and a tool's `aliases` for argument names
+(`{"from_columns": "columns"}`, or a function of the arguments where the alias means the
+name only in some calls). Each one read adds a line to the result's `warnings`
+(`frame.autofit 'shrink' read as 'normal'`, `slide read as target`; in a batch,
+`ops[i]: ...`); an alias given together with its name is refused. Only where the meaning is
+the same. A refusal says what would do: an enum value or an argument name close to an
+allowed one adds "did you mean ...?" (`valid_options` still lists them all), a `key` on a
+changing tool without one says that keys are for creating tools and this one is safe to
+repeat, and a ref name that is not one says the rule in words with a name that would do
+(`catChart`: `'cat_chart'`); `$Name` for a known ref, capitalised, says which it means.
+
 **Datasets.** A call that derives figures from a document -- counts, sums, groups -- may
 keep them for the session as a `Dataset`: columns, rows, and beside every value its
 sources, opaque strings (cell addresses, say) that the tool layer stores and hands on but

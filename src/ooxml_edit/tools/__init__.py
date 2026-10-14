@@ -58,7 +58,7 @@ from .limits import LimitError, Limits
 from .logs import CallRecord
 from .prompts import SYSTEM, system_prompt
 from .registry import (CORE, Param, Tool, ToolGroup, array, boolean, build_schema,
-                       free_object, integer,
+                       free_object, integer, names_as,
                        number, obj, string, tool)
 from .results import (ERROR_CODES, Image, Result, ToolError, anthropic_image_tokens,
                       openai_image_tokens, page_list, page_text, truncate)
@@ -77,7 +77,7 @@ __all__ = [
     "WorkerPool",
     "anthropic_image_tokens", "array", "boolean", "build_schema", "canonical", "check_subset",
     "collect_warnings", "dataset_id", "doc_order", "free_object", "integer", "locale_of",
-    "number", "obj", "openai_image_tokens",
+    "names_as", "number", "obj", "openai_image_tokens",
     "page_list", "page_text", "shared", "strict_problems", "string", "system_prompt", "tool", "truncate", "validate_call",
     "worker_task",
 ]
