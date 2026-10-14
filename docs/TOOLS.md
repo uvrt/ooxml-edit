@@ -169,8 +169,81 @@ placed value came from, the column, the rows placed (from 1, in the order placed
                      "sources": ["Sales!C2:C4", "Sales!C6:C9"]}]}
 ```
 
-The sources are reported, not written into the saved chart: where a document could keep
-them so that a save in Office leaves them there is still to be measured.
+The sources are also kept in the saved document: see the next paragraphs.
+
+**Source addresses in the saved file.** What a result's `from` says is also written into the
+document, so it can be read back after a save, in another session, or after the file has
+been through PowerPoint or Word. What is kept is a *record* (`ooxml_edit.provenance`): the
+result's `from` without what only the session means -- the source document's handle (`d2`)
+-- with the source written without it (`t:sales`, not `d2/t:sales`; a dataset as `d:<id>`)
+and the source document's name added. It is compact JSON, versioned with `"v": 1`; a key
+whose value is `null` is left out:
+
+```json
+{"v":1,"source":"t:sales","document":"made-up-budget.xlsx","version":4,
+ "categories":{"column":"region","rows":"1-3","sources":["Sales!A2:A4"]},
+ "series":[{"name":"total","column":"total","rows":"1-3","sources":["Sales!C2:C4"]}]}
+```
+
+A table tool's record has its result's `from` the same way: `first_row`, `header_row` and
+`columns` (`col`, `column`, `rows`, `sources`). `provenance.record(placed, document=name)`
+builds one, `provenance.dumps(record)` writes it, and `provenance.loads(text)` reads it,
+refusing what is not a record (`RecordError`: not a JSON object, or no whole-number `v` of
+1 or more); a record of a later version is returned as it is.
+
+Where it is kept:
+
+- **In the chart part**, by this package, for every chart placed with `edit_chart` and
+  `from`: an own extension at the end of the chart space's extension list,
+  `c:chartSpace/c:extLst/c:ext uri="urn:uvrt:ooxml-edit:provenance:v1"`, holding
+  `<uvp:record json="..."/>` in the namespace `urn:uvrt:ooxml-edit:provenance:v1`. It goes
+  wherever the chart goes. PowerPoint and Word for Mac both kept an own `c:ext` there
+  through open, edit and save (measured 2026-10-14; they re-serialise the part around it).
+  Office's own extensions keep their order; a record already there is replaced where it
+  stands, so `set_values` and `add_series` from a source replace the chart's record with
+  their own. An edit without `from` leaves the record as it is.
+- **By the format**, for a table or a chart: `DocumentFormat.store_provenance(document,
+  address, record)`, called inside the call's undo step after the placement succeeded.
+  The shared `edit_chart` calls it with the chart's address -- for `add`, the last of the
+  result's `created`; otherwise the first of its `changed`, else `target`. A format's own
+  table tool calls it through `call.keep_provenance(address, rows, placed)` (`rows` what
+  `call.source` returned, `placed` the result's `from`), which builds the record, hands it
+  to the hook and returns it. Measured (2026-10-14), PowerPoint keeps a shape's tags part
+  (`p:nvPr/p:custDataLst/p:tags r:id`, a `ppt/tags/tagN.xml` part) and Word a customXml item
+  related from the document part, keyed by a table's first-row `w14:paraId` or a chart's
+  `wp:docPr/@id`; alt text, and a PowerPoint `p:custData` item the presentation part does
+  not relate (PowerPoint asks to repair the file), are to be avoided.
+
+Reading it back:
+
+- `edit_chart` with `action: "read"` returns the chart part's record as `from`, when there
+  is one -- no tool and no parameter added, so the definitions cost no more tokens.
+- `ooxml_edit.charts.provenance(chart)` -> the record or `None`;
+  `provenance(package, part)` the same for a chart part; `provenance(package)` (or a
+  document with a `package`) -> `{chart part: record}` for every chart part that has one.
+- `session.provenance(doc)` -> `{address: record}`, from the format's
+  `DocumentFormat.read_provenance(document)`, under the addresses its tools take now; `{}`
+  for a format without the hook.
+
+```python
+def store(document, address, record):          # inside the call's undo step
+    text = provenance.dumps(record)             # the format's own place, e.g. a tag's value
+    ...
+
+def read(document):
+    return {address: provenance.loads(text) for address, text in ...}
+
+FORMAT = DocumentFormat(..., store_provenance=store, read_provenance=read)
+
+# in a table tool, after the cells are written:
+data["from"] = placed                           # as today
+call.keep_provenance(frame.id, rows, placed)
+```
+
+How the shared `edit_chart` finds the chart part without knowing the format: every
+`ooxml_edit.charts.Chart` notes its part, and `add_chart` the part it makes, as a
+`provenance.Holder` while a placement watches (`provenance.watch()`); the wrapper writes
+the record into the one chart the handler used, and reads it from there for `read`.
 
 **Loading tools and the prompt.** Every tool is in one group; the `core` group is always
 loaded, the others on demand. What `definitions()` sends by default:
