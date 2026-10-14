@@ -668,6 +668,11 @@ class Session:
         with self._lock:
             return [entry.address for entry in self.datasets.values()]
 
+    def dataset_entries(self) -> list[DatasetEntry]:
+        """Every dataset, in the order defined."""
+        with self._lock:
+            return list(self.datasets.values())
+
     def keep_datasets(self, entries: Iterable[DatasetEntry]) -> None:
         """Keep datasets a call defined: all, or none and ``limit``.  An id that exists is
         replaced; a new one needs room under ``Limits.max_datasets``."""

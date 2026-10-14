@@ -59,7 +59,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from .results import ToolError
 
@@ -266,20 +266,48 @@ def _strings(cell: Any) -> Sequence[str]:
     return values
 
 
+#: The most columns ``describe`` names per dataset (:meth:`DatasetEntry.brief`), and the
+#: most datasets it lists, the latest defined (:func:`briefs`).
+BRIEF_COLUMNS = 20
+BRIEF_DATASETS = 20
+
+
+def briefs(entries: Iterable["DatasetEntry"],
+           stale: Callable[["DatasetEntry"], bool] | None = None) -> dict[str, Any]:
+    """``describe``'s ``datasets`` (and ``more_datasets``, the earlier ones not listed) of
+    ``entries`` in the order defined: the latest :data:`BRIEF_DATASETS`, each
+    :meth:`DatasetEntry.brief` (``stale(entry)`` its staleness when given).  Empty when
+    there are none."""
+    entries = list(entries)
+    if not entries:
+        return {}
+    data: dict[str, Any] = {"datasets": [
+        e.brief(stale=None if stale is None else stale(e)) for e in entries[-BRIEF_DATASETS:]]}
+    if len(entries) > BRIEF_DATASETS:
+        data["more_datasets"] = len(entries) - BRIEF_DATASETS
+    return data
+
+
 class DatasetEntry:
     """A dataset in a session: the :class:`Dataset`, its id, and where it came from.
 
     ``doc`` is the source document's handle (``None``: no document), ``kind`` and ``name``
     its kind and name, ``version`` its version when the dataset was defined.  :attr:`stale`
     is computed when read (see the module's notes); :attr:`closed` says the source was
-    closed, after which it no longer changes.
+    closed, after which it no longer changes.  ``origin`` is the address in the source it
+    was derived from (``t:sales``), or the dataset it was derived from (``d:by_region``);
+    ``None`` when the producer did not say.  ``defined_at`` is the session clock's time of
+    the call that defined it; ``None`` for one the application kept itself
+    (:meth:`Session.keep_datasets <.session.Session.keep_datasets>`).
     """
 
     def __init__(self, id: str, dataset: Dataset, *, doc: str | None = None,
                  kind: str | None = None, name: str | None = None,
                  version: int | None = None, source: Any = None,
-                 stale: bool = False, defined_at: Any = None) -> None:
+                 stale: bool = False, defined_at: Any = None,
+                 origin: str | None = None) -> None:
         self.id = id
+        self.origin = origin
         self.dataset = dataset
         self.doc = doc
         self.kind = kind
@@ -325,10 +353,43 @@ class DatasetEntry:
         self._stale = True
 
     def derived(self, id: str, dataset: Dataset, *, defined_at: Any = None) -> "DatasetEntry":
-        """A dataset derived from this one: the same source, version and fate."""
+        """A dataset derived from this one: the same source, version and fate; its origin
+        this dataset."""
         return DatasetEntry(id, dataset, doc=self.doc, kind=self.kind, name=self.name,
                             version=self.version, source=self._source, stale=self._stale,
-                            defined_at=defined_at)
+                            defined_at=defined_at, origin=self.address)
+
+    def brief(self, *, stale: bool | None = None) -> dict[str, Any]:
+        """What ``describe`` lists of it: id, columns (the first :data:`BRIEF_COLUMNS`, the
+        rest counted in ``more_columns``), the type labels it has (``types``, by column),
+        row count, and ``from``: ``d3/t:sales`` (a document's address), ``d:by_region``
+        (a dataset), ``d3`` (a document, no address said) or ``application`` (kept by the
+        application, not by a call).  ``stale`` and ``closed`` only when true.  Never its
+        values.  ``stale``: as known to the caller (a dataset a running call defined has no
+        version yet), else :attr:`stale`."""
+        columns = list(self.dataset.columns)
+        data: dict[str, Any] = {"id": self.address, "columns": columns[:BRIEF_COLUMNS]}
+        if len(columns) > BRIEF_COLUMNS:
+            data["more_columns"] = len(columns) - BRIEF_COLUMNS
+        types = {name: label for name, label in zip(data["columns"], self.dataset.types or ())
+                 if label is not None}
+        if types:
+            data["types"] = types
+        data["rows"] = len(self.dataset.rows)
+        origin = self.origin
+        if origin is not None and self.doc is not None and not origin.startswith(
+                DATASET_PREFIX):
+            origin = f"{self.doc}/{origin}"
+        if origin is None:
+            origin = self.doc if self.doc is not None else (
+                "application" if self.defined_at is None else None)
+        if origin is not None:
+            data["from"] = origin
+        if self.stale if stale is None else stale:
+            data["stale"] = True
+        if self.closed:
+            data["closed"] = True
+        return data
 
     def describe(self) -> dict[str, Any]:
         """What a result says about it: never its values."""

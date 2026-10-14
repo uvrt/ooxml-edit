@@ -120,6 +120,16 @@ class CallContext:
         """Forget what a failed op defined and touched: back to :meth:`mark`'s state."""
         self.refs, self.datasets, self.dataset_ops, self.datasets_used, self.touched = mark
 
+    def changed_since(self, entry: DatasetEntry) -> bool:
+        """Whether a later op of the batch changed the source of a dataset it defined."""
+        return entry.doc is not None and \
+            self.changed_at.get(entry.doc, -1) > self.dataset_ops.get(entry.id, self.op)
+
+    def pending_stale(self, entry: DatasetEntry) -> bool:
+        """Whether a dataset this call (or batch) defined is stale so far: before the call
+        ends it has no version to compare (:meth:`changed_since`)."""
+        return entry.stale if entry.version is not None else self.changed_since(entry)
+
     def missing_ref(self, name: str, field: str | None) -> ToolError | None:
         """The error for ``$name`` that a failed op of the batch would have made."""
         failed = self.failed_refs.get(name)
@@ -207,14 +217,18 @@ class Call:
                 field=field, valid_options=[f"${key}" for key in sorted(known)])
         return known[name] + rest
 
-    def define_dataset(self, id: str, dataset: Dataset, *, source: Any = _PRIMARY) -> str:
+    def define_dataset(self, id: str, dataset: Dataset, *, source: Any = _PRIMARY,
+                       origin: str | None = None) -> str:
         """Keep ``dataset`` in the session as ``d:<id>`` once the call succeeds; its address.
 
         ``source`` is what it was derived from: by default the call's document; another
         document's handle; a :class:`~.datasets.DatasetEntry` (a dataset derived from a
         dataset, which inherits its source); or ``None`` (no document: never stale).  The
         source's version is taken when the call ends, so a changing call defines a dataset
-        from the state it leaves.  An existing id is replaced.  ``limit`` when the dataset is
+        from the state it leaves.  ``origin``: the address in the source document it was
+        derived from (``t:sales``), which ``describe`` lists as ``d3/t:sales``; a dataset
+        derived from a dataset has that dataset as its origin unless given.  An existing id
+        is replaced.  ``limit`` when the dataset is
         over ``Limits.max_dataset_cells`` or the session would keep over
         ``Limits.max_datasets``."""
         id = check_dataset_id(id)
@@ -234,6 +248,8 @@ class Call:
         defined_at = self.session.now()
         if isinstance(source, DatasetEntry):
             entry = source.derived(id, dataset, defined_at=defined_at)
+            if origin is not None:
+                entry.origin = origin
         else:
             if source is _PRIMARY:
                 document = self.entry
@@ -244,7 +260,8 @@ class Call:
             entry = DatasetEntry(id, dataset, defined_at=defined_at,
                                  doc=document.doc_id if document else None,
                                  kind=document.kind if document else None,
-                                 name=document.name if document else None, source=document)
+                                 name=document.name if document else None, source=document,
+                                 origin=origin)
         self.context.datasets.pop(id, None)
         self.context.datasets[id] = entry
         self.context.dataset_ops[id] = self.context.op
@@ -943,7 +960,7 @@ class Toolbox:
         defined = list(context.datasets.values())
         for entry in defined:
             if entry.version is None and entry.doc is not None and not entry.closed:
-                if context.changed_at.get(entry.doc, -1) > context.dataset_ops[entry.id]:
+                if context.changed_since(entry):
                     # A later op of the batch changed its source: the state it came from
                     # has no version of its own.
                     entry.mark_stale()

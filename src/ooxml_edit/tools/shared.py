@@ -25,7 +25,9 @@ How a call finds its handler:
 * a tool that names a document (``doc``) runs the handler for that document's kind;
 * ``new_document`` names no document yet: its ``kind`` argument picks the handler;
 * ``describe`` gives the document at a glance, its own way per kind: one schema (``doc``)
-  and one description saying what each kind returns;
+  and one description saying what each kind returns; every kind's result also lists the
+  session's datasets (``datasets``: id, columns, types, rows, from), whichever document is
+  described;
 * ``edit_chart`` also reads (``action: "read"``): that call runs as a reading one
   (``Tool.reads``), with no undo step and no checks;
 * ``open_document``, ``close_document``, ``undo`` and ``read_blob``
@@ -53,6 +55,7 @@ from typing import Any, Callable, Mapping
 
 from .. import provenance
 from . import sources
+from .datasets import briefs
 from .registry import (CORE, Param, Tool, ToolGroup, array, boolean, build_schema,
                        free_object, integer, number, obj, string)
 from .results import Result, ToolError, page_text
@@ -215,7 +218,7 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
          "revisions, fields, tables, drawings, pages. Workbooks: sheets, tables and regions "
          "with key columns, column types and fill, sample rows, flags. All: the problems it "
          "opened with.",
-         {"doc": _DOC}),
+         {"doc": _DOC}, wrap=lambda fn: _with_datasets(fn)),
     # S6
     Spec("find_text",
          "Find text: each match's address, kind and context, in order, across slides, notes, "
@@ -391,6 +394,31 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
 
 #: The ``edit_chart`` actions that take ``from``.
 FROM_ACTIONS = ("add", "set_values", "add_series")
+
+
+def _with_datasets(handler: Callable[..., Any]) -> Callable[..., Any]:
+    """``describe``'s handler for a kind, its result listing the session's datasets.
+
+    Datasets are the session's, not a document's: ``describe`` of any document lists them
+    all (:func:`.datasets.briefs`), those an earlier op of a ``batch`` defined too -- so a
+    figure placed from ``d:<id>`` is seen to have a source.  Each is its id, columns, type
+    labels, row count and where it came from; never its values.  No key without any."""
+
+    @functools.wraps(handler)
+    def run(call: Any, **arguments: Any) -> Any:
+        returned = handler(call, **arguments)
+        data = returned.data if isinstance(returned, Result) else returned
+        if isinstance(data, dict):
+            context = call.context
+            entries = {entry.id: entry for entry in call.session.dataset_entries()}
+            for id, entry in context.datasets.items():
+                entries.pop(id, None)
+                entries[id] = entry
+            data.update(briefs(entries.values(), stale=lambda entry: context.pending_stale(
+                entry) if context.datasets.get(entry.id) is entry else entry.stale))
+        return returned
+
+    return run
 
 
 def _chart_rows(handler: Callable[..., Any]) -> Callable[..., Any]:
