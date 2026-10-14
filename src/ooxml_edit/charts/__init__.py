@@ -20,6 +20,8 @@ whichever Office document embeds them, so the editing lives here once:
 * :mod:`.dmltext` -- DrawingML text rewritten in place, keeping mixed formatting;
 * :mod:`.model` -- a chart's and a diagram's content as JSON-ready data, validated and applied
   back;
+* :mod:`.record` -- where a chart's values came from, kept in the chart part
+  (:func:`provenance` reads it back);
 * :mod:`.host` -- :class:`GraphicHost`, all a document format has to say about where a chart
   or a diagram lives;
 * :mod:`.namespaces` -- the ``a:``, ``c:``, ``dgm:``, ``dsp:`` and ``x:`` vocabulary and the
@@ -36,6 +38,7 @@ from .errors import FormatError
 from .styling import KEEP
 from .create import (CHART_KINDS, POWERPOINT_LOOK, WORD_LOOK, ChartLook, NewChart,
                      add_chart)
+from .record import PROVENANCE_URI, provenance, store_provenance
 from .diagram import Diagram, DiagramDrawingError, DiagramNode, diagram_model
 from .model import (
     ChartModelError,
@@ -52,4 +55,5 @@ __all__ = [
     "DiagramDrawingError", "DiagramNode", "GraphicHost", "Series", "Workbook", "Worksheet",
     "apply_chart_model", "apply_diagram_model", "canonical_chart", "canonical_diagram",
     "chart_model", "chart_part", "diagram_model", "diagram_parts", "workbook_part",
+    "PROVENANCE_URI", "provenance", "store_provenance",
 ]

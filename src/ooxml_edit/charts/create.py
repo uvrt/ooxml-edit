@@ -44,6 +44,7 @@ from lxml import etree
 
 from ..xml import Element, make, qn, serialize
 from . import namespaces as _namespaces  # noqa: F401  (registers c: before qn is used)
+from . import record as _record
 from .chart import ChartDataError
 from .dmltext import replace_body_text
 from .namespaces import A_NS, C_NS
@@ -929,6 +930,7 @@ def add_chart(package, part: str, kind: str, categories: Sequence | None, series
         external.set(f"{{{R_NS}}}id", workbook_rel)
         package.replace_part(chart_name, serialize(space))
     rel_id = package.add_relationship(part, REL_CHART, chart_name)
+    _record.note(package, chart_name)  # for a placement watching (record.py)
     return NewChart(part=chart_name, workbook=book_name, rel_id=rel_id)
 
 
