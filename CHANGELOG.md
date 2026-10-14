@@ -2,6 +2,26 @@
 
 Versions are those in `pyproject.toml`; none is published to PyPI yet.
 
+## 0.29.0 -- unreleased
+- Dates placed in the locale wherever they come from (round 5, T18b), at no cost in tool
+  definitions.
+  - `sources.label(value, locale=None, *, type=None)`: in a `date`, `datetime` or `time`
+    column, ISO 8601 text (`2026-03-01`, `2026-03-01T14:05:00`, `14:05:00.250`) is written
+    as the Python value it names is (`3/1/2026` en-US, `1/3/2026` nl-BE, `3/1/2026 14:05`,
+    `14:05`), so a workbook's date column (`t:`), a derive's dates and a dataset labelled
+    `date` read like a Python date. Text that is not ISO 8601 (an elapsed time,
+    `PT25H30M0S`; no such day) and unlabelled ISO text are written as they are.
+  - `Rows.type(column)` and `Rows.label(row, column, locale)`: a source value's label by
+    its column's type; `edit_chart`'s categories from a source use it, and the format
+    libraries' tables from a source should.
+  - `sources.moment_of(value, locale=None, *, written=False)`: the date or time a value is
+    or names, ISO 8601 text, and with `written` text as `moment_text` writes it in the
+    locale; `MOMENT_TYPES`.
+  - `edit_chart` `set_values` / `add_series` from a date column match a category written
+    ISO (an older file) or in the session's locale to the same row; a text column's
+    categories match as text, as before.
+  - Provenance records hold sources, not values: unchanged.
+
 ## 0.28.0 -- unreleased
 - Dates in datasets (round 5, T18), at no cost in tool definitions.
   - `Dataset.from_records(rows, types=None, columns=None, *, keys=0)`: a dataset made in

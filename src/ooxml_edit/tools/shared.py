@@ -677,11 +677,11 @@ def _numbers(rows: Any, column: int, order: list[int], field: str) -> list[Any]:
 
 def _labels(call: Any, rows: Any, column: int, order: list[int], field: str) -> list[str]:
     """Category labels from a column, in ``order``: text as it is, numbers and dates written
-    in the session's locale (:func:`.sources.label`); a blank is refused, naming its
-    cell."""
+    in the session's locale -- a ``date``, ``datetime`` or ``time`` column's ISO text too
+    (:meth:`.sources.Rows.label`); a blank is refused, naming its cell."""
     out = []
     for row in order:
-        text = sources.label(rows.dataset.rows[row][column], call.locale)
+        text = rows.label(row, column, call.locale)
         if text is None:
             raise ToolError("invalid_arguments", f"{rows.where(row, column)} is blank: "
                             "a category needs a label", field=field)
@@ -689,9 +689,16 @@ def _labels(call: Any, rows: Any, column: int, order: list[int], field: str) -> 
     return out
 
 
-def _key(value: Any, locale: Any) -> tuple[str, Any]:
+def _key(value: Any, locale: Any, moments: bool = False) -> tuple[str, Any]:
     """What a category is matched by: its number when it is or reads as one, else its text
-    (a date's as its label writes it)."""
+    (a date's as its label writes it).  With ``moments`` (the rows are a date column's), a
+    date or time first: ISO 8601 text or text as the locale writes one
+    (:func:`.sources.moment_of`) is matched by its label, so a chart whose categories were
+    written ISO (an older file) or in the locale finds the same rows."""
+    if moments:
+        found = sources.moment_of(value, locale, written=True)
+        if found is not None:
+            return ("t", sources.moment_text(found, locale))
     if sources.number(value):
         return ("n", float(value))
     if isinstance(value, (dt.date, dt.time)):
@@ -711,10 +718,13 @@ def _key(value: Any, locale: Any) -> tuple[str, Any]:
 
 def _matched(call: Any, rows: Any, column: int, categories: list[Any],
              field: str) -> list[int]:
-    """The row for each of the chart's categories, matched by label (a number by value):
-    every category needs exactly one row, and every row a category."""
+    """The row for each of the chart's categories, matched by label (a number by value; a
+    date column's by the date, written ISO or in the locale -- :func:`_key`): every
+    category needs exactly one row, and every row a category."""
     locale = call.locale
-    wanted = [_key(category, locale) for category in categories]
+    moments = rows.type(column) in sources.MOMENT_TYPES or any(
+        isinstance(record[column], (dt.date, dt.time)) for record in rows.dataset.rows)
+    wanted = [_key(category, locale, moments) for category in categories]
     if len(set(wanted)) != len(wanted):
         raise ToolError("ambiguous", "the chart has two categories alike, so rows cannot be "
                         "matched to them by label; set values by position instead",
@@ -725,7 +735,7 @@ def _matched(call: Any, rows: Any, column: int, categories: list[Any],
         if sources.label(value, locale) is None:
             raise ToolError("invalid_arguments", f"{rows.where(row, column)} is blank: "
                             "a row is matched to a category by its label", field=field)
-        key = _key(value, locale)
+        key = _key(value, locale, moments)
         if key in found:
             raise ToolError("ambiguous", f"rows {found[key] + 1} and {row + 1} of "
                             f"{rows.address} have the same category", field=field)
