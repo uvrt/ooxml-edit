@@ -15,6 +15,10 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet.
   - `datasets.row_range(address)` (also `ooxml_edit.tools.row_range`): `("by_region", 9,
     16)`, `(..., 9, None)` for `#9:`, `None` for anything else; `datasets.rows_text`.
     `Dataset.row_slice(first, last=None)`: the rows with their sources, keys and types.
+  - `sources.first_rows(address, count)`: a source's first rows as a row range
+    (`t:sales/#1:#9`; `d:x/#10:#14` of `d:x/#10:`), `None` for a column or a key set: what
+    the format libraries' tables offer when a source gives more rows than there is room
+    for.
 
 ## 0.30.0 -- unreleased
 - `describe` lists the session's datasets (round 5, T11), at no cost in tool definitions:

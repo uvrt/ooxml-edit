@@ -39,6 +39,11 @@ from .results import ToolError
 #: A source naming its document: ``d2/t:sales``.
 QUALIFIED = re.compile(r"^(d[0-9]+)/(.+)$")
 
+#: A source a row range can follow: a whole dataset or table (``d:by_region``,
+#: ``d2/t:sales``), or a row range already (``t:sales/#9:``, ``t:sales/#9:#40``).
+_RANGEABLE = re.compile(r"^((?:d[0-9]+/)?[a-z]:[^/\[\]]+)"
+                        r"(?:/#([1-9][0-9]*):(?:#?[1-9][0-9]*)?)?$")
+
 
 @dataclass(frozen=True)
 class Rows:
@@ -111,6 +116,20 @@ class Rows:
                                       for source in self.dataset.sources[row][column]),
                                      self.merge)
         return data
+
+
+def first_rows(address: str, count: int) -> str | None:
+    """The first ``count`` rows of a source as a row range, for a refusal to offer when a
+    source gives more rows than there is room for: ``t:sales/#1:#9`` of ``t:sales``,
+    ``d:by_region/#10:#14`` of ``d:by_region/#10:``, ``d:by_region/#1`` for one row.
+    ``None`` when the source is no whole dataset or table, nor a row range (a column, a key
+    set), or ``count`` is under 1."""
+    match = _RANGEABLE.match(address.strip()) if isinstance(address, str) else None
+    if match is None or count < 1:
+        return None
+    first = int(match.group(2) or 1)
+    last = first + count - 1
+    return f"{match.group(1)}/#{first}" + ("" if last == first else f":#{last}")
 
 
 def runs(rows: Iterable[int]) -> str:
@@ -342,5 +361,5 @@ def _clock(parts: Sequence[str | None]) -> _dt.time:
     return _dt.time(int(hour), int(minute), int(second or 0), micro)
 
 
-__all__ = ["MOMENT_TYPES", "QUALIFIED", "Rows", "label", "merged", "moment_of", "moment_text",
+__all__ = ["MOMENT_TYPES", "QUALIFIED", "Rows", "first_rows", "label", "merged", "moment_of", "moment_text",
            "number", "prefixes", "qualify", "resolve", "runs", "what"]

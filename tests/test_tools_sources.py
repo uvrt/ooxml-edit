@@ -19,7 +19,7 @@ from ooxml_edit.tools import (Dataset, DatasetEntry, DefaultLocale, DocumentForm
                               Result, ToolError, Toolbox, shared, string, strict_problems,
                               tool)
 from ooxml_edit.tools.datasets import row_range
-from ooxml_edit.tools.sources import label, merged, moment_of, runs
+from ooxml_edit.tools.sources import first_rows, label, merged, moment_of, runs
 
 import synthetic
 import tools_toys
@@ -288,6 +288,16 @@ def test_a_row_past_a_datasets_last_is_refused_not_cut(toolbox, session, source,
 ])
 def test_row_range_reads_a_run_of_rows(address, found):
     assert row_range(address) == found
+
+
+@pytest.mark.parametrize("address, count, found", [
+    ("t:sales", 9, "t:sales/#1:#9"), ("d2/t:sales", 1, "d2/t:sales/#1"),
+    ("d:by_region/#10:", 5, "d:by_region/#10:#14"), ("t:sales/#9:#40", 2, "t:sales/#9:#10"),
+    ("t:Stock!A1", 3, "t:Stock!A1/#1:#3"), ("t:sales[units]", 3, None),
+    ("t:sales/{a,b}", 1, None), ("d:by_region/North", 2, None), ("t:sales", 0, None),
+])
+def test_first_rows_offers_a_row_range_of_a_source(address, count, found):
+    assert first_rows(address, count) == found
 
 
 def test_a_row_slice_keeps_sources_and_refuses_past_the_end():
