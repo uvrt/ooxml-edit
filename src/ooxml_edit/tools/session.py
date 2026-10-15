@@ -146,6 +146,12 @@ class DocumentFormat:
     #: each as :func:`ooxml_edit.provenance.loads` reads it, under the addresses the
     #: format's tools take now.  :meth:`Session.provenance` asks it.  ``None``: none.
     read_provenance: Callable[[Any], Any] | None = None
+    #: Tools the format offers only by the application's configuration -- an asset
+    #: catalogue's search (:mod:`.assets`) -- so a toolbox without it sends no definition
+    #: for them.  The toolbox adds each after its own tools; one named like a toolbox tool
+    #: replaces it (the same tool with what the configuration adds: an ``asset`` argument),
+    #: which must then serve this format's kind alone.
+    tools: tuple[Any, ...] = ()
 
 
 class LRU:

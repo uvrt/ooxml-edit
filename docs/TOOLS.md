@@ -509,6 +509,34 @@ of its interface a renderer reads (`primary_language`, `number_text`). A new cha
 language falls back to the locale's (`add_chart(..., locale=call.locale)`) when the
 format names none; with the default the chart is byte-identical to before.
 
+**Asset catalogues.** An application's own pictures -- a brand icon set of a few thousand
+SVGs with a keyword index -- are searched and placed by id, never by path: the catalogue is
+application configuration that a format takes in its settings (`deck_format(assets=...)`),
+and only then does the format offer a search tool and an `asset` argument, through
+`DocumentFormat.tools`: tools the toolbox adds after its own, one named like a toolbox tool
+replacing it in its place (it must serve that format's kind alone). A toolbox without a
+catalogue sends no definition for it. Any object with `search(query, limit)` (best first,
+`Asset`s or `{id, name, keywords}` mappings) and `get(id) -> (bytes, MIME type)` (`KeyError`
+when unknown) is a catalogue (`tools.AssetCatalogue`); `tools.FolderCatalogue(folder,
+index=None)` is a simple one over a folder and a JSON or CSV index:
+
+```text
+index.json  [{"id": "arrow-up", "file": "arrows/arrow-up.svg", "name": "Arrow up",
+              "keywords": ["arrow", "up", "increase"]}, ...]      # or {"assets": [...]}
+index.csv   id,file,name,keywords
+            arrow-up,arrows/arrow-up.svg,Arrow up,arrow;up;increase
+```
+
+`file` is required and stays inside the folder (no `..`, no absolute path, no link out of
+it); `id` defaults to the file's name without its extension, `name` to the id; keywords are
+a list or one string separated by `;` (or `,` in JSON). Search compares each word of the
+query with the keywords and the words of the name and id -- whole word 3, start of a word
+2, part of one (three letters or more) 1 -- and keeps the assets that match every word,
+highest first. A format's tools use `assets.find(catalogue, query, limit)` (at most
+`assets.MAX_RESULTS`, a failing catalogue answered `refused`) and `assets.fetch(catalogue,
+id, limits, search_tool=...)` (`not_found` naming the search tool, an image only, within the
+session's blob and image limits).
+
 **OpenAI images.** On the Responses API a result's images go inside its
 `function_call_output` by default: `output` is then a list of `input_text` and
 `input_image`, which OpenAI's function-calling guide documents ("For functions that return

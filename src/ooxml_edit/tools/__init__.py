@@ -43,6 +43,9 @@ What is here:
   (subprocess workers in a process that may not start multiprocessing children);
 * :mod:`.logs` -- call records with argument digests, not content;
 * :mod:`.prompts` -- the shared system-prompt fragment: mechanics, no house style;
+* :mod:`.assets` -- an application's asset catalogue (brand icons...) that a format's
+  configured tools search and place by id: the :class:`AssetCatalogue` protocol and
+  :class:`FolderCatalogue`, a folder with a JSON or CSV index;
 * :mod:`.shared` -- the definitions of the tools every format shares (open, save, undo,
   describe, find, replace, render, check, charts, SmartArt, properties, and the generic
   ``batch``),
@@ -53,7 +56,8 @@ out as bytes to the application, and no tool may take a path.  Like :mod:`ooxml_
 this subpackage is optional, and the core never imports it.
 """
 
-from . import shared, textfacts
+from . import assets, shared, textfacts
+from .assets import Asset, AssetCatalogue, FolderCatalogue
 from .adapters import StrictProblem, strict_problems
 from .datasets import (DATASET_ID, DATASET_PREFIX, TYPE_LABELS, Dataset, DatasetEntry,
                        dataset_id, row_range)
@@ -73,7 +77,7 @@ from .session import (DEFAULT_LOCALE, LOCALE_FIELDS, Blob, DefaultLocale, Docume
 from .worker import InProcess, SubprocessPool, WorkerPool, worker_task
 
 __all__ = [
-    "Blob", "CORE", "Call", "CallContext", "CallError", "CallRecord", "DATASET_ID",
+    "Asset", "AssetCatalogue", "Blob", "FolderCatalogue", "assets", "CORE", "Call", "CallContext", "CallError", "CallRecord", "DATASET_ID",
     "DATASET_PREFIX", "DEFAULT_LOCALE", "Dataset", "DatasetEntry", "DefaultLocale", "DocumentEntry", "DocumentFormat",
     "ERROR_CODES", "LOCALE_FIELDS", "REF", "Image", "LimitError", "Limits", "Output", "Param",
     "Result", "Rows", "SYSTEM", "TYPE_LABELS",

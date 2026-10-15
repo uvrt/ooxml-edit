@@ -541,6 +541,21 @@ class _OpFailed(Exception):
 _TOOLBOX_DEFAULT: Any = object()
 
 
+def _with_format_tools(tools: dict[str, Tool],
+                       formats: Iterable[DocumentFormat]) -> dict[str, Tool]:
+    """``tools`` with each format's configured tools (:attr:`DocumentFormat.tools`): new
+    names after the others, a name already there replaced in its place -- only a tool
+    that serves that format's kind alone, so no other library's handler is lost."""
+    for fmt in formats:
+        for extra in fmt.tools:
+            existing = tools.get(extra.name)
+            if existing is not None and not set(existing.handlers) <= {fmt.kind}:
+                raise ValueError(f"the {fmt.kind} format's {extra.name!r} would replace a "
+                                 "tool other kinds serve too")
+            tools[extra.name] = extra
+    return tools
+
+
 class Toolbox:
     """The tools of one or more libraries, ready for a provider and a session."""
 
@@ -572,8 +587,9 @@ class Toolbox:
         makes, forwarded to every format and to the work run in worker processes.  ``None``
         is en-US (:data:`~.session.DEFAULT_LOCALE`, :data:`ooxml_common.locales.EN_US`'s
         values), always: never the operating system's.  Not a tool argument either."""
-        self.tools: dict[str, Tool] = merge_tools(tools)
         self.formats: dict[str, DocumentFormat] = {fmt.kind: fmt for fmt in formats}
+        self.tools: dict[str, Tool] = _with_format_tools(merge_tools(tools),
+                                                         self.formats.values())
         #: Claude's strict priority: the application's order, else each format's in turn.
         self.strict_first: list[str] = list(dict.fromkeys(
             strict_first if strict_first is not None
