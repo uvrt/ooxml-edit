@@ -336,6 +336,39 @@ How the shared `edit_chart` finds the chart part without knowing the format: eve
 `provenance.Holder` while a placement watches (`provenance.watch()`); the wrapper writes
 the record into the one chart the handler used, and reads it from there for `read`.
 
+**Text facts.** A figure in a sentence comes from a source too. A text argument a tool
+declares (`Tool.facts`: `ppt_set_text`'s texts and runs, a table's cells, `replace_text`'s
+`replace`, Word's text and Markdown) may hold *references*, `{{` an address of one value
+`}}`, which the dispatcher writes as the value before the handler runs:
+
+```text
+"Average {{d:by_topic/door/mean:0.0}} across {{d:by_topic/door/count}} items"
+-> "Average 2,2 across 41 items"                           (session locale nl-BE)
+```
+
+- The address: a dataset, the row (its first column's value, as a table cell writes it, or
+  `#3` by position) and the column (`d:by_topic/door/mean`); `d:total/value` for a one-row
+  dataset, `d:total` for one value; `t:checks/N-1/rating` in another open document, the row
+  read by its format's resolver (`t:checks/N-1`), `d2/t:...` naming the document. A key or
+  column holding `/` is quoted, `'A/7'`.
+- The text: as a table cell gets the value (`sources.label`: the locale's decimal
+  separator, at most 15 significant digits, a date in the locale's day order), a `percent`
+  column's value as a percent; or through a number format after the address -- `:0`,
+  `:0.0` (up to nine decimals), `:#,##0.0` (the locale's thousands separator), `:0.0%` --
+  rounded half away from zero on the decimal shown. Datasets carry no number format; a
+  derive that rounds gives rounded values already.
+- Only `{{d:` and a loaded format's prefix (`{{t:`) start a reference; `{{name}}` stays as
+  it is, and `\{{d:x}}` writes `{{d:x}}`. On by default, no flag. A reference that names
+  no dataset, table, row or column, a blank, or more than one value refuses the call with
+  the argument as `field` and what there is as `valid_options`: nothing is written half.
+- The result: `data.facts`, each `{"from", "text", "sources"}` (and `stale`). The handler
+  has `call.facts` (each a `textfacts.Fact`: argument, place in its text, record) and keeps
+  them where its format keeps provenance: a fact is a record's fields without `v`, plus its
+  place `p` (paragraph) and `at` (character). `provenance.facts_after_edit(facts, old, new)`
+  keeps the facts an edit leaves true (moved with the text; a touched or bordering one is
+  dropped) and `provenance.facts_found(facts, text)` the ones still where they say -- what a
+  reader checks, since another application may have edited the text since.
+
 **Loading tools and the prompt.** Every tool is in one group; the `core` group is always
 loaded, the others on demand. What `definitions()` sends by default:
 

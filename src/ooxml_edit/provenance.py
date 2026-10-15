@@ -25,6 +25,17 @@ with a :class:`Holder` that can store and read its record -- and the placing cod
 does not know that kind of object, collects them with :func:`watch` and hands the record to
 the one the placement touched.  Outside :func:`watch`, :func:`note` does nothing.
 
+**Text facts.**  A value written into text by reference (``{{d:by_topic/door/mean}}``,
+:mod:`ooxml_edit.tools.textfacts`) is kept as a *fact*: the fields of a record without
+``v`` -- ``source`` the reference as given, ``format``, ``text`` the value as written,
+``document``, ``version``, ``sources`` -- and where it is in its text: ``p`` the paragraph
+(from 0, paragraphs joined by ``\n``) and ``at`` the character in it.  A record that holds
+facts is ``{"v":1,"facts":[...]}``.  The fact is true while those characters are its text:
+:func:`facts_after_edit` keeps the facts an edit does not touch (moving them with the text
+around them) and drops the ones it does, and :func:`facts_found` keeps the ones whose text
+is still where they say -- a reader's check, since another application may have edited the
+text in between.
+
 Format-neutral: which document, which part and which element hold a record is the format
 layer's business (and the embedded objects' own).
 """
@@ -97,6 +108,75 @@ def _check(found: Any) -> None:
         raise RecordError(f"a record has a version v of 1 or more, not {version!r}")
 
 
+# -- text facts ----------------------------------------------------------------------------------
+
+
+def place(text: str, offset: int) -> tuple[int, int]:
+    """``(p, at)`` of the character ``offset`` of ``text``: its paragraph (paragraphs
+    joined by ``\n``) and its place in it."""
+    before = text[:offset]
+    p = before.count("\n")
+    return p, offset - (before.rfind("\n") + 1)
+
+
+def offset(text: str, p: Any, at: Any) -> int | None:
+    """The character of ``text`` that paragraph ``p``'s character ``at`` is; ``None`` when
+    there is no such paragraph, or ``p`` and ``at`` are not whole numbers."""
+    if not all(isinstance(n, int) and not isinstance(n, bool) and n >= 0 for n in (p, at)):
+        return None
+    paragraphs = text.split("\n")
+    if p >= len(paragraphs) or at > len(paragraphs[p]):
+        return None
+    return sum(len(paragraph) + 1 for paragraph in paragraphs[:p]) + at
+
+
+def facts_found(facts: Any, text: str) -> list[dict[str, Any]]:
+    """The facts whose ``text`` is in ``text`` where their ``p`` and ``at`` say."""
+    out = []
+    for found in facts if isinstance(facts, list) else []:
+        if not isinstance(found, Mapping) or not isinstance(found.get("text"), str):
+            continue
+        start = offset(text, found.get("p"), found.get("at"))
+        if start is not None and found["text"] and \
+                text[start:start + len(found["text"])] == found["text"]:
+            out.append(dict(found))
+    return out
+
+
+def edit_span(old: str, new: str) -> tuple[int, int, int]:
+    """What changed from ``old`` to ``new``, as one span: ``(start, old_end, new_end)`` --
+    the characters before ``start`` and from ``old_end`` (``new_end`` in ``new``) are the
+    same text."""
+    limit = min(len(old), len(new))
+    start = 0
+    while start < limit and old[start] == new[start]:
+        start += 1
+    tail = 0
+    while tail < limit - start and old[-1 - tail] == new[-1 - tail]:
+        tail += 1
+    return start, len(old) - tail, len(new) - tail
+
+
+def facts_after_edit(facts: Any, old: str, new: str) -> list[dict[str, Any]]:
+    """The facts of ``old`` that are still true in ``new`` (the same text after an edit),
+    at their new places: a fact whose characters the edit did not touch stays, moved with
+    the text before it; one it touched or borders (``2,2`` would read ``12,2``), or that is
+    not where it says, goes."""
+    if old == new:
+        return facts_found(facts, old)
+    start, old_end, new_end = edit_span(old, new)
+    out = []
+    for found in facts_found(facts, old):
+        first = offset(old, found["p"], found["at"])
+        last = first + len(found["text"])
+        if last < start:
+            out.append(found)
+        elif first > old_end:
+            p, at = place(new, first + new_end - old_end)
+            out.append({**found, "p": p, "at": at})
+    return out
+
+
 # -- holders -------------------------------------------------------------------------------------
 
 
@@ -143,5 +223,6 @@ def _add(found: list[Holder], holder: Holder) -> None:
         found.append(holder)
 
 
-__all__ = ["Holder", "RecordError", "SESSION_ONLY", "VERSION", "dumps", "loads", "note",
-           "record", "watch"]
+__all__ = ["Holder", "RecordError", "SESSION_ONLY", "VERSION", "dumps", "edit_span",
+           "facts_after_edit", "facts_found", "loads", "note", "offset", "place", "record",
+           "watch"]

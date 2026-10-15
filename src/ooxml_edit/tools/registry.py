@@ -183,6 +183,12 @@ class Tool:
     #: such an address with its document and holds that document's lock for the call; the
     #: handler reads either with ``call.source(value)``.
     sources: Sequence[str] = ()
+    #: Argument paths whose text may hold references to one value of a source,
+    #: ``{{d:by_topic/door/mean}}`` (:mod:`.textfacts`): the dispatcher qualifies a ``t:``
+    #: one with its document and holds that document's lock, and before the handler runs
+    #: writes each value in their place (``call.facts`` says where).  A path may end in an
+    #: array of arrays of strings (``data[]``: rows of cells).
+    facts: Sequence[str] = ()
     #: For a changing tool with a reading mode (``edit_chart`` with ``action: "read"``, a
     #: measure-only call): a function of the arguments, true when the call changes nothing.
     #: Such a call runs as a reading one: no undo step, no version, no checks, no retry key.
@@ -250,6 +256,7 @@ class Tool:
             other.route, other.strict, other.batchable, other.composite, tuple(other.refs),
             other.reads) and tuple(self.datasets) == tuple(other.datasets) \
             and tuple(self.sources) == tuple(other.sources) \
+            and tuple(self.facts) == tuple(other.facts) \
             and dict(self.aliases) == dict(other.aliases)
 
     def merged(self, other: "Tool") -> "Tool":
@@ -283,6 +290,9 @@ def definition_problems(tool: Tool) -> list[str]:
     for path in tool.sources:
         if not _path_exists(tool.schema, path):
             problems.append(f"sources names {path!r}, which is not a string parameter")
+    for path in tool.facts:
+        if not _path_exists(tool.schema, path, nested=True):
+            problems.append(f"facts names {path!r}, which is not a string parameter")
     properties = tool.schema.get("properties", {})
     required = set(tool.schema.get("required", ()))
     for group in tool.exactly_one:
@@ -307,8 +317,9 @@ def definition_problems(tool: Tool) -> list[str]:
     return problems
 
 
-def _path_exists(schema: Mapping[str, Any], path: str) -> bool:
-    """Whether ``path`` (``items[].from.shape``) names a string, or an array of strings."""
+def _path_exists(schema: Mapping[str, Any], path: str, *, nested: bool = False) -> bool:
+    """Whether ``path`` (``items[].from.shape``) names a string, or an array of strings;
+    ``nested``: or an array of arrays of strings."""
     node: Any = schema
     for part in path.split("."):
         array = part.endswith("[]")
@@ -320,6 +331,8 @@ def _path_exists(schema: Mapping[str, Any], path: str) -> bool:
             if node.get("type") != "array":
                 return False
             node = node.get("items")
+    while nested and isinstance(node, Mapping) and node.get("type") == "array":
+        node = node.get("items")
     return isinstance(node, Mapping) and node.get("type") == "string"
 
 
@@ -329,21 +342,22 @@ def tool(name: str, description: str, params: Mapping[str, Param] | None = None,
          exactly_one: Sequence[Sequence[str]] = (),
          priority: int | None = None, strict: bool = True, batchable: bool = True,
          refs: Sequence[str] = (), datasets: Sequence[str] = (), sources: Sequence[str] = (),
-         reads: Callable[[Mapping[str, Any]], bool] | None = None,
+         facts: Sequence[str] = (), reads: Callable[[Mapping[str, Any]], bool] | None = None,
          aliases: Mapping[str, Any] | None = None) -> Callable[[Handler], Tool]:
     """Make a :class:`Tool` of a handler.  ``kind`` restricts it to one document kind;
     ``reads`` marks the calls of a changing tool that only read (:attr:`Tool.reads`);
     ``aliases`` the argument names read as its own (:attr:`Tool.aliases`);
     ``refs``, ``datasets`` and ``sources`` declare the arguments that may hold a ref, a
-    dataset, or a source (a dataset or another document's rows)."""
+    dataset, or a source (a dataset or another document's rows); ``facts`` the text that
+    may hold references to one value (:attr:`Tool.facts`)."""
 
     def make(handler: Handler) -> Tool:
         return Tool(name=name, description=description, schema=build_schema(params or {}),
                     handlers={kind: handler}, group=group, mutates=mutates,
                     documents=documents, exactly_one=exactly_one, priority=priority,
                     strict=strict, batchable=batchable, refs=tuple(refs),
-                    datasets=tuple(datasets), sources=tuple(sources), reads=reads,
-                    aliases=dict(aliases or {}))
+                    datasets=tuple(datasets), sources=tuple(sources), facts=tuple(facts),
+                    reads=reads, aliases=dict(aliases or {}))
 
     return make
 

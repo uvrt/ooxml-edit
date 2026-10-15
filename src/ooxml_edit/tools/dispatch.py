@@ -37,6 +37,12 @@ or an address in another open document that its format resolves (``t:sales``, or
 with its document before the call runs and locks that document too, for reading: no undo
 step, no version, no checks.  The handler reads either with ``call.source(value)``.
 
+**Text facts.**  A tool may declare text arguments that hold references to one value of a
+source (``Tool.facts``; ``{{d:by_topic/door/mean}}``, :mod:`.textfacts`).  The dispatcher
+qualifies and locks their documents as for sources, writes each value in its reference's
+place before the handler runs (``call.facts`` says what went where) and lists them in the
+result's ``data.facts``; a reference that names no single value refuses the call.
+
 **Checks.**  Handlers say what they touched (``call.touch(page)``); after a changing call
 the dispatcher asks the document's format for the facts (``DocumentFormat.checks``) once.
 
@@ -68,7 +74,7 @@ from contextlib import ExitStack, contextmanager
 from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 
 from .. import provenance
-from . import adapters, prompts
+from . import adapters, prompts, textfacts
 from .datasets import (DATASET_PREFIX, Dataset, DatasetEntry, check_dataset_id,
                        dataset_id, row_range, rows_text)
 from .limits import LimitError, Limits
@@ -165,6 +171,10 @@ class Call:
         #: The version of the primary document the result describes, when the handler
         #: worked on a snapshot (:meth:`unlocked`); ``None``: the version after the call.
         self.version_used: int | None = None
+        #: The values the dispatcher wrote for references in the text arguments
+        #: (``Tool.facts``), in order: each a :class:`~.textfacts.Fact` -- the argument,
+        #: the value's place in its text as the handler gets it, and its record.
+        self.facts: list[textfacts.Fact] = []
 
     @property
     def in_batch(self) -> bool:
@@ -332,6 +342,42 @@ class Call:
                             field=field)
         return Rows(f"{doc}/{address}", dataset, doc=doc, kind=entry.kind, name=entry.name,
                     version=entry.version, merge=fmt.merge_sources)
+
+    def facts_at(self, field: str) -> list[textfacts.Fact]:
+        """The values written into the argument ``field`` (``items[0].text``), in order."""
+        return [fact for fact in self.facts if fact.field == field]
+
+    def fact(self, address: str, *, field: str | None = None) -> tuple[str, dict[str, Any]]:
+        """The text a reference's ``address`` writes (:mod:`.textfacts`) and the record of
+        it: one value of a dataset (``d:by_topic/door/mean``) or of an address in a
+        document this call holds (``d2/t:checks/N-1/rating``), in the session's locale,
+        through the number format after it (``:0.0``) when there is one."""
+        try:
+            return self._fact(address, field)
+        except ToolError as error:
+            if error.field is None:
+                error.field = field
+            raise
+
+    def _fact(self, address: str, field: str | None) -> tuple[str, dict[str, Any]]:
+        source, segments, fmt = textfacts.split(address)
+        selected = False
+        if source.startswith(DATASET_PREFIX):
+            rows = self.source(source, field=field)
+        elif len(segments) >= 2:
+            row, quoted = segments[0]
+            raw = textfacts.quote(row) if quoted or not re.fullmatch(r"#[1-9][0-9]*", row) \
+                else row
+            rows = self.source(f"{source}/{raw}", field=field)
+            segments, selected = segments[1:], True
+        else:
+            rows = self.source(source, field=field)
+        row, column = textfacts.pick(rows, segments, address, field=field,
+                                     locale=self.locale, row_selected=selected)
+        text = textfacts.value_text(rows.dataset.rows[row][column], self.locale,
+                                    type=rows.type(column), format=fmt,
+                                    where=rows.where(row, column), field=field)
+        return text, textfacts.record(rows, row, column, address, text, fmt)
 
     def keep_provenance(self, address: str, rows: Rows,
                         placed: Mapping[str, Any]) -> dict[str, Any]:
@@ -810,6 +856,7 @@ class Toolbox:
             arguments = self._with_refs(tool, arguments, entries, primary, context)
             call = Call(self, session, tool, arguments, entries, primary, context)
             self._with_datasets(tool, arguments, call)
+            arguments = self._with_facts(tool, arguments, call)
             call.held = list(entries.values())   # dispatch() holds each once
             if changing and primary is not None:
                 with primary.batch():
@@ -818,6 +865,7 @@ class Toolbox:
             else:
                 returned = handler(call, **arguments)
             result = _as_result(returned, call.result)
+            _report_facts(call, result)
             if call.version_used is not None:
                 result.version = call.version_used
             if changing and result.ok:
@@ -911,13 +959,35 @@ class Toolbox:
                   lambda value, where, hinted=hinted: resolve(value, where, hinted))
 
     @staticmethod
+    def _with_facts(tool: Tool, arguments: dict[str, Any], call: Call) -> dict[str, Any]:
+        """``arguments`` with every reference in a declared text (``Tool.facts``) replaced
+        by the value it names, escaped ones unescaped; ``call.facts`` says what was written
+        where.  Refused whole when one names no single value."""
+        if not tool.facts:
+            return arguments
+        known = textfacts.known_prefixes(call.session.formats)
+
+        def expand(text: str, where: str) -> str:
+            if "{{" not in text:
+                return text
+            written, found = textfacts.expand(
+                text, where, known, lambda address, at: call.fact(address, field=at))
+            call.facts.extend(found)
+            return written
+
+        for path in tool.facts:
+            arguments = textfacts.walk_texts(arguments, path.split("."), "", expand)
+        call.arguments = arguments
+        return arguments
+
+    @staticmethod
     def _sources(session: Session, tool: Tool, arguments: dict[str, Any], *,
                  hint: Callable[[str], str | None] | None = None,
                  ) -> tuple[dict[str, Any], list[str]]:
         """``arguments`` with every address in a declared source qualified with its document
         (``t:sales`` -> ``d2/t:sales``), and those documents, in order.  Datasets (``d:``)
         are left as they are.  ``hint(value)``: words added to a ``not_found``."""
-        if not tool.sources:
+        if not tool.sources and not tool.facts:
             return arguments, []
         found: list[str] = []
         documents = dict(session.documents)
@@ -937,6 +1007,17 @@ class Toolbox:
 
         for path in tool.sources:
             arguments = _walk(arguments, path.split("."), "", resolve)
+        if tool.facts:
+            known = textfacts.known_prefixes(session.formats)
+
+            def references(text: str, where: str) -> str:
+                if "{{" not in text:
+                    return text
+                return textfacts.qualify_text(text, known,
+                                              lambda address: resolve(address, where))
+
+            for path in tool.facts:
+                arguments = textfacts.walk_texts(arguments, path.split("."), "", references)
         return arguments, found
 
     @staticmethod
@@ -963,7 +1044,7 @@ class Toolbox:
         for op in arguments.get("ops") or []:
             tool = self.tools.get(op.get("tool", "")) if isinstance(op, Mapping) else None
             args = op.get("arguments") if isinstance(op, Mapping) else None
-            if tool is None or not tool.sources or not isinstance(args, Mapping):
+            if tool is None or not (tool.sources or tool.facts) or not isinstance(args, Mapping):
                 continue
             try:
                 docs = self._sources(session, tool, dict(args))[1]
@@ -1230,7 +1311,9 @@ class Toolbox:
                         {doc: held[doc] for doc in [*doc_ids, *found] if doc in held},
                         primary, context)
             self._with_datasets(tool, arguments, call)
+            arguments = self._with_facts(tool, arguments, call)
             result = _as_result(handler(call, **arguments), call.result)
+            _report_facts(call, result)
         except _OpFailed:
             raise
         except ToolError as error:
@@ -1487,6 +1570,18 @@ def _message(exc: BaseException) -> str:
     if isinstance(exc, KeyError) and exc.args:
         return str(exc.args[0])
     return str(exc) or type(exc).__name__
+
+
+def _report_facts(call: Call, result: Result) -> None:
+    """The values a call wrote for references, in its result's ``data.facts``: each
+    reference, the text written and its sources."""
+    if not call.facts or not result.ok:
+        return
+    said = textfacts.briefs(call.facts)
+    if result.data is None:
+        result.data = {"facts": said}
+    elif isinstance(result.data, dict) and "facts" not in result.data:
+        result.data["facts"] = said
 
 
 def _as_result(returned: Any, built: Result) -> Result:

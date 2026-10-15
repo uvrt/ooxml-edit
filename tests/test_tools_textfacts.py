@@ -1,0 +1,284 @@
+"""Text facts: ``{{d:by_topic/door/mean}}`` in a text argument is written as the value, in the
+session's locale, and reported with its sources; the fact helpers keep what an edit leaves
+true.
+
+The toys: ``toy_say`` keeps the texts it is given (``items[].text`` and rows of cells,
+``rows[]``) and returns what ``call.facts`` said; a grid whose tables resolve ``t:<name>``
+and ``t:<name>/<key>`` (one row) with a source per cell.  Every figure is made up.
+"""
+
+from __future__ import annotations
+
+import dataclasses
+import datetime as dt
+
+import pytest
+
+from ooxml_edit import provenance
+from ooxml_edit.tools import (Dataset, DefaultLocale, DocumentFormat, Result, ToolError,
+                              Toolbox, array, obj, shared, string, tool)
+from ooxml_edit.tools import textfacts
+
+import synthetic
+import tools_toys
+
+CLOCK = lambda: dt.datetime(2026, 10, 15, 12, 0, tzinfo=dt.timezone.utc)  # noqa: E731
+NL_BE = dataclasses.replace(DefaultLocale(), decimal_separator=",", thousands_separator=".",
+                            date_order="dmy", language="nl-BE", list_separator=";")
+
+
+class Grid:
+    def __init__(self, tables: dict) -> None:
+        self.tables = tables
+
+
+def _table(grid: Grid, address: str) -> Dataset:
+    name, _, key = address[len("t:"):].partition("/")
+    if name not in grid.tables:
+        raise ToolError("not_found", f"no table {name!r}", valid_options=sorted(grid.tables))
+    header, rows = grid.tables[name]
+    numbered = list(enumerate(rows))
+    if key:
+        key = key[1:-1].replace("''", "'") if key.startswith("'") else key
+        numbered = [(i, row) for i, row in numbered
+                    if (f"#{i + 1}" == key if key.startswith("#") else row[0] == key)]
+        if len(numbered) != 1:
+            raise ToolError("not_found", f"no row {key!r} in {name}")
+    sources = [[(f"G!{chr(65 + c)}{i + 2}",) for c in range(len(header))] for i, _ in numbered]
+    return Dataset(header, [row for _, row in numbered], sources=sources, keys=1)
+
+
+GRID = DocumentFormat(kind="xlsx", open=lambda data: Grid({}), detect=lambda data, name: False,
+                      datasets={"t:": _table})
+
+CHECKS = (("item", "rating", "share", "when"),
+          [("N-1", 2.1666666666666665, 0.253, "2026-03-01"), ("A/7", 3, 0.5, "2026-04-02"),
+           ("N-2", 1234567.891, 1.0, "2026-05-03")])
+
+SAID: list[dict] = []
+
+
+@tool("toy_say", "Keep texts.",
+      {"doc": string("Document id."),
+       "items": array(obj({"text": string()}), "Texts."),
+       "rows": array(array(string()), "Cells.", optional=True)},
+      mutates=True, facts=("items[].text", "rows[]"))
+def toy_say(call, doc, items, rows=None):
+    SAID.append({"items": items, "rows": rows,
+                 "facts": [(f.field, f.start, f.end, f.text, f.address) for f in call.facts],
+                 "first": [f.record for f in call.facts_at("items[0].text")]})
+    return Result(summary="said", data={"count": len(items)})
+
+
+@tool("ds_keep", "Keep a made-up dataset.", {"id": string("Its id.")}, documents=())
+def ds_keep(call, id):
+    header, rows = CHECKS
+    types = (None, "number", "percent", "date")
+    sources = [[(f"t:checks/{row[0]}/{name}",) for name in header] for row in rows]
+    call.define_dataset(id, Dataset(header, rows, sources=sources, keys=1, types=types),
+                        source="d2")
+    return Result(summary=f"Kept d:{id}")
+
+
+TOOLS = [toy_say, ds_keep, *shared.SESSION_TOOLS]
+
+
+@pytest.fixture(autouse=True)
+def _clear():
+    SAID.clear()
+
+
+@pytest.fixture
+def toolbox():
+    with Toolbox(TOOLS, formats=[*tools_toys.FORMATS, GRID], groups=shared.GROUPS,
+                 workers=0) as box:
+        yield box
+
+
+def _session(toolbox, **options):
+    session = toolbox.session(clock=CLOCK, **options)
+    session.open(synthetic.outer_package(), "deck.pptx")                 # d1
+    session.adopt(Grid({"checks": CHECKS}), "xlsx", "checks-made-up.xlsx")  # d2
+    return session
+
+
+def say(toolbox, session, *texts, rows=None):
+    arguments = {"doc": "d1", "items": [{"text": text} for text in texts]}
+    if rows is not None:
+        arguments["rows"] = rows
+    return toolbox.dispatch(session, "toy_say", arguments)
+
+
+def ok(result):
+    assert result.ok, result.to_json()
+    return result
+
+
+def failed(result, code):
+    assert not result.ok, result.to_json()
+    assert result.error.code == code, result.to_json()
+    return result.error
+
+
+# -- writing values ------------------------------------------------------------------------------
+
+
+def test_a_dataset_value_is_written_with_its_sources(toolbox):
+    session = _session(toolbox)
+    ok(toolbox.dispatch(session, "ds_keep", {"id": "by_item"}))
+    result = ok(say(toolbox, session, "Rated {{d:by_item/N-2/rating:#,##0.0}} at N-2"))
+    assert SAID[-1]["items"] == [{"text": "Rated 1,234,567.9 at N-2"}]
+    assert SAID[-1]["facts"] == [("items[0].text", 6, 17, "1,234,567.9",
+                                  "d:by_item/N-2/rating")]
+    assert result.data == {"count": 1, "facts": [
+        {"from": "d:by_item/N-2/rating", "text": "1,234,567.9",
+         "sources": ["t:checks/N-2/rating"]}]}
+    record = SAID[-1]["first"][0]
+    assert record == {"source": "d:by_item/N-2/rating", "document": "checks-made-up.xlsx",
+                      "version": session.documents["d2"].version, "format": "#,##0.0",
+                      "text": "1,234,567.9", "sources": ["t:checks/N-2/rating"]}
+
+
+def test_nl_be_writes_a_decimal_comma_and_its_own_grouping(toolbox):
+    session = _session(toolbox, locale=NL_BE)
+    ok(toolbox.dispatch(session, "ds_keep", {"id": "by_item"}))
+    ok(say(toolbox, session, "Gemiddeld {{d:by_item/N-1/rating:0.0}}; "
+           "{{d:by_item/N-2/rating:#,##0.00}}; {{d:by_item/N-1/share}}; "
+           "{{d:by_item/N-1/share:0.0%}}; {{d:by_item/N-1/when}}; {{d:by_item/#2/rating}}"))
+    assert SAID[-1]["items"][0]["text"] == ("Gemiddeld 2,2; 1.234.567,89; 25,3%; 25,3%; "
+                                            "1/3/2026; 3")
+
+
+def test_without_a_format_a_number_is_written_as_a_table_cell_gets_it(toolbox):
+    session = _session(toolbox)
+    ok(toolbox.dispatch(session, "ds_keep", {"id": "by_item"}))
+    ok(say(toolbox, session, "{{d:by_item/N-1/rating}} {{d:by_item/N-1/rating:0}}"))
+    assert SAID[-1]["items"][0]["text"] == "2.16666666666667 2"
+
+
+def test_rounding_is_half_away_from_zero_on_the_decimal_shown():
+    assert textfacts.number_text(2.675, "0.00") == "2.68"
+    assert textfacts.number_text(-2.5, "0") == "-3"
+    assert textfacts.number_text(-0.04, "0.0") == "0.0"
+    assert textfacts.number_text(0.125, "0%") == "13%"
+    assert textfacts.number_text(1234.5, "#,##0", NL_BE) == "1.235"
+
+
+def test_a_table_value_of_another_document_is_read_by_its_row(toolbox):
+    session = _session(toolbox)
+    result = ok(say(toolbox, session, "Door: {{t:checks/'A/7'/rating}} ({{t:checks/#1/item}})"))
+    assert SAID[-1]["items"][0]["text"] == "Door: 3 (N-1)"
+    assert result.data["facts"][0] == {"from": "t:checks/'A/7'/rating", "text": "3",
+                                       "sources": ["G!B3"]}
+    record = SAID[-1]["first"][0]
+    assert record["source"] == "t:checks/'A/7'/rating"
+    assert record["document"] == "checks-made-up.xlsx"
+
+
+def test_rows_of_cells_and_several_texts_each_say_where(toolbox):
+    session = _session(toolbox)
+    ok(toolbox.dispatch(session, "ds_keep", {"id": "by_item"}))
+    ok(say(toolbox, session, "a", "x {{d:by_item/N-1/item}}",
+           rows=[["{{d:by_item/#3/item}}", "plain"]]))
+    assert SAID[-1]["rows"] == [["N-2", "plain"]]
+    assert [f[0] for f in SAID[-1]["facts"]] == ["items[1].text", "rows[0][0]"]
+    assert SAID[-1]["first"] == []
+
+
+def test_a_batch_op_expands_too(toolbox):
+    session = _session(toolbox)
+    ok(toolbox.dispatch(session, "ds_keep", {"id": "by_item"}))
+    result = ok(toolbox.dispatch(session, "batch", {"ops": [
+        {"tool": "toy_say", "arguments": {"doc": "d1", "items": [
+            {"text": "{{t:checks/N-1/rating:0.0}}"}]}}]}))
+    assert SAID[-1]["items"][0]["text"] == "2.2"
+    assert result.data["ops"][0]["data"]["facts"][0]["text"] == "2.2"
+
+
+# -- what is no reference ------------------------------------------------------------------------
+
+
+def test_other_braces_stay_and_an_escape_writes_the_reference_literally(toolbox):
+    session = _session(toolbox)
+    result = ok(say(toolbox, session, "Dear {{name}}, {x:1} {{ q:1 }} \\{{d:by_item/N-1/item}}"))
+    assert SAID[-1]["items"][0]["text"] == "Dear {{name}}, {x:1} {{ q:1 }} {{d:by_item/N-1/item}}"
+    assert SAID[-1]["facts"] == [] and "facts" not in result.data
+
+
+# -- refusals ------------------------------------------------------------------------------------
+
+
+def test_a_reference_to_many_values_is_refused_with_an_example(toolbox):
+    session = _session(toolbox)
+    ok(toolbox.dispatch(session, "ds_keep", {"id": "by_item"}))
+    error = failed(say(toolbox, session, "{{d:by_item/rating}}"), "invalid_arguments")
+    assert "not one value" in error.message and "d:by_item/" in error.message
+    assert error.field == "items[0].text"
+    assert SAID == []
+
+
+def test_an_unknown_dataset_row_or_column_is_not_found(toolbox):
+    session = _session(toolbox)
+    ok(toolbox.dispatch(session, "ds_keep", {"id": "by_item"}))
+    error = failed(say(toolbox, session, "{{d:nope/N-1/rating}}"), "not_found")
+    assert "d:by_item" in error.valid_options
+    error = failed(say(toolbox, session, "{{d:by_item/N-9/rating}}"), "not_found")
+    assert "d:by_item/N-1" in error.valid_options
+    error = failed(say(toolbox, session, "{{d:by_item/N-1/ratings}}"), "not_found")
+    assert "rating" in error.valid_options
+    failed(say(toolbox, session, "{{d:by_item/#9/rating}}"), "not_found")
+
+
+def test_a_format_on_text_is_refused(toolbox):
+    session = _session(toolbox)
+    ok(toolbox.dispatch(session, "ds_keep", {"id": "by_item"}))
+    error = failed(say(toolbox, session, "{{d:by_item/N-1/item:0.0}}"), "invalid_arguments")
+    assert "is for numbers" in error.message
+
+
+def test_t_without_an_open_table_document_is_not_found(toolbox):
+    session = toolbox.session(clock=CLOCK)
+    session.open(synthetic.outer_package(), "deck.pptx")
+    failed(say(toolbox, session, "{{t:checks/N-1/rating}}"), "not_found")
+
+
+# -- the fact helpers ----------------------------------------------------------------------------
+
+
+def _fact(p, at, text):
+    return {"source": "d:x/a/b", "text": text, "p": p, "at": at}
+
+
+def test_place_and_offset_go_both_ways():
+    text = "Title\nAverage 2,2 across\n41"
+    assert provenance.place(text, 14) == (1, 8)
+    assert provenance.offset(text, 1, 8) == 14
+    assert provenance.offset(text, 3, 0) is None
+    assert provenance.offset(text, 0, True) is None
+
+
+def test_facts_found_keeps_only_the_ones_still_where_they_say():
+    text = "Average 2,2 across 41"
+    facts = [_fact(0, 8, "2,2"), _fact(0, 19, "41"), _fact(0, 8, "9,9"), "junk"]
+    assert provenance.facts_found(facts, text) == facts[:2]
+
+
+def test_an_edit_keeps_untouched_facts_moved_and_drops_touched_or_bordering_ones():
+    old = "Average 2,2 across 41 items"
+    facts = [_fact(0, 8, "2,2"), _fact(0, 19, "41")]
+    new = "Mean 2,2 across 41 items"
+    assert provenance.facts_after_edit(facts, old, new) == [_fact(0, 5, "2,2"),
+                                                            _fact(0, 16, "41")]
+    assert provenance.facts_after_edit(facts, old, "Average 2,2 across 42 items") == [
+        _fact(0, 8, "2,2")]
+    assert provenance.facts_after_edit(facts, old, "Average 12,2 across 41 items") == [
+        _fact(0, 20, "41")]
+    assert provenance.facts_after_edit(facts, old, "New\n" + old) == [
+        _fact(1, 8, "2,2"), _fact(1, 19, "41")]
+    assert provenance.facts_after_edit(facts, old, old) == facts
+
+
+def test_the_tool_declaration_is_checked():
+    with pytest.raises(Exception, match="facts names 'nope'"):
+        tool("bad_tool", "x", {"doc": string("d")}, facts=("nope",))(lambda call, doc: None)
+    assert shared.definition("replace_text").facts == ("replace",)
