@@ -53,7 +53,7 @@ this subpackage is optional, and the core never imports it.
 from . import shared
 from .adapters import StrictProblem, strict_problems
 from .datasets import (DATASET_ID, DATASET_PREFIX, TYPE_LABELS, Dataset, DatasetEntry,
-                       dataset_id)
+                       dataset_id, row_range)
 from .dispatch import REF, Call, CallContext, Toolbox, collect_warnings
 from .limits import LimitError, Limits
 from .logs import CallRecord
@@ -78,6 +78,7 @@ __all__ = [
     "WorkerPool",
     "anthropic_image_tokens", "array", "boolean", "build_schema", "canonical", "check_subset",
     "collect_warnings", "dataset_id", "doc_order", "free_object", "integer", "locale_of",
+    "row_range",
     "names_as", "number", "obj", "openai_image_tokens",
     "page_list", "page_text", "shared", "strict_problems", "string", "system_prompt", "tool", "truncate", "validate_call",
     "worker_task",

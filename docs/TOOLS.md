@@ -183,7 +183,13 @@ such an address with its document (`t:sales` -> `d2/t:sales`; with several candi
 `ambiguous`, the qualified forms its `valid_options`) and holds that document's lock for the
 call, for reading only: no undo step, no version, no checks, even inside a `batch`. The
 handler reads either with `call.source(value)`, a `sources.Rows`: the `Dataset`, the source
-as resolved, its document and version, and `stale` for a dataset.
+as resolved, its document and version, and `stale` for a dataset. A dataset's source may be
+a run of its rows, written as the format libraries write a row by position:
+`d:by_region/#9:#16` (rows 9 to 16, from 1, the last included), `d:by_region/#9:` (to the
+last row), `d:by_region/#9` (one row); each value keeps its own sources, and a row past the
+last is refused with the run there is, never cut (`row_range(address)`,
+`Dataset.row_slice(first, last)`). A format's own addresses take such runs as its grammar
+does (xlsx-agent: `t:sales/#9:#16`).
 
 A format makes its addresses sources with two fields of its `DocumentFormat` (the resolver
 hook; nothing else is needed):

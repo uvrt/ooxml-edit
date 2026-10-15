@@ -2,6 +2,24 @@
 
 Versions are those in `pyproject.toml`; none is published to PyPI yet.
 
+## 0.31.0 -- unreleased
+- A run of a dataset's rows as a source (round 5, T3), at no cost in tool definitions: a
+  builder who wanted rows 1-4 of a 42-row dataset on one slide had no way to name them.
+  - `call.source("d:by_region/#9:#16")` gives rows 9 to 16 (from 1, the last included),
+    `d:by_region/#9:` row 9 to the last, `d:by_region/#9` one row; a run given the other
+    way round is the same rows. Each value keeps its sources; `Rows.address` is the run
+    (`d:by_region/#9:#16`) and a result's `from` rows count from its first row. A row past
+    the last is refused, `invalid_arguments` with the run there is as `valid_options`
+    (nothing is cut); any other part of a dataset is refused as before, now naming the
+    forms that are sources.
+  - `datasets.row_range(address)` (also `ooxml_edit.tools.row_range`): `("by_region", 9,
+    16)`, `(..., 9, None)` for `#9:`, `None` for anything else; `datasets.rows_text`.
+    `Dataset.row_slice(first, last=None)`: the rows with their sources, keys and types.
+  - `sources.first_rows(address, count)`: a source's first rows as a row range
+    (`t:sales/#1:#9`; `d:x/#10:#14` of `d:x/#10:`), `None` for a column or a key set: what
+    the format libraries' tables offer when a source gives more rows than there is room
+    for.
+
 ## 0.30.0 -- unreleased
 - `describe` lists the session's datasets (round 5, T11), at no cost in tool definitions:
   a reviewer could not see where a figure placed from `d:<id>` came from.

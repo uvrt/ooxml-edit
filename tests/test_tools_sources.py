@@ -18,7 +18,8 @@ import pytest
 from ooxml_edit.tools import (Dataset, DatasetEntry, DefaultLocale, DocumentFormat, Limits,
                               Result, ToolError, Toolbox, shared, string, strict_problems,
                               tool)
-from ooxml_edit.tools.sources import label, merged, moment_of, runs
+from ooxml_edit.tools.datasets import row_range
+from ooxml_edit.tools.sources import first_rows, label, merged, moment_of, runs
 
 import synthetic
 import tools_toys
@@ -247,6 +248,70 @@ def test_part_of_a_dataset_is_not_a_source(toolbox, session):
     ok(call(toolbox, session, "ds_put", id="sales"))
     failed(add(toolbox, session, **{"from": "d:sales[units]", "columns": ["region", "units"]}),
            "invalid_arguments")
+
+
+@pytest.mark.parametrize("source, address, categories, rows, cells", [
+    ("d:sales/#2:#3", "d:sales/#2:#3", ["South", "East"], "1-2", ["G!A3:A4"]),
+    ("d:sales/#3:#2", "d:sales/#2:#3", ["South", "East"], "1-2", ["G!A3:A4"]),
+    ("d:sales/#2:", "d:sales/#2:", ["South", "East"], "1-2", ["G!A3:A4"]),
+    ("d:sales/#1", "d:sales/#1", ["North"], "1", ["G!A2"]),
+    ("d:sales/#2:#2", "d:sales/#2", ["South"], "1", ["G!A3"]),
+])
+def test_a_run_of_a_datasets_rows_is_a_source(toolbox, session, source, address, categories,
+                                              rows, cells):
+    ok(call(toolbox, session, "ds_put", id="sales"))
+    placed = ok(add(toolbox, session, **{"from": source, "columns": ["region", "units"]})
+                ).data["from"]
+    assert SEEN[-1][1]["categories"] == categories
+    assert placed["source"] == address and placed["doc"] == "d2"
+    assert placed["categories"] == {"column": "region", "rows": rows, "sources": cells}
+
+
+@pytest.mark.parametrize("source, options", [
+    ("d:sales/#2:#4", ["d:sales/#2:#3"]),
+    ("d:sales/#4:", ["d:sales/#3"]),
+    ("d:sales/#9", ["d:sales/#3"]),
+])
+def test_a_row_past_a_datasets_last_is_refused_not_cut(toolbox, session, source, options):
+    ok(call(toolbox, session, "ds_put", id="sales"))
+    error = failed(add(toolbox, session, **{"from": source, "columns": ["region", "units"]}),
+                   "invalid_arguments")
+    assert "has 3 rows" in error.message and "nothing is cut" in error.message
+    assert error.valid_options == options and error.field == "from"
+    assert not SEEN
+
+
+@pytest.mark.parametrize("address, found", [
+    ("d:x/#9:#16", ("x", 9, 16)), ("d:x/#16:#9", ("x", 9, 16)), ("d:x/#9:", ("x", 9, None)),
+    ("d:x/#9", ("x", 9, 9)), ("d:x", None), ("d:x[a]", None), ("d:x/#0:#2", None),
+    ("d:x/#2:3", None), ("d:x/North", None), ("d:x/#2/a", None), ("t:x/#2:#3", None),
+])
+def test_row_range_reads_a_run_of_rows(address, found):
+    assert row_range(address) == found
+
+
+@pytest.mark.parametrize("address, count, found", [
+    ("t:sales", 9, "t:sales/#1:#9"), ("d2/t:sales", 1, "d2/t:sales/#1"),
+    ("d:by_region/#10:", 5, "d:by_region/#10:#14"), ("t:sales/#9:#40", 2, "t:sales/#9:#10"),
+    ("t:Stock!A1", 3, "t:Stock!A1/#1:#3"), ("t:sales[units]", 3, None),
+    ("t:sales/{a,b}", 1, None), ("d:by_region/North", 2, None), ("t:sales", 0, None),
+])
+def test_first_rows_offers_a_row_range_of_a_source(address, count, found):
+    assert first_rows(address, count) == found
+
+
+def test_a_row_slice_keeps_sources_and_refuses_past_the_end():
+    header, rows = SALES
+    sources = [[(f"G!{_column_letter(c)}{r + 2}",) for c in range(4)] for r in range(3)]
+    dataset = Dataset(header, rows, sources=sources, keys=1, types=("text",) * 4)
+    part = dataset.row_slice(2)
+    assert part.rows == tuple(tuple(row) for row in rows[1:])
+    assert part.sources[0][0] == ("G!A3",) and part.keys == 1 and part.types == dataset.types
+    assert dataset.row_slice(1, 1).rows == (tuple(rows[0]),)
+    with pytest.raises(ValueError, match="has 3 rows"):
+        dataset.row_slice(2, 4)
+    with pytest.raises(ValueError):
+        dataset.row_slice(3, 2)
 
 
 def test_a_dataset_without_sources_reports_its_rows(toolbox, session):
