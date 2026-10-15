@@ -70,7 +70,7 @@ from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 from .. import provenance
 from . import adapters, prompts
 from .datasets import (DATASET_PREFIX, Dataset, DatasetEntry, check_dataset_id,
-                       dataset_id)
+                       dataset_id, row_range, rows_text)
 from .limits import LimitError, Limits
 from .logs import CallRecord, digest, log_call, logger, shape
 from .registry import CORE, Tool, ToolGroup, merge_tools
@@ -286,17 +286,36 @@ class Call:
             raise
 
     def source(self, value: str, *, field: str | None = None) -> Rows:
-        """The rows a source names (:mod:`.sources`): a whole dataset (``d:by_region``), or
-        an address in a document this call holds (``d2/t:sales``, ``t:sales``), read now by
-        that document's format.  ``limit`` over ``Limits.max_dataset_cells``."""
+        """The rows a source names (:mod:`.sources`): a whole dataset (``d:by_region``) or a
+        run of its rows (``d:by_region/#9:#16``, ``/#9:`` to the last, ``/#9``;
+        :func:`~.datasets.row_range`), or an address in a document this call holds
+        (``d2/t:sales``, ``t:sales``), read now by that document's format.  A row past a
+        dataset's last is refused, never cut.  ``limit`` over ``Limits.max_dataset_cells``."""
         if isinstance(value, str) and value.startswith(DATASET_PREFIX):
             entry = self.dataset(value, field=field)
+            address, dataset = entry.address, entry.dataset
             if value != entry.address:
-                raise ToolError("invalid_arguments", f"a source is a whole dataset "
-                                f"({entry.address}), not part of one", field=field)
+                found = row_range(value)
+                if found is None:
+                    raise ToolError("invalid_arguments", f"a source is a whole dataset "
+                                    f"({entry.address}) or a run of its rows "
+                                    f"({entry.address}/#1:#9, /#10: to the last), not "
+                                    "another part of one", field=field,
+                                    valid_options=[entry.address, f"{entry.address}/#1:"])
+                _, first, last = found
+                count = len(dataset.rows)
+                if max(first, last or first) > count:
+                    raise ToolError("invalid_arguments", f"{entry.address} has {count} rows; "
+                                    f"there is no row #{max(first, last or first)} (nothing "
+                                    "is cut)", field=field,
+                                    valid_options=[entry.address + rows_text(min(first, count),
+                                                                            count)]
+                                    if count else [])
+                dataset = dataset.row_slice(first, last)
+                address = entry.address + rows_text(first, last)
             self.context.datasets_used.setdefault(entry.id, entry)
             fmt = self.session.formats.get(entry.kind) if entry.kind else None
-            return Rows(entry.address, entry.dataset, doc=entry.doc, kind=entry.kind,
+            return Rows(address, dataset, doc=entry.doc, kind=entry.kind,
                         name=entry.name, version=entry.version, stale=entry.stale,
                         merge=getattr(fmt, "merge_sources", None))
         doc, address = qualify(value, self.session.documents, self.session.formats,

@@ -46,6 +46,13 @@ Datasets are session state, not document content: undo never removes one, defini
 not an undo step, and a reading call may define one.  A call that fails defines none; a
 batch defines its ops' datasets only if every op succeeds.
 
+**A run of its rows.**  ``d:by_region/#9:#16`` names rows 9 to 16 (from 1, the last
+included), ``d:by_region/#9:`` row 9 to the last, ``d:by_region/#9`` one row: what a tool
+that takes a source places (:meth:`Call.source <.dispatch.Call.source>`), each value with
+its own sources, as the format libraries' ``t:`` addresses write a row by position.  A
+range given the other way round (``#16:#9``) is the same rows; a row past the last is
+refused, never cut (:func:`row_range`, :meth:`Dataset.row_slice`).
+
 **Limits.**  ``Limits.max_datasets`` per session (defining an id that exists replaces it,
 which needs no room) and ``Limits.max_dataset_cells`` (rows times columns) per dataset;
 sources are not counted.
@@ -71,6 +78,9 @@ DATASET_PREFIX = "d:"
 #: at most 64 characters.  Case counts.
 DATASET_ID = re.compile(r"^[A-Za-z_][A-Za-z0-9_.\-]{0,63}$")
 
+#: What may follow a dataset's id to name a run of its rows: ``/#9:#16``, ``/#9:``, ``/#9``.
+_ROW_RANGE = re.compile(r"^/#([1-9][0-9]{0,6})(?:(:)(?:#([1-9][0-9]{0,6}))?)?$")
+
 
 #: The column type labels a dataset may carry -- what the format libraries read: ``number``, ``percent`` (a fraction, 0.25 for 25%),
 #: ``date``, ``time`` and ``datetime`` (a Python ``date``/``time``/``datetime``, or ISO
@@ -90,6 +100,34 @@ def dataset_id(address: str) -> str | None:
     body = address[len(DATASET_PREFIX):]
     ends = [i for i in (body.find("["), body.find("/")) if i >= 0]
     return body[:min(ends)] if ends else body
+
+
+def row_range(address: str) -> tuple[str, int, int | None] | None:
+    """The id and the rows a run of a dataset's rows names: ``("by_region", 9, 16)`` of
+    ``d:by_region/#9:#16`` (from 1, the last included; given the other way round, the same),
+    ``("by_region", 9, None)`` of ``d:by_region/#9:`` (to the last row), ``("by_region",
+    9, 9)`` of ``d:by_region/#9``.  ``None`` for anything else -- a whole dataset, a
+    column, a row by key."""
+    id = dataset_id(address)
+    if id is None:
+        return None
+    match = _ROW_RANGE.match(address[len(DATASET_PREFIX) + len(id):])
+    if match is None:
+        return None
+    first = int(match.group(1))
+    if match.group(2) is None:
+        return id, first, first
+    if match.group(3) is None:
+        return id, first, None
+    last = int(match.group(3))
+    return id, min(first, last), max(first, last)
+
+
+def rows_text(first: int, last: int | None) -> str:
+    """A run of rows as an address writes it after an id: ``/#9:#16``, ``/#9:``, ``/#9``."""
+    if last is None:
+        return f"/#{first}:"
+    return f"/#{first}" if first == last else f"/#{first}:#{last}"
 
 
 def check_dataset_id(id: str, *, field: str | None = "id") -> str:
@@ -219,6 +257,24 @@ class Dataset:
     def records(self) -> list[dict[str, Any]]:
         """The rows as mappings by column name."""
         return [dict(zip(self.columns, row)) for row in self.rows]
+
+    def row_slice(self, first: int, last: int | None = None) -> "Dataset":
+        """Rows ``first`` to ``last`` (from 1, both included; ``None``: to the last row),
+        with their sources, keys and types; no ``detail`` (the producer's, which describes
+        every row).  :class:`ValueError` for a row past the last: nothing is cut.
+
+        For example::
+
+            dataset.row_slice(9, 16)        # rows 9 to 16, eight rows"""
+        count = len(self.rows)
+        end = count if last is None else last
+        if not 1 <= first <= end:
+            raise ValueError(f"rows run from 1 to the last, first to last: {first} to {end}")
+        if end > count:
+            raise ValueError(f"the dataset has {count} rows; there is no row {end}")
+        sources = None if self.sources is None else self.sources[first - 1:end]
+        return Dataset(self.columns, self.rows[first - 1:end], sources=sources,
+                       keys=self.keys, types=self.types)
 
 
 def _labels(types: Any, columns: tuple[str, ...]) -> tuple[str | None, ...] | None:
