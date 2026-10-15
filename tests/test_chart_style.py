@@ -16,8 +16,8 @@ from lxml import etree
 
 import charts_synthetic as cs
 from ooxml_edit.charts import ChartDataError
-from ooxml_edit.charts.actions import (apply_style_action, chart_style_json, gridline_arguments,
-                                       scale_arguments)
+from ooxml_edit.charts.actions import (add_style_actions, apply_add_style, apply_style_action,
+                                       chart_style_json, gridline_arguments, scale_arguments)
 from ooxml_edit.charts.format import FormatError, color_element
 from test_chart import chart_order_violations
 from test_chart_create import QUARTERS, new
@@ -578,6 +578,54 @@ def test_the_style_actions_and_what_read_adds():
     assert seen["scales"]["value"]["maximum"] == 5
     assert seen["series_format"]["Target"]["marker"] == "diamond"
     assert seen["series_format"]["Current"]["points"] == {4: {"fill": "accent2", "line": None}}
+    gates(document, chart)
+
+
+TWO = [{"name": "Now", "values": [1, 2]}, {"name": "Goal", "values": [2, 2], "type": "line"}]
+
+
+@pytest.mark.parametrize("kind, data, key", [
+    ("column", TWO, "fill"), ("stacked_bar", TWO[:1], "fill"), ("bubble", TWO[:1], "fill"),
+    ("radar_filled", TWO[:1], "fill"), ("line", TWO[:1], "line"), ("radar", TWO[:1], "line"),
+    ("scatter", TWO[:1], "marker_fill")])
+def test_add_s_look_is_the_separate_calls_in_order(kind, data, key):
+    actions = add_style_actions(kind, data, data_labels=True, colors=["tx2"],
+                                style={"size": 9}, part="legend")
+    assert actions == [("show_data_labels", {}),
+                       ("format_series", {"series": "0", "style": {key: "tx2"}}),
+                       ("set_text_style", {"style": {"size": 9}, "part": "legend"})]
+
+
+def test_add_s_colours_line_a_column_chart_s_line_series_and_fill_a_pie_s_slices():
+    assert add_style_actions("column", TWO, colors=["tx2", "accent2"])[1] == (
+        "format_series", {"series": "1", "style": {"line": "accent2"}})
+    assert add_style_actions("pie", TWO[:1], colors=["tx2", "accent2"]) == [
+        ("format_point", {"series": "0", "category": str(k), "style": {"fill": colour}})
+        for k, colour in enumerate(["tx2", "accent2"])]
+    assert add_style_actions("column", TWO) == []
+
+
+@pytest.mark.parametrize("given, words", [
+    ({"colors": ["a", "b", "c"]}, "3 colours for 2 series"),
+    ({"colors": "tx2"}, "a list of colours"),
+    ({"colors": [""]}, r"colors\[0\] is a colour"),
+    ({"colors": ["tx2", "no such colour"]}, r"colors\[1\]: "),
+    ({"style": {"fill": "tx2"}}, "colour series with colors"),
+    ({"style": {}}, "style is empty"),
+    ({"part": "title"}, "give style too"),
+    ({"data_labels": "yes"}, "true or false")])
+def test_add_s_look_is_refused_before_anything_is_made(given, words):
+    with pytest.raises(ChartDataError, match=words):
+        add_style_actions("column", TWO, **given)
+
+
+def test_add_s_look_applied_after_the_chart_is_made():
+    document, chart = new("column")
+    apply_add_style(chart, add_style_actions("column", [{}, {}], data_labels=True,
+                                             colors=["tx2", "accent2"], style={"size": 9}))
+    seen = chart_style_json(chart)
+    assert seen["series_format"]["North"]["fill"] == "tx2"
+    assert chart.text_style("data_labels")["size"] == 9
     gates(document, chart)
 
 

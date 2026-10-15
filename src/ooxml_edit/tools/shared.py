@@ -272,7 +272,7 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
          "Add, read or change a chart. add: a new chart, styled as Office inserts one. read: "
          "type, data, formats, scales, and what Edit Data holds. Others change data, titles, "
          "legend, labels, axes, colours, series type, text or gridlines; values and workbook "
-         "change together.",
+         "change together. Batch several changes.",
          {"doc": _DOC,
           "target": string("The chart; add: decks the slide, documents the paragraph to "
                            "follow. Or $ref."),
@@ -317,6 +317,9 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
                        optional=True),
           "gridlines": string("set_gridlines, add: which gridlines.",
                               enum=["none", "major", "minor", "both"], optional=True),
+          "data_labels": boolean("add: values as labels.", optional=True),
+          "colors": array(string(), "add: series colours in order (pie: slices').",
+                          optional=True),
           "style": obj({"fill": string(optional=True), "line": string(optional=True),
                         "line_width": number(optional=True),
                         "dash": string(enum=["solid", "dash", "dot", "dash_dot", "long_dash"],
@@ -328,9 +331,9 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
                         "marker_fill": string(optional=True), "font": string(optional=True),
                         "size": number(optional=True), "bold": boolean(optional=True),
                         "color": string(optional=True)},
-                       "format_series, format_point: fill to marker_fill; set_text_style: "
-                       "font to color. Colours as shapes take them, or none.", optional=True),
-          "part": string("set_text_style: only this text. Default all.",
+                       "format_series, format_point: fill to marker_fill; set_text_style, "
+                       "add: font to color. Colours as shapes take them, or none.", optional=True),
+          "part": string("set_text_style, add: only this text. Default all.",
                          enum=["title", "axis_titles", "axis_labels", "data_labels",
                                "legend"], optional=True),
           "labels": array(string(), "set_point_labels: one per point.", optional=True),
@@ -349,7 +352,7 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
                            optional=True)},
          group=MISC, mutates=True, refs=("target",), sources=("from",),
          reads=_reading_action, wrap=lambda fn: _chart_rows(fn),
-         aliases={"slide": _slide_on_add, "from_columns": "columns"}),
+         aliases={"slide": _slide_on_add, "from_columns": "columns", "colours": "colors"}),
     # S12
     Spec("edit_smartart",
          "Change a SmartArt diagram's node text, or add and remove nodes. Returns the nodes.",
