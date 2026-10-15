@@ -2,6 +2,39 @@
 
 Versions are those in `pyproject.toml`; none is published to PyPI yet.
 
+## 0.33.0 -- unreleased
+- Text facts (round 5, T4), at no cost in tool definitions: tables and charts kept where
+  their values came from, text did not -- "Average 2.2 across 41 items" in a title had no
+  record of the 2.2, and builders expanded their own `{{...}}` placeholders before calling
+  the tools.
+  - A *reference* in a text argument, `{{d:by_topic/door/mean}}` (dataset, row by key or
+    `#3` by position, column; `{{t:checks/N-1/rating}}` in another open document, its row
+    read by the format's resolver), is written as the value before the handler runs: in the
+    session's locale as a table cell gets it (`2,2` in nl-BE; a `percent` column as `25%`),
+    or through a number format after it, `:0`, `:0.0`, `:#,##0.0`, `:0.0%` (half away from
+    zero, the locale's separators). `\{{` writes one literally; `{{name}}` and other braces
+    stay as they are (only `{{d:` and a loaded format's prefix start a reference). A
+    reference to a missing dataset, table, row or column, to a blank, or to more than one
+    value is refused with the field and what there is, so nothing is written half.
+  - Declared per tool: `Tool.facts` (and `tool(facts=...)`, `Spec(facts=...)`) lists the
+    text arguments, paths as `refs` writes them, an array of arrays of strings too
+    (`data[]`). The dispatcher qualifies `t:` references with their document and holds its
+    lock (as for `sources`), in a batch's ops too; `call.facts` (`call.facts_at(field)`)
+    says what was written where, each a `textfacts.Fact` with its record; `call.fact(address)`
+    resolves one. The result's `data.facts` lists each value: `from`, `text`, `sources`
+    (and `stale`). `replace_text` declares `replace`.
+  - `ooxml_edit.provenance`: a fact is a record's fields without `v` (`source` the reference
+    as given, `format`, `text`, `document`, `version`, `sources`) and its place, `p` (the
+    paragraph) and `at` (the character); `place`, `offset`, `facts_found` (the facts still
+    where they say -- a reader's check) and `facts_after_edit(facts, old, new)` (the facts an
+    edit leaves true, moved; a touched or bordering one is dropped), `edit_span`.
+  - Chosen over a `from` per text run: a reference costs no parameter in any definition
+    (a run-level `from` would add one to every text spec, in the core's `ppt_set_text`
+    too, and a model would have to split its sentence into runs to use it), works in every
+    text a tool declares, and says the value's place by itself. On by default: `{{d:` or
+    `{{t:` in ordinary text is next to impossible, and `\{{` covers it.
+  - Definitions: unchanged (the format libraries add a sentence to their prompts).
+
 ## 0.32.0 -- unreleased
 - A chart added with its look in one call (round 5, T2): styling one new chart took a
   builder six turns (scale, data labels, series colours, size, text twice). `edit_chart`'s

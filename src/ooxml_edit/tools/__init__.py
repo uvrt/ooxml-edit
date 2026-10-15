@@ -35,6 +35,9 @@ What is here:
   the session under ``d:<id>`` and named by later calls on any document;
 * :mod:`.sources` -- :class:`Rows`: what a tool takes rows from, a dataset or another open
   document's address its format resolves (``t:sales``), with where each value came from;
+* :mod:`.textfacts` -- references to one value in text (``{{d:by_topic/door/mean}}``),
+  written as the value in the session's locale by the dispatcher, each a fact kept as
+  provenance;
 * :mod:`.limits` -- size limits, magic-byte checks and the zip-bomb guard;
 * :mod:`.worker` -- worker processes whose deadlines are kept by killing the worker
   (subprocess workers in a process that may not start multiprocessing children);
@@ -50,7 +53,7 @@ out as bytes to the application, and no tool may take a path.  Like :mod:`ooxml_
 this subpackage is optional, and the core never imports it.
 """
 
-from . import shared
+from . import shared, textfacts
 from .adapters import StrictProblem, strict_problems
 from .datasets import (DATASET_ID, DATASET_PREFIX, TYPE_LABELS, Dataset, DatasetEntry,
                        dataset_id, row_range)
@@ -80,6 +83,6 @@ __all__ = [
     "collect_warnings", "dataset_id", "doc_order", "free_object", "integer", "locale_of",
     "row_range",
     "names_as", "number", "obj", "openai_image_tokens",
-    "page_list", "page_text", "shared", "strict_problems", "string", "system_prompt", "tool", "truncate", "validate_call",
+    "page_list", "page_text", "shared", "textfacts", "strict_problems", "string", "system_prompt", "tool", "truncate", "validate_call",
     "worker_task",
 ]

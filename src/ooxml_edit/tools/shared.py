@@ -109,7 +109,7 @@ class Spec:
                  documents: Any = ("doc",), route: str | None = None, strict: bool = True,
                  batchable: bool = True, composite: bool = False,
                  refs: tuple[str, ...] = (), datasets: tuple[str, ...] = (),
-                 sources: tuple[str, ...] = (),
+                 sources: tuple[str, ...] = (), facts: tuple[str, ...] = (),
                  reads: Callable[[Mapping[str, Any]], bool] | None = None,
                  wrap: Callable[[Callable[..., Any]], Callable[..., Any]] | None = None,
                  aliases: Mapping[str, Any] | None = None) -> None:
@@ -127,6 +127,7 @@ class Spec:
         self.refs = refs
         self.datasets = datasets
         self.sources = sources
+        self.facts = facts
         self.reads = reads
         #: Argument names read as the tool's own (:attr:`~.registry.Tool.aliases`).
         self.aliases = dict(aliases or {})
@@ -142,7 +143,8 @@ class Spec:
                     group=self.group, mutates=self.mutates, documents=self.documents,
                     exactly_one=self.exactly_one, route=self.route, strict=self.strict,
                     batchable=self.batchable, composite=self.composite, refs=self.refs,
-                    datasets=self.datasets, sources=self.sources, reads=self.reads,
+                    datasets=self.datasets, sources=self.sources, facts=self.facts,
+                    reads=self.reads,
                     aliases=self.aliases)
 
     @property
@@ -242,7 +244,7 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
           "slides": _slides(". Default all"),
           "range": _RANGE,
           "stories": _STORIES},
-         mutates=True),
+         mutates=True, facts=("replace",)),
     # S8
     Spec("render",
          "Render slides or pages to PNG to look at them, at most 4 per call. Images cost "
