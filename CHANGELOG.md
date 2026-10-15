@@ -2,6 +2,23 @@
 
 Versions are those in `pyproject.toml`; none is published to PyPI yet.
 
+## 0.34.0 -- unreleased
+- Asset catalogues (round 5, T20): production shipped two tools of its own over a brand
+  icon set (about 2,800 SVGs with a keyword index) to search and insert icons. A catalogue
+  is now application configuration a format takes in its settings, and the tools it brings
+  cost nothing in a toolbox without one.
+  - `DocumentFormat.tools`: tools a format offers only by its configuration. The `Toolbox`
+    adds each after its own tools; one named like a toolbox tool replaces it in its place
+    (the same tool with an `asset` argument), which must serve that format's kind alone
+    (`ValueError` otherwise).
+  - `ooxml_edit.tools.assets`: the `AssetCatalogue` protocol (`search(query, limit)`,
+    `get(id) -> (bytes, MIME type)`), `Asset`, and `FolderCatalogue(folder, index=None)`
+    over a folder and a JSON or CSV index (`file` required and inside the folder; `id`,
+    `name`, `keywords` optional; documented in the module and `docs/TOOLS.md`); `find` and
+    `fetch` answer a tool's search and placement with tool errors (`not_found` naming the
+    search tool, `refused` for a failing catalogue, `limit` over the session's limits).
+  - Definitions: unchanged without a catalogue.
+
 ## 0.33.0 -- unreleased
 - Text facts (round 5, T4), at no cost in tool definitions: tables and charts kept where
   their values came from, text did not -- "Average 2.2 across 41 items" in a title had no
