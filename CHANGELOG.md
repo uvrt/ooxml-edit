@@ -2,6 +2,33 @@
 
 Versions are those in `pyproject.toml`; none is published to PyPI yet.
 
+## 0.32.0 -- unreleased
+- A chart added with its look in one call (round 5, T2): styling one new chart took a
+  builder six turns (scale, data labels, series colours, size, text twice). `edit_chart`'s
+  `add` took the scale, gridlines, legend position, number format and frame already; now
+  also:
+  - `data_labels: true` -- `show_data_labels` on every series (their format follows the
+    values', `number_format`); `colors` -- each series' colour in order, as `format_series`
+    takes it, filling a bar, area or bubble series, lining a line or radar series (a column
+    chart's line series too) and colouring a scatter series' markers, a pie's slices one
+    `format_point` each; the rest keep Office's; `style` with `part` -- `set_text_style`
+    (font, size, bold, colour; all the chart's text without `part`).
+  - The chart is the one `add` and those calls write, in that order (labels before text,
+    which `set_text_style` needs), byte for byte, tested in both format libraries; one undo
+    step. `charts.actions.add_style_actions` turns the arguments into the calls (and
+    refuses a list longer than the series, a colour that is not one, a `style` key that is
+    not the text's, `part` without `style` before anything is made); `apply_add_style` runs
+    them on the new chart.
+  - Chosen over a generic list of actions on one call (`then: [{action, arguments}]`):
+    that costs 98 estimated tokens in every definition and needs a free object, so
+    `edit_chart` could never be strict; this costs 62, and a call names a colour list
+    rather than a list of calls. Several other changes go in one `batch`, which the
+    description now says.
+  - Definitions: `data_labels` and `colors` (alias `colours`) on `edit_chart` (deferred in
+    both formats), "add" in `style`'s and `part`'s descriptions, "Batch several changes."
+    -- 62 or 63 estimated tokens in every definition (pptx 12,403 -> 12,465, docx 12,153 ->
+    12,216), none in the core. The strict set is unchanged: `edit_chart` is not in it.
+
 ## 0.31.0 -- unreleased
 - A run of a dataset's rows as a source (round 5, T3), at no cost in tool definitions: a
   builder who wanted rows 1-4 of a 42-row dataset on one slide had no way to name them.
