@@ -783,3 +783,87 @@ def test_iso_categories_of_a_text_column_still_match_as_text(toolbox, categories
                         action="set_values", series="units", **{"from": "d:codes"}),
                    "not_found")
     assert "no row of d:codes" in error.message
+
+
+# -- date_format (round 6, R9) ------------------------------------------------------------------
+
+
+def _in(language):
+    return dataclasses.replace(DUTCH, language=language)
+
+
+def test_label_writes_a_date_in_a_date_format_and_leaves_the_rest():
+    assert label(DAYS[0], date_format="d mmmm yyyy") == "1 March 2026"
+    assert label(DAYS[0], _in("de-DE"), date_format="d. mmmm yyyy") == "1. März 2026"
+    assert label("2026-04-15", DUTCH, type="date", date_format="dd/mm/yyyy") == "15/04/2026"
+    assert label("2026-04-15T09:30:00", type="datetime", date_format="d mmm") == "15 Apr"
+    assert label("2026-04-15", date_format="dd/mm/yyyy") == "2026-04-15"   # unlabelled text
+    assert label(dt.time(9, 30), date_format="dd/mm/yyyy") == "09:30"      # no date
+    assert label(2.5, DUTCH, date_format="dd/mm/yyyy") == "2,5"
+
+
+@pytest.mark.parametrize("language, code", [
+    ("en-US", r"[$-409]d\ mmmm\ yyyy"), ("nl-NL", r"[$-413]d\ mmmm\ yyyy"),
+    ("de-DE", r"[$-407]d\ mmmm\ yyyy"), ("it-IT", r"[$-410]d\ mmmm\ yyyy"),
+])
+def test_add_from_with_a_date_format_passes_dates_in_the_locales_code(toolbox, language, code):
+    session = _session(toolbox, locale=_in(language))
+    session.keep_datasets([DatasetEntry("days", Dataset.from_records(
+        [{"day": DAYS[0], "units": 3}, {"day": DAYS[1], "units": 5}]))])
+    ok(add(toolbox, session, date_format="d mmmm yyyy", **{"from": "d:days"}))
+    categories = SEEN[-1][1]["categories"]
+    assert categories == list(DAYS)
+    assert [type(day).__name__ for day in categories] == ["DateCategory"] * 2
+    assert {day.format_code for day in categories} == {code}
+    assert "date_format" not in SEEN[-1][1]                  # the handler never sees it
+
+
+def test_a_date_columns_iso_text_takes_a_date_format_too(toolbox, session):
+    session.keep_datasets([DatasetEntry("iso", ISO_DAYS)])
+    ok(add(toolbox, session, date_format="dd/mm/yyyy", **{"from": "d:iso"}))
+    assert SEEN[-1][1]["categories"] == list(DAYS)
+    assert SEEN[-1][1]["categories"][0].format_code == "[$-409]dd/mm/yyyy"
+
+
+@pytest.mark.parametrize("arguments, message", [
+    ({"date_format": "d mmmm yyyy"}, "for the dates of add from"),
+    ({"date_format": "d mmmm yyyy", "from": "d:days", "action": "set_values",
+      "target": "c1", "series": "units"}, "date_format is for add"),
+    ({"date_format": "d mmmm yyyy", "from": "d:days", "chart_type": "scatter"},
+     "x values are numbers"),
+    ({"date_format": "hh:mm", "from": "d:days"}, "'h' is no date token"),
+    ({"date_format": "d mmmm yyyy", "from": "d:words"}, "not a date"),
+])
+def test_a_date_format_is_checked(toolbox, arguments, message):
+    session = _session(toolbox)
+    session.keep_datasets([
+        DatasetEntry("days", Dataset.from_records([{"day": DAYS[0], "units": 3}])),
+        DatasetEntry("words", Dataset.from_records([{"k": "a", "units": 3}]))])
+    _chart(toolbox, session, ["1/3/2026"])
+    arguments = {"doc": "d1", "target": "1", "action": "add", "chart_type": "column",
+                 **arguments}
+    error = failed(call(toolbox, session, "edit_chart", **arguments), "invalid_arguments")
+    assert message in error.message
+    assert error.field == "date_format" or message == "not a date"
+
+
+def test_a_name_token_in_a_locale_without_names_is_refused_numbers_are_not(toolbox):
+    session = _session(toolbox, locale=_in("pt-BR"))
+    session.keep_datasets([DatasetEntry("days", Dataset.from_records(
+        [{"day": DAYS[0], "units": 3}]))])
+    error = failed(add(toolbox, session, date_format="d mmmm yyyy", **{"from": "d:days"}),
+                   "invalid_arguments")
+    assert "no month or day names are measured for pt-BR" in error.message
+    ok(add(toolbox, session, date_format="dd/mm/yyyy", **{"from": "d:days"}))
+    assert SEEN[-1][1]["categories"][0].format_code == "dd/mm/yyyy"     # no measured id
+
+
+def test_set_values_matches_a_date_column_to_date_serial_categories(toolbox, session):
+    session.keep_datasets([DatasetEntry("days", Dataset.from_records(
+        [{"day": DAYS[0], "units": 3}, {"day": DAYS[1], "units": 5}]))])
+    _chart(toolbox, session, ["x", "y"])
+    # A chart whose date categories are kept as serials: 15 April and 1 March 2026.
+    session.documents["d1"].document.charts["c1"]["categories"] = [46127, 46082]
+    ok(call(toolbox, session, "edit_chart", doc="d1", target="c1", action="set_values",
+            series="units", **{"from": "d:days"}))
+    assert SEEN[-1][1]["values"] == [5, 3]

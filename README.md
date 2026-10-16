@@ -44,10 +44,10 @@ package.save("out.zip")
 
 ## What it covers
 
-- **Core** (`ooxml_edit.opc`, `.xml`, `.history`, `.stamp`, `.provenance`): lossless OPC
+- **Core** (`ooxml_edit.opc`, `.xml`, `.history`, `.stamp`, `.provenance`, `.dates`): lossless OPC
   packages, parts and relationships, safe removal (`release`/`reap`), embedded packages,
-  schema-ordered insertion, undo/redo with batches and versions, durable ids, and the
-  record of where placed values came from.
+  schema-ordered insertion, undo/redo with batches and versions, durable ids, the
+  record of where placed values came from, and date patterns in measured month names.
   See [docs/CORE.md](docs/CORE.md).
 - **`ooxml_edit.charts`** (optional): charts with their embedded workbooks, new charts from
   data, and SmartArt diagrams, edited the same way in a deck or a Word document.

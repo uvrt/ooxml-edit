@@ -44,7 +44,17 @@ dataset, and a derive that rounds (``round``) has its values rounded already.  A
 that looks like a format but is none (``{{d:x/#1/avg:0.20}}``) is refused as such, listing
 the forms (:func:`bad_format`), unless a column of that whole name (``avg:0.20``) exists.
 
-**Dates** are written as a table cell gets them, in the locale's day order.
+**Dates** are written as a table cell gets them, in the locale's day order -- or in a date
+pattern after the address, in the date letters of Office's number formats (:mod:`ooxml_edit.dates`):
+``{{d:events/#1/when:d mmmm yyyy}}`` is ``2 March 2026`` (``2 maart 2026`` in nl-BE),
+``{{d:events/#1/when:dd/mm/yyyy}}`` ``02/03/2026``.  The tokens are ``d dd ddd dddd m mm
+mmm mmmm mmmmm yy yyyy``; every other character is written as given, so the separators
+are the pattern's in every locale (the text is fixed, not a format Office applies).  Month
+and day names are the measured ones of the session's locale; a locale without them
+refuses a name token, naming the numeric ones.  A date pattern on a value that is no date
+is refused, and a number format on a date, each naming the other.  A suffix that looks
+like a date pattern but is none (``:DD/MM/YYYY HH:mm``) is refused as such, as a bad
+number format is.
 
 **A document's own references.**  A format may resolve references to a thing of the
 document the text is written into (``DocumentFormat.own_facts``, ``{prefix: resolve}``):
@@ -61,10 +71,11 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from datetime import time as _dt_time
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
-from .. import provenance
+from .. import dates, provenance
 from .datasets import DATASET_PREFIX
 from .results import ToolError
 from .sources import QUALIFIED, Rows, label, merged, number, prefixes, what
@@ -78,6 +89,9 @@ FORMAT = re.compile(r":((?:#,##)?0(?:\.(0{1,9}))?(%)?)\s*$")
 ATTEMPTED_FORMAT = re.compile(r"\s*(?:[#0-9.,%\s]*[#0-9][#0-9.,%\s]*|\.?[0-9]*[fFgGdD%])\s*")
 #: The number formats a reference takes, as an error lists them.
 FORMS = ("0", "0.0", "0.00", "#,##0", "#,##0.0", "0%", "0.0%")
+#: A suffix after the address that a model meant as a date pattern: the date letters
+#: (``d``, ``m``, ``y``; ``h``, ``s`` and ``T`` of a time; ``%`` of strftime) and separators.
+ATTEMPTED_DATE = re.compile(r"\s*(?=[^dDmMyY]*[dDmMyY])[dDmMyYhHsSTt%/\-.,:\s'’\"\\]+\s*")
 #: How many values one argument may reference.
 MAX_FACTS = 50
 
@@ -197,7 +211,7 @@ def expand(text: str, where: str, known: Sequence[str],
         written, found = resolve(address, where)
         shown = QUALIFIED.match(address)
         given = shown.group(2) if shown else address
-        given = FORMAT.sub("", given)
+        given = strip_format(given)
         facts.append(Fact(where, length, length + len(written), written, given, found))
         out.append(written)
         length += len(written)
@@ -205,13 +219,62 @@ def expand(text: str, where: str, known: Sequence[str],
     return "".join(out), facts
 
 
+def _suffix_at(address: str) -> int | None:
+    """Where the first ``:`` after the source's prefix (``d:``, ``t:``) is, outside quotes
+    -- the start of a date pattern's suffix -- in ``address``; ``None`` without one."""
+    match = QUALIFIED.match(address)
+    colon = address.find(":", match.start(2) if match else 0)
+    if colon < 0:
+        return None
+    quoted = False
+    for at in range(colon + 1, len(address)):
+        char = address[at]
+        if char == "'":
+            quoted = not quoted
+        elif char == ":" and not quoted:
+            return at
+    return None
+
+
+def date_suffix(address: str) -> tuple[str, str] | None:
+    """``(address without it, pattern)`` when ``address`` ends in a date pattern
+    (:func:`ooxml_edit.dates.parse` takes everything after the first ``:`` past the source's
+    prefix); ``None`` otherwise -- a number format, a column's own colon."""
+    at = _suffix_at(address)
+    if at is None:
+        return None
+    pattern = address[at + 1:].strip()
+    if FORMAT.fullmatch(":" + pattern):
+        return None
+    try:
+        dates.parse(pattern)
+    except dates.PatternError:
+        return None
+    return address[:at], pattern
+
+
+def is_date_pattern(fmt: str | None) -> bool:
+    """Whether a reference's format (:func:`split`'s) is a date pattern, not a number format."""
+    return fmt is not None and FORMAT.fullmatch(":" + fmt) is None
+
+
+def strip_format(address: str) -> str:
+    """``address`` without its number format or date pattern."""
+    found = date_suffix(address)
+    return found[0] if found else FORMAT.sub("", address)
+
+
 def split(address: str) -> tuple[str, list[tuple[str, bool]], str | None]:
     """``(source, segments, format)`` of a reference's address: the source with its
     document handle (``d2/t:x``), the segments after it (row, column) each unquoted and
-    whether it was quoted, the number format."""
-    found = FORMAT.search(address)
-    fmt = found.group(1) if found else None
-    body = address[:found.start()] if found else address
+    whether it was quoted, the number format or date pattern (:func:`is_date_pattern`)."""
+    pattern = date_suffix(address)
+    if pattern is not None:
+        body, fmt = pattern
+    else:
+        found = FORMAT.search(address)
+        fmt = found.group(1) if found else None
+        body = address[:found.start()] if found else address
     parts = _segments(body.strip())
     if len(parts) > 1 and re.fullmatch(r"d[0-9]+", parts[0][0]) and not parts[0][1]:
         parts = [(parts[0][0] + "/" + parts[1][0], False)] + parts[2:]
@@ -219,25 +282,46 @@ def split(address: str) -> tuple[str, list[tuple[str, bool]], str | None]:
 
 
 def bad_format(address: str) -> str | None:
-    """The suffix after the last ``:`` of ``address``'s last segment when it looks like a
-    number format (:data:`ATTEMPTED_FORMAT`) and is not one :data:`FORMAT` takes
-    (``0.20`` of ``d:x/#1/avg:0.20``); ``None`` otherwise, or when that segment is quoted
-    (``'avg:0.20'`` names a column)."""
-    if FORMAT.search(address):
+    """The suffix of ``address`` when it looks like a number format or a date pattern and is
+    neither: after the last ``:`` of the last segment, one that looks like a number format
+    (:data:`ATTEMPTED_FORMAT`) and is not one :data:`FORMAT` takes (``0.20`` of
+    ``d:x/#1/avg:0.20``); else after the first ``:`` past the source's prefix, one that
+    looks like a date pattern (:data:`ATTEMPTED_DATE`: ``DD/MM/YYYY HH:mm``, ``%d-%m-%Y``)
+    and is not one.  ``None`` otherwise, or when that segment is quoted (``'avg:0.20'``
+    names a column)."""
+    if FORMAT.search(address) or date_suffix(address) is not None:
         return None
     parts = _segments(address.strip())
     last = parts[-1]
     source = len(parts) == 1 or (len(parts) == 2 and re.fullmatch(r"d[0-9]+", parts[0][0]))
-    if last[1] or last[0].count(":") < (2 if source else 1):    # d:2024 is a source
-        return None
-    suffix = last[0].rpartition(":")[2]
-    return suffix if suffix.strip() and ATTEMPTED_FORMAT.fullmatch(suffix) else None
+    if not last[1] and last[0].count(":") >= (2 if source else 1):    # d:2024 is a source
+        suffix = last[0].rpartition(":")[2]
+        if suffix.strip() and ATTEMPTED_FORMAT.fullmatch(suffix):
+            return suffix
+    at = _suffix_at(address.strip())
+    attempt = address.strip()[at + 1:] if at is not None else ""
+    return attempt if attempt.strip() and ATTEMPTED_DATE.fullmatch(attempt) else None
 
 
 def format_error(address: str, suffix: str, field: str | None) -> ToolError:
     """The refusal of a reference whose suffix :func:`bad_format` found: what it is not, the
-    forms there are, and the reference written with the nearest one."""
+    forms there are -- number formats and date tokens -- and the reference written with the
+    nearest one."""
     body = address.strip()
+    if not ATTEMPTED_FORMAT.fullmatch(suffix):
+        at = _suffix_at(body)
+        body = body[:at] if at is not None else body
+        try:
+            dates.parse(suffix.strip())
+            why = ""
+        except dates.PatternError as error:
+            why = str(error).split(": ", 1)[-1]
+        return ToolError("invalid_arguments", f"{{{{{address}}}}}: {suffix.strip()!r} is not a "
+                         f"date pattern a reference takes{': ' + why if why else ''}. A date "
+                         f"pattern is the date letters of a number format -- {dates.TOKENS_TEXT} -- with "
+                         "anything else written as given; e.g. "
+                         f"{{{{{body}:d mmmm yyyy}}}} or {{{{{body}:dd/mm/yyyy}}}}",
+                         field=field, valid_options=list(dates.TOKENS))
     body = body[:body.rfind(":")]
     grouped = "#," in suffix
     point = "." if "." in suffix or grouped else ","          # 0,00: a decimal comma
@@ -251,8 +335,9 @@ def format_error(address: str, suffix: str, field: str | None) -> ToolError:
     return ToolError("invalid_arguments", f"{{{{{address}}}}}: {suffix.strip()!r} is not a "
                      "number format a reference takes. Write :0 (a whole number), :0.0 to "
                      ":0.000000000 (that many decimals, one 0 each), :#,##0 or :#,##0.0 "
-                     "(thousands grouped), with % at the end for a percent (:0.0%); e.g. "
-                     f"{{{{{body}:{near}}}}}", field=field,
+                     "(thousands grouped), with % at the end for a percent (:0.0%); a "
+                     f"date takes a date pattern of {' '.join(dates.TOKENS)} "
+                     f"(:d mmmm yyyy, :dd/mm/yyyy); e.g. {{{{{body}:{near}}}}}", field=field,
                      valid_options=list(FORMS))
 
 
@@ -397,10 +482,24 @@ def value_text(value: Any, locale: Any = None, *, type: str | None = None,
     if value is None or value == "":
         raise ToolError("invalid_arguments", f"{where} is blank: a reference writes a value",
                         field=field)
+    if is_date_pattern(format):
+        day = _date_value(value, type)
+        if day is None:
+            other = (" -- for a number write :0, :0.0 or :#,##0 --" if number(value) else "")
+            raise ToolError("invalid_arguments", f"{where} is {what(value)}: a date pattern "
+                            f"(:{format}) is for dates{other}; leave it out", field=field)
+        try:
+            return dates.format_date(day, format, locale)
+        except dates.PatternError as error:
+            raise ToolError("invalid_arguments", str(error), field=field,
+                            valid_options=list(dates.TOKENS)) from None
     if format is not None:
         if not number(value):
+            date = _date_value(value, type) is not None
+            instead = (f"; for a date write a date pattern instead, of {dates.TOKENS_TEXT}: "
+                       ":d mmmm yyyy, :dd/mm/yyyy" if date else "; leave it out")
             raise ToolError("invalid_arguments", f"{where} is {what(value)}: a number format "
-                            f"(:{format}) is for numbers; leave it out", field=field)
+                            f"(:{format}) is for numbers{instead}", field=field)
         return number_text(value, format, locale)
     if type == "percent" and number(value):
         return _general(Decimal(repr(value)) * 100, locale) + "%"
@@ -409,6 +508,15 @@ def value_text(value: Any, locale: Any = None, *, type: str | None = None,
         raise ToolError("invalid_arguments", f"{where} is {what(value)}: a reference writes "
                         "text, a number, a logical value or a date", field=field)
     return text
+
+
+def _date_value(value: Any, type: str | None) -> Any:
+    """The date a value is or names, for a date pattern: a Python ``date`` or ``datetime``,
+    ISO 8601 date text (labelled or not: the pattern says it is a date); ``None`` for a
+    time of day alone or anything else."""
+    if isinstance(value, _dt_time):
+        return None
+    return dates.date_of(value)
 
 
 def number_text(value: float, format: str, locale: Any = None) -> str:
@@ -448,7 +556,7 @@ def record(rows: Rows, row: int, column: int, address: str, text: str,
     """What a document keeps of one value written (an :mod:`ooxml_edit.provenance` record's
     fields, without ``v``): the reference as given (no document handle, no format), its
     format, the text written, the document it came from and its version, its sources."""
-    given = FORMAT.sub("", address)
+    given = strip_format(address)
     match = QUALIFIED.match(given)
     placed: dict[str, Any] = {"source": match.group(2) if match else given,
                               "doc": rows.doc, "version": rows.version}
@@ -539,7 +647,8 @@ def briefs(facts: Iterable[Fact]) -> list[dict[str, Any]]:
     return [fact.brief() for fact in facts]
 
 
-__all__ = ["ATTEMPTED_FORMAT", "FORMAT", "FORMS", "Fact", "MAX_FACTS", "REFERENCE", "bad_format",
-           "briefs", "expand", "format_error", "known_prefixes", "not_own", "number_text",
+__all__ = ["ATTEMPTED_DATE", "ATTEMPTED_FORMAT", "FORMAT", "FORMS", "Fact", "MAX_FACTS", "REFERENCE",
+           "bad_format", "briefs", "date_suffix", "expand", "format_error", "is_date_pattern",
+           "known_prefixes", "not_own", "number_text", "strip_format",
            "own_name", "own_prefix", "own_prefixes", "own_record", "pick", "quote",
            "qualify_text", "record", "references", "split", "value_text", "walk_texts"]

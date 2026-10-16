@@ -2,6 +2,44 @@
 
 Versions are those in `pyproject.toml`; none is published to PyPI yet.
 
+## 0.38.0 -- unreleased
+- Date patterns (round 6, R9): `ooxml_edit.dates`, a pattern in Excel's date tokens (`d dd
+  ddd dddd m mm mmm mmmm mmmmm yy yyyy`, either case; every other character literal, text
+  in double quotes, other letters refused with the tokens) written as fixed text
+  (`format_date`) or as a number format code as Excel stores it (`format_code`:
+  `[$-413]d\ mmmm\ yyyy`, the locale's `[$-LCID]` from `LCIDS`, spaces and commas escaped,
+  `/ - .` not). Month and day names (`NAMES`) measured in Excel for Mac, 2026-10-16, for
+  en-US, en-GB, nl-NL, nl-BE, de-DE, fr-FR, es-ES and it-IT; a locale without them refuses
+  a name token ("no month or day names are measured for en-AU ...") and takes the numeric
+  ones. The data lives here, in the core (stdlib only), and nowhere else: ooxml-common
+  needs no names until its chart drawing formats date codes. `serial` / `from_serial`
+  (the 1900 date system), `date_of`, `DateCategory` (a date with its code).
+- Text facts take a date pattern after the address: `{{d:x/#1/when:d mmmm yyyy}}`,
+  `{{d:x/#1/when:dd/mm/yyyy}}` -- the pattern is what follows the first `:` past the
+  source's prefix, so it may hold `/`. The fact's record keeps it as `format`. A date pattern
+  on a value that is no date, and a number format on a date, are refused naming the
+  other; a suffix that looks like a date pattern but is none (`:DD/MM/YYYY HH:mm`) is
+  refused as that, with the tokens (`valid_options`) and the reference with
+  `:d mmmm yyyy`; R5's number format refusal lists the date tokens too.
+  `textfacts.date_suffix`, `is_date_pattern`, `strip_format`, `ATTEMPTED_DATE`.
+- `sources.label(..., date_format=)` and `Rows.label(..., date_format=)` write a date (a
+  Python date or datetime, or a `date`/`datetime` column's ISO text) in a pattern, anything
+  else as before; `sources.date_pattern` checks one for the locale, `sources.no_dates`
+  refuses a pattern for columns without a date, `Rows.date`, `sources.date_value` -- for the
+  format libraries' tables placed `from`.
+- `edit_chart` takes `date_format` (add from only): the category column's dates go to the
+  kind's handler as `DateCategory` values in the pattern's code for the session's locale,
+  and `charts.add_chart` keeps them as serials in a `c:numRef` whose `formatCode` is the
+  code, the workbook's category cells in that number format (`numFmt` 165 beside a values
+  format), the category axis source-linked with `c:auto` 0 (a text axis, one band per
+  date). Office shows a `/` of such a code as the viewer's date separator and follows the
+  prefix for names only (measured, docs/TOOLS.md). `set_values`/`add_series` from match a
+  date column's rows to categories kept as serials. Refused: `date_format` without from,
+  on set_values or add_series, on a scatter or bubble chart, or on a column with a value
+  that is no date. Definitions: +29 estimated tokens to every definition that loads
+  `edit_chart` (pptx-agent 12,506 -> 12,535, docx-agent 12,228 -> 12,256 before their own
+  changes); no core change; `edit_chart` stays non-strict.
+
 ## 0.37.0 -- unreleased
 - A document's own references in text (round 6, R8): `DocumentFormat.own_facts`,
   `{prefix: resolve}`, lets a format resolve `{{<prefix><name>}}` in the call's own

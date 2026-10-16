@@ -33,6 +33,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
+from .. import dates
 from .datasets import DATASET_PREFIX, Dataset
 from .results import ToolError
 
@@ -101,11 +102,17 @@ class Rows:
         types = self.dataset.types
         return types[column] if types is not None and column < len(types) else None
 
-    def label(self, row: int, column: int, locale: Any = None) -> str | None:
+    def label(self, row: int, column: int, locale: Any = None,
+              date_format: str | None = None) -> str | None:
         """The value at ``row``, ``column`` as :func:`label` writes it, by its column's type:
         a ``date``, ``datetime`` or ``time`` column's ISO 8601 text in the locale, as a
-        Python date is."""
-        return label(self.dataset.rows[row][column], locale, type=self.type(column))
+        Python date is; a date in ``date_format`` when given (:func:`date_pattern`)."""
+        return label(self.dataset.rows[row][column], locale, type=self.type(column),
+                     date_format=date_format)
+
+    def date(self, row: int, column: int) -> "_dt.date | None":
+        """The value at ``row``, ``column`` when it is a date (:func:`date_value`)."""
+        return date_value(self.dataset.rows[row][column], self.type(column))
 
     def provenance(self, column: int, rows: Sequence[int]) -> dict[str, Any]:
         """Where a column's values at ``rows`` (from 0, in the order placed) came from: the
@@ -258,7 +265,8 @@ _CLOCK = re.compile(r"^(\d{1,2}):(\d{2})(?::(\d{2})(?:\.(\d{1,6}))?)?$")
 _LOCAL = re.compile(r"^(\d{1,2})/(\d{1,2})/(\d{4})(?: (.+))?$")
 
 
-def label(value: Any, locale: Any = None, *, type: str | None = None) -> str | None:
+def label(value: Any, locale: Any = None, *, type: str | None = None,
+          date_format: str | None = None) -> str | None:
     """A value as a category label or a cell's text: text as it is; a number as a cell in
     the General format writes it, with the locale's decimal separator (``1.5`` is ``1,5``
     in nl-NL; ``2024`` stays ``2024``, no thousands separator); a logical value as ``TRUE``
@@ -270,7 +278,16 @@ def label(value: Any, locale: Any = None, *, type: str | None = None) -> str | N
     ``2026-03-01T14:05:00``, ``14:05:00.250`` -- how a format library gives the dates it
     reads, and those derived from them) is written as the Python value it names is, so one
     document never mixes ``1/3/2026`` and ``2026-01-20``; text that is not ISO 8601 (an
-    elapsed time, ``PT25H30M0S``) is written as it is.  Unlabelled ISO text stays text."""
+    elapsed time, ``PT25H30M0S``) is written as it is.  Unlabelled ISO text stays text.
+
+    ``date_format`` (a pattern :func:`date_pattern` has checked) writes a date -- a Python
+    ``date`` or ``datetime`` (its date), or a ``date`` or ``datetime`` column's ISO text --
+    as :func:`ooxml_edit.dates.format_date` does: ``2 March 2026`` in ``d mmmm yyyy``.
+    Anything else is written as without it."""
+    if date_format is not None:
+        day = date_value(value, type)
+        if day is not None:
+            return dates.format_date(day, date_format, locale)
     if isinstance(value, str):
         if type in MOMENT_TYPES:
             found = moment_of(value)
@@ -290,6 +307,40 @@ def label(value: Any, locale: Any = None, *, type: str | None = None) -> str | N
     if locale is not None and getattr(locale, "decimal_separator", ".") != ".":
         text = text.replace(".", locale.decimal_separator)
     return text
+
+
+def date_value(value: Any, type: str | None = None) -> "_dt.date | None":
+    """``value`` when it is a date, for a date pattern: a Python ``date`` or ``datetime``,
+    or the ISO 8601 text of a ``date`` or ``datetime`` column (``type``); ``None`` for a
+    time of day, unlabelled text and anything else."""
+    if isinstance(value, _dt.date):
+        return value
+    if isinstance(value, str) and type in ("date", "datetime"):
+        found = moment_of(value)
+        return found if isinstance(found, _dt.date) else None
+    return None
+
+
+def date_pattern(pattern: Any, locale: Any = None, *, field: str = "date_format") -> str:
+    """``pattern`` checked as a date pattern (:mod:`ooxml_edit.dates`) for ``locale``: a
+    pattern that is none, or a name token where the locale's names are not measured, is
+    refused as ``invalid_arguments`` naming the tokens."""
+    try:
+        dates.parse(pattern)
+        dates.format_date(_dt.date(2026, 3, 2), pattern, locale)
+    except dates.PatternError as error:
+        raise ToolError("invalid_arguments", str(error), field=field,
+                        valid_options=list(dates.TOKENS)) from None
+    return pattern
+
+
+def no_dates(rows: "Rows", columns: Sequence[int], field: str = "date_format") -> ToolError:
+    """The refusal of a ``date_format`` for ``columns`` of ``rows`` that hold no date."""
+    names = ", ".join(repr(rows.dataset.columns[column]) for column in columns[:5])
+    return ToolError("invalid_arguments", f"date_format is for dates, and no value of "
+                     f"{rows.address}'s column{'s' if len(columns) > 1 else ''} {names} is "
+                     "one (a Python date, or a column labelled date or datetime); leave "
+                     "date_format out", field=field)
 
 
 def moment_text(value: "_dt.date | _dt.time", locale: Any = None) -> str:
@@ -361,5 +412,6 @@ def _clock(parts: Sequence[str | None]) -> _dt.time:
     return _dt.time(int(hour), int(minute), int(second or 0), micro)
 
 
-__all__ = ["MOMENT_TYPES", "QUALIFIED", "Rows", "first_rows", "label", "merged", "moment_of", "moment_text",
+__all__ = ["MOMENT_TYPES", "QUALIFIED", "Rows", "date_pattern", "date_value", "first_rows", "label",
+           "merged", "moment_of", "moment_text", "no_dates",
            "number", "prefixes", "qualify", "resolve", "runs", "what"]

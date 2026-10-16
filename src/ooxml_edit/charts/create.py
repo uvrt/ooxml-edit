@@ -26,6 +26,18 @@ references (``schemeClr``, ``+mn-lt``), so the chart follows the document's them
 chart-style and colour-style parts (``style1.xml``, ``colors1.xml``) are not written: they
 only seed Office's own restyling commands, and nothing draws from them.
 
+**Dates as categories.**  A category may be a :class:`~ooxml_edit.dates.DateCategory`: a
+date with the Excel number format code it is shown in (``[$-413]d\\ mmmm\\ yyyy``,
+:func:`ooxml_edit.dates.format_code`; month and day names measured in Excel for Mac,
+2026-10-16).
+Then the categories are numbers -- each date's serial in the 1900 date system, as Office
+keeps a date cell -- in a ``c:numRef`` whose cache's ``c:formatCode`` is the code; the
+workbook's category cells hold the same serials in that number format, and the category
+axis shows them through it (``c:numFmt`` source-linked).  The axis stays a text axis
+(``c:auto`` 0: ECMA-376 Part 1, 21.2.2, ``auto`` lets the application choose a date axis
+from the data instead), so every category is one band, as text categories are.  What a
+viewer sees follows the code and the viewer's region: see :mod:`ooxml_edit.dates`.
+
 Nothing here knows a document format: ``tests/test_charts_neutrality.py`` checks it.
 """
 
@@ -42,6 +54,8 @@ from xml.sax.saxutils import escape, quoteattr
 
 from lxml import etree
 
+from .. import dates as _dates
+from ..dates import DateCategory
 from ..xml import Element, make, qn, serialize
 from . import namespaces as _namespaces  # noqa: F401  (registers c: before qn is used)
 from . import record as _record
@@ -88,6 +102,12 @@ LEGEND_POSITIONS = {"bottom": "b", "right": "r", "top": "t", "left": "l", "top_r
 #: ``legend="default"``: where Office puts a new chart's legend -- at the bottom, but at the
 #: top of a radar chart (measured).
 DEFAULT_LEGEND = "default"
+
+
+def category_format(labels: Sequence) -> str | None:
+    """The format code of a new chart's date categories (:class:`DateCategory`); ``None``
+    when they are text or numbers."""
+    return labels[0].format_code if labels and isinstance(labels[0], DateCategory) else None
 
 
 class _DefaultLang:
@@ -238,7 +258,24 @@ def chart_data(kind: str, categories: Sequence | None, series: Sequence
     labels = list(categories)
     if not labels:
         raise ChartDataError("a chart needs at least one category")
+    dated = [isinstance(label, DateCategory) for label in labels]
+    if any(dated):
+        if not all(dated):
+            raise ChartDataError("a chart's categories are all dates or none: category "
+                                 f"{dated.index(False)} is not a DateCategory")
+        if kind in XY_KINDS:
+            raise ChartDataError(f"a {kind} chart's categories are its x values, numbers; "
+                                 "dates are for a chart with a category axis")
+        if len({label.format_code for label in labels}) > 1:
+            raise ChartDataError("a chart's date categories share one format code")
+        for index, label in enumerate(labels):
+            try:
+                _dates.serial(label)
+            except ValueError as error:
+                raise ChartDataError(f"category {index}: {error}") from None
     for index, label in enumerate(labels):
+        if dated[index]:
+            continue
         if kind in XY_KINDS:
             if label is None or isinstance(label, str):
                 raise ChartDataError(f"x value {index}: {label!r} is not a number (a {kind} "
@@ -454,6 +491,9 @@ def _f(formula: str) -> Element:
 
 def _category_ref(labels: list, count: int) -> Element:
     formula = _formula(1, 2, count + 1)
+    code = category_format(labels)
+    if code is not None:
+        return _num_ref(formula, [_dates.serial(label) for label in labels], code)
     if all(isinstance(label, str) for label in labels):
         return _str_ref(formula, labels)
     if any(isinstance(label, str) for label in labels):
@@ -552,7 +592,8 @@ def _axis_common(tag: str, axis_id: str, cross_id: str, position: str, look: Cha
 
 
 def _axes(kind: str, ids: tuple[str, str], look: ChartLook, lang: str | None,
-          format_code: str, titles: dict[str, str]) -> list[Element]:
+          format_code: str, titles: dict[str, str],
+          category_code: str | None = None) -> list[Element]:
     plot, direction, _ = CHART_KINDS[kind]
     first, second = ids
     if plot in ("scatter", "bubble"):
@@ -568,8 +609,11 @@ def _axes(kind: str, ids: tuple[str, str], look: ChartLook, lang: str | None,
         # the same elements as a column chart's, measured.
         horizontal = direction == "bar"
         category = _axis_common("c:catAx", first, second, "l" if horizontal else "b", look,
-                                lang, gridlines=False, line=15000, format_code="General")
-        for flag, value in (("auto", 1), ("lblAlgn", "ctr"), ("lblOffset", 100),
+                                lang, gridlines=False, line=15000,
+                                format_code=category_code or "General")
+        # Dates stay one band each: a text axis, not one Office may make a date axis.
+        auto = 0 if category_code is not None else 1
+        for flag, value in (("auto", auto), ("lblAlgn", "ctr"), ("lblOffset", 100),
                             ("noMultiLvlLbl", 0)):
             category.append(_val(f"c:{flag}", value))
         value = _axis_common("c:valAx", second, first, "b" if horizontal else "l", look, lang,
@@ -699,7 +743,8 @@ def chart_space(kind: str, categories: Sequence | None, series: Sequence, *,
         lines.append(_val("c:axId", second))
         plot_area.append(lines)
     if plot_kind != "pie":
-        axes = _axes(kind, (first, second), look, lang, format_code, titles)
+        axes = _axes(kind, (first, second), look, lang, format_code, titles,
+                     category_format(labels))
         if combo:  # Office writes a combination chart's axes without c:crosses (measured)
             for axis in axes:
                 for node in axis.findall(f"{{{C_NS}}}crosses"):
@@ -774,6 +819,8 @@ def chart_workbook(kind: str, categories: Sequence | None, series: Sequence, *,
 
     custom = number_format not in (None, "General")
     value_style = ' s="1"' if custom else ""
+    dates_code = category_format(labels)
+    date_style = f' s="{2 if custom else 1}"' if dates_code is not None else ""
     rows = []
     header = []
     columns = data_columns(kind, data)
@@ -789,6 +836,9 @@ def chart_workbook(kind: str, categories: Sequence | None, series: Sequence, *,
         cells = []
         if isinstance(label, str):
             cells.append(f'<c r="A{row}" t="s"><v>{shared(label)}</v></c>')
+        elif dates_code is not None:
+            cells.append(f'<c r="A{row}"{date_style}><v>{number_text(_dates.serial(label))}'
+                         '</v></c>')
         else:
             cells.append(f'<c r="A{row}"><v>{number_text(label)}</v></c>')
         for entry, (column, sizes) in zip(data, columns):
@@ -812,8 +862,12 @@ def chart_workbook(kind: str, categories: Sequence | None, series: Sequence, *,
                   for s in strings)
     shared_strings = (f'<sst xmlns="{_SML}" count="{references[0]}" uniqueCount="{len(strings)}">'
                       f'{sst}</sst>')
-    formats = (f'<numFmts count="1"><numFmt numFmtId="164" formatCode={quoteattr(number_format)}/>'
-               f'</numFmts>' if custom else "")
+    codes = ([number_format] if custom else []) + ([dates_code] if dates_code else [])
+    formats = (f'<numFmts count="{len(codes)}">'
+               + "".join(f'<numFmt numFmtId="{164 + i}" formatCode={quoteattr(code)}/>'
+                         for i, code in enumerate(codes)) + '</numFmts>' if codes else "")
+    styled = "".join(f'<xf numFmtId="{164 + i}" fontId="0" fillId="0" borderId="0" xfId="0" '
+                     'applyNumberFormat="1"/>' for i in range(len(codes)))
     styles = (f'<styleSheet xmlns="{_SML}">{formats}'
               '<fonts count="1"><font><sz val="11"/><color theme="1"/><name val="Calibri"/>'
               '<family val="2"/><scheme val="minor"/></font></fonts>'
@@ -821,10 +875,8 @@ def chart_workbook(kind: str, categories: Sequence | None, series: Sequence, *,
               '<fill><patternFill patternType="gray125"/></fill></fills>'
               '<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>'
               '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'
-              + (f'<cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>'
-                 f'<xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>'
-                 f'</cellXfs>' if custom else
-                 '<cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs>')
+              + f'<cellXfs count="{1 + len(codes)}"><xf numFmtId="0" fontId="0" fillId="0" '
+                f'borderId="0" xfId="0"/>{styled}</cellXfs>' 
               + '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>'
               '</styleSheet>')
     workbook = (f'<workbook xmlns="{_SML}" xmlns:r="{_DOC_REL}"><bookViews><workbookView/>'
@@ -885,7 +937,8 @@ def add_chart(package, part: str, kind: str, categories: Sequence | None, series
     :meth:`NewChart.graphic`.
 
     ``kind`` is one of :data:`CHART_KINDS`; ``categories`` the category labels (a scatter
-    or bubble chart's x values); ``series`` a list of ``{"name", "values"}``, one value per
+    or bubble chart's x values), or dates each a :class:`DateCategory` (see the module's
+    notes); ``series`` a list of ``{"name", "values"}``, one value per
     category, ``None`` for a blank -- with ``"type": "line"`` for a series of a column chart
     drawn as a line (Office's combination chart), and a bubble chart's ``"size"`` (or
     ``{"name", "x", "y", "size"}``, ``categories`` ``None``) -- see :func:`chart_data`.
@@ -934,7 +987,8 @@ def add_chart(package, part: str, kind: str, categories: Sequence | None, series
     return NewChart(part=chart_name, workbook=book_name, rel_id=rel_id)
 
 
-__all__ = ["ACCENTS", "CHART_KINDS", "COMBO_KINDS", "XY_KINDS", "data_columns", "ChartLook", "DEFAULT_LANG", "DEFAULT_LEGEND",
+__all__ = ["ACCENTS", "CHART_KINDS", "COMBO_KINDS", "XY_KINDS", "data_columns", "ChartLook",
+           "DateCategory", "DEFAULT_LANG", "DEFAULT_LEGEND", "category_format",
            "LEGEND_POSITIONS", "locale_language",
            "NewChart", "POWERPOINT_LOOK", "VARIATIONS", "WORD_LOOK", "add_chart", "chart_data",
            "chart_space", "chart_workbook", "default_legend", "series_color",
