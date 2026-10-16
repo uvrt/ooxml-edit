@@ -26,6 +26,15 @@ references (``schemeClr``, ``+mn-lt``), so the chart follows the document's them
 chart-style and colour-style parts (``style1.xml``, ``colors1.xml``) are not written: they
 only seed Office's own restyling commands, and nothing draws from them.
 
+**A dot chart** (``"dot"``: one marker per category on the value axis, a dot plot of
+averages, say) is a native line chart, so Office edits it as one: a ``c:lineChart``
+whose series have their line off (``c:spPr/a:ln/a:noFill``) and a marker on, with the
+group's ``c:marker`` 1 (ECMA-376 Part 1, 21.2.2, ``CT_LineChart``: markers shown).  Each
+series' marker is the one Office gives a new scatter chart's series, measured: a 5 pt
+circle in the series colour.  Categories run along the bottom, as in every line chart:
+a horizontal line chart is not in the schema (``c:barDir`` is a bar chart's), and a
+scatter chart has no category labels.  :attr:`.chart.Chart.is_dot` reads one back.
+
 **Dates as categories.**  A category may be a :class:`~ooxml_edit.dates.DateCategory`: a
 date with the Excel number format code it is shown in (``[$-413]d\\ mmmm\\ yyyy``,
 :func:`ooxml_edit.dates.format_code`; month and day names measured in Excel for Mac,
@@ -87,6 +96,7 @@ CHART_KINDS: dict[str, tuple[str, str | None, str | None]] = {
     "radar": ("radar", None, "marker"),
     "radar_filled": ("radar", None, "filled"),
     "bubble": ("bubble", None, None),
+    "dot": ("line", None, "standard"),
 }
 
 #: The kinds whose series may be drawn as a line instead (a combination chart): columns.
@@ -528,6 +538,10 @@ def _series(kind: str, index: int, entry: dict, labels: list, format_code: str, 
     elif plot == "radar" and style == "filled":
         # Office's filled radar: the area in the series colour, no line, no marker (measured).
         ser.append(_sp(_fill(color), _no_line()))
+    elif kind == "dot":
+        # A line series with its line off and a marker on (see :func:`dot_marker`).
+        ser.append(no_line_shape())
+        ser.append(dot_marker(index))
     elif plot in ("line", "radar"):
         ser.append(_sp(_e("a:ln", {"w": "28575", "cap": "rnd"}, _fill(color), _e("a:round"))))
         ser.append(_e("c:marker", None, _val("c:symbol", "none")))
@@ -561,6 +575,21 @@ def _series(kind: str, index: int, entry: dict, labels: list, format_code: str, 
         ser.append(_val("c:smooth", 0))
     ser.append(_unique_id(index, tail))
     return ser
+
+
+def no_line_shape() -> Element:
+    """A dot chart series' ``c:spPr``: a line series' line (as :func:`_series` writes
+    it) with its fill off."""
+    return _sp(_e("a:ln", {"w": "28575", "cap": "rnd"}, _e("a:noFill"), _e("a:round")))
+
+
+def dot_marker(index: int) -> Element:
+    """The ``c:marker`` of series ``index`` of a ``dot`` chart: the marker Office gives a
+    new scatter chart's series (measured, as :func:`_series` writes it) -- a 5 pt circle
+    filled and outlined in the series colour."""
+    return _e("c:marker", None, _val("c:symbol", "circle"), _val("c:size", 5),
+              _sp(_fill(series_color(index)), _e("a:ln", {"w": "9525"},
+                                                 _fill(series_color(index)))))
 
 
 def _no_labels(pie: bool = False) -> Element:
@@ -727,6 +756,8 @@ def chart_space(kind: str, categories: Sequence | None, series: Sequence, *,
         plot.append(_val("c:bubbleScale", 100 if bubble_scale is None else bubble_scale))
         plot.append(_val("c:showNegBubbles", 0))
     elif plot_kind == "line":
+        if kind == "dot":
+            plot.append(_val("c:marker", 1))
         plot.append(_val("c:smooth", 0))
     elif plot_kind == "pie":
         plot.append(_val("c:firstSliceAng", 0))

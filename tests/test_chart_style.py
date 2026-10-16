@@ -587,7 +587,7 @@ TWO = [{"name": "Now", "values": [1, 2]}, {"name": "Goal", "values": [2, 2], "ty
 @pytest.mark.parametrize("kind, data, key", [
     ("column", TWO, "fill"), ("stacked_bar", TWO[:1], "fill"), ("bubble", TWO[:1], "fill"),
     ("radar_filled", TWO[:1], "fill"), ("line", TWO[:1], "line"), ("radar", TWO[:1], "line"),
-    ("scatter", TWO[:1], "marker_fill")])
+    ("scatter", TWO[:1], "marker_fill"), ("dot", TWO[:1], "marker_fill")])
 def test_add_s_look_is_the_separate_calls_in_order(kind, data, key):
     actions = add_style_actions(kind, data, data_labels=True, colors=["tx2"],
                                 style={"size": 9}, part="legend")

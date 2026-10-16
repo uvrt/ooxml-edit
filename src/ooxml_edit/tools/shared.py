@@ -62,7 +62,7 @@ from .results import Result, ToolError, page_text
 
 #: ``edit_chart``'s chart types for ``add`` (``ooxml_edit.charts.create``'s kinds).
 CHART_TYPES = ("column", "stacked_column", "bar", "stacked_bar", "line", "pie", "scatter",
-               "radar", "radar_filled", "bubble")
+               "radar", "radar_filled", "bubble", "dot")
 
 #: The group of the shared tools that are not core: loaded on demand.
 MISC = "shared_misc"
@@ -281,7 +281,8 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
               "set_axis_title", "set_legend", "show_data_labels", "hide_data_labels",
               "set_gap_width", "set_axis_scale", "set_gridlines", "format_series",
               "format_point", "set_series_type", "set_text_style", "set_point_labels"]),
-          "chart_type": string("add: the kind of chart; set_series_type: line or column.",
+          "chart_type": string("add: the kind of chart (dot: markers, no line); "
+                               "set_series_type: line or column.",
                                enum=list(CHART_TYPES), optional=True),
           "categories": array(string(), "add: category labels, in order.", optional=True),
           "data": array(obj({"name": string(), "values": array(number()),

@@ -357,3 +357,92 @@ def test_add_chart_passes_the_locale_on():
                 if re.search(r"charts/chart\d+\.xml$", name)][-1]  # the new one
         root = document.package.tree(part)
         assert root.find(C + "lang").get("val") == expected
+
+
+# -- the dot chart (round 6, R10) ---------------------------------------------------------------
+
+AVERAGES = [{"name": "Mean", "values": [3.2, 4.1, 2.7, 3.9]},
+            {"name": "Target", "values": [4.0, 4.0, 3.5, 4.0]}]
+
+
+def _dot(**options) -> tuple[cs.Opened, Chart]:
+    document = cs.Opened(cs.package())
+    with document.history.batch():
+        made = add_chart(document.package, cs.MAIN, "dot", QUARTERS, AVERAGES, **options)
+        frame = etree.SubElement(document.package.tree(cs.MAIN), "{%s}frame" % cs.NS,
+                                 name="new")
+        frame.append(made.graphic())
+        document.package.mark_dirty(cs.MAIN)
+    return document, document.chart("new")
+
+
+def _dot_look(chart) -> list[tuple]:
+    """Per series: (line off, marker symbol, size, marker fill's scheme colour)."""
+    out = []
+    for ser in chart._root().iter(C + "ser"):
+        off = ser.find(f"{C}spPr/{A}ln/{A}noFill") is not None
+        marker = ser.find(f"{C}marker")
+        fill = marker.find(f"{C}spPr/{A}solidFill/{A}schemeClr")
+        out.append((off, marker.find(f"{C}symbol").get("val"),
+                    marker.find(f"{C}size").get("val"), fill.get("val")))
+    return out
+
+
+def test_a_dot_chart_is_a_line_chart_with_markers_and_no_line():
+    document, chart = _dot()
+    plots = chart._root().find(f"{C}chart/{C}plotArea")
+    assert [etree.QName(p).localname for p in plots if etree.QName(p).localname.endswith(
+        "Chart")] == ["lineChart"]
+    assert plots.find(f"{C}lineChart/{C}marker").get("val") == "1"
+    assert _dot_look(chart) == [(True, "circle", "5", "accent1"),
+                                (True, "circle", "5", "accent2")]
+    assert chart.chart_type == "line" and chart.is_dot
+    assert not chart_order_violations(document.package.read(chart.part))
+    cs.assert_valid(document.to_bytes())
+
+
+def test_a_line_chart_is_no_dot_chart_until_every_line_is_off_and_marked():
+    _, chart = new("line")
+    assert not chart.is_dot
+    chart.format_series(0, line=None, marker="circle")
+    assert not chart.is_dot  # the other series still draw lines
+    for index in (1, 2):
+        chart.format_series(index, line=None, marker="square", marker_fill="tx2")
+    assert chart.is_dot
+    chart.format_series(1, marker="none")
+    assert not chart.is_dot
+    assert not new("column")[1].is_dot and not new("scatter")[1].is_dot
+
+
+def test_a_dot_chart_keeps_its_look_through_data_edits():
+    document, chart = _dot()
+    chart.series[0].set_values([1.5, 2.5, 3.5, 4.5])
+    chart.add_series("Last year", [2.0, 3.0, 3.0, 3.1])
+    chart.add_category("Q5", [4.4, 4.0, 3.9])
+    assert chart.is_dot
+    assert _dot_look(chart) == [(True, "circle", "5", f"accent{k}") for k in (1, 2, 3)]
+    assert chart.series[0].values == [1.5, 2.5, 3.5, 4.5, 4.4]
+    data = document.to_bytes()
+    cs.assert_valid(data)
+    reopened = cs.Opened(data).chart("new")
+    assert reopened.is_dot
+    part = cs.Opened(data).package.read(reopened.part)
+    assert not chart_order_violations(part)
+    assert check_chart_against_workbook(part, cs.Opened(data).package.read(
+        reopened.workbook_part)) > 0
+
+
+def test_a_dot_chart_on_a_fixed_scale_with_labels():
+    document, chart = _dot()
+    chart.set_axis_scale("value", minimum=1, maximum=5)
+    chart.set_data_labels(True, number_format="0.0")
+    assert chart.scales["value"]["minimum"] == 1 and chart.scales["value"]["maximum"] == 5
+    assert all(entry["shown"] for entry in chart.data_labels)
+    assert chart.is_dot
+    assert not chart_order_violations(document.package.read(chart.part))
+    cs.assert_valid(document.to_bytes())
+
+
+def test_a_dot_chart_s_series_are_all_dots():
+    with pytest.raises(ChartDataError, match="only a column chart draws a series as a line"):
+        chart_space("dot", QUARTERS, [dict(AVERAGES[0], type="line")])
