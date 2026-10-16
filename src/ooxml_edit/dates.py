@@ -40,6 +40,12 @@ region and ``02.03.2026`` in a German one; a ``-`` stays ``-``), and the ``[$-LC
 prefix changes the names only, never the separator or the order.  So a kept code fixes
 the names and the order of a date, not its separators.
 
+**Reading a kept code back.**  :func:`is_date_code` tells a date code from a number one,
+so a chart's categories kept as serials read back as dates (``Chart.category_dates``).
+ooxml-common keeps a copy of :data:`NAMES` and :data:`LCIDS` to draw such categories
+(``ooxml_common.dates``, which may not import this package); a test there checks the two
+agree.
+
 Standard library only; nothing here reads the operating system's locale.
 """
 
@@ -51,8 +57,8 @@ from types import MappingProxyType
 from typing import Any, Mapping, NamedTuple
 
 __all__ = ["LCIDS", "NAMES", "NAME_TOKENS", "TOKENS", "TOKENS_TEXT", "DateCategory", "DateNames",
-           "PatternError", "date_of", "format_code", "format_date", "from_serial", "lcid_for",
-           "names_for", "parse", "serial", "uses_names"]
+           "PatternError", "date_of", "format_code", "format_date", "from_serial", "is_date_code",
+           "lcid_for", "names_for", "parse", "serial", "uses_names"]
 
 #: The tokens a pattern takes, as an error lists them.
 TOKENS = ("d", "dd", "ddd", "dddd", "m", "mm", "mmm", "mmmm", "mmmmm", "yy", "yyyy")
@@ -281,6 +287,36 @@ def format_code(pattern: str, locale: Any = None) -> str:
         else:
             out.append("\\" + text)
     return "".join(out)
+
+
+def is_date_code(code: Any) -> bool:
+    """Whether a number format code shows a number as a date or a time: a ``d``, ``m``,
+    ``y``, ``h`` or ``s`` outside quotes, brackets and escapes, in any section
+    (``[$-413]d\\ mmmm\\ yyyy``, ``m/d/yyyy``, ``h:mm``).  ``General``, ``@``, a number
+    code (``#,##0.0``, ``"days" 0``) and anything not text are not."""
+    if not isinstance(code, str) or code in ("", "General", "@"):
+        return False
+    index = 0
+    while index < len(code):
+        char = code[index]
+        if char == '"':
+            close = code.find('"', index + 1)
+            index = len(code) if close < 0 else close + 1
+            continue
+        if char == "[":
+            close = code.find("]", index)
+            inner = code[index + 1:close if close >= 0 else len(code)].lower()
+            if inner and inner[0] in "hms" and inner == inner[0] * len(inner):
+                return True   # elapsed time: [h], [mm], [ss]
+            index = len(code) if close < 0 else close + 1
+            continue
+        if char in "\\_*":
+            index += 2
+            continue
+        if char.lower() in "dmyhs":
+            return True
+        index += 1
+    return False
 
 
 # -- serial numbers ------------------------------------------------------------------------------

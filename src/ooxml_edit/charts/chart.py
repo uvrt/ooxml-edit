@@ -42,6 +42,7 @@ from lxml import etree
 from ..xml import Element, append_in_order, find, local_name, make, qn, remove, subelement
 from .dmltext import paragraph_text, replace_body_text
 from . import record as _record
+from .. import dates as _dates
 from .host import GraphicHost, chart_part
 from .namespaces import C_NS  # noqa: F401  (re-exported)
 from .workbook import Area, Cell, SheetRange, Workbook, Worksheet, number_text, parse_formula
@@ -571,6 +572,29 @@ class Chart(ChartStyling):
             if series.categories.ref is not None:
                 return series.categories.points()
         return []
+
+    @property
+    def category_format(self) -> str | None:
+        """The categories' number format (their ``c:numCache/c:formatCode``), from the
+        first series that has categories; ``None`` for text categories or none::
+
+            chart.category_format   # '[$-413]d\\ mmmm\\ yyyy' for dates kept as serials
+        """
+        return _category_format(self._series())
+
+    @property
+    def category_dates(self) -> "list[str | None] | None":
+        """The categories as ISO dates when they are dates kept as serials -- numbers under a
+        date code (:attr:`category_format`, :func:`ooxml_edit.dates.is_date_code`), as
+        ``add_chart`` keeps :class:`~ooxml_edit.dates.DateCategory` values::
+
+            chart.categories        # [46027, 46063]
+            chart.category_dates    # ['2026-01-05', '2026-02-10']
+
+        A time of day comes after a ``T`` (``2026-01-05T12:00:00``); a point that names no
+        date (blank, before 1 March 1900) is ``None``.  ``None`` for categories that are not
+        dates."""
+        return _category_dates(self._series())
 
     @property
     def point_count(self) -> int:
@@ -1321,7 +1345,9 @@ def _axis_of(root: Element, axis: str) -> Element | None:
 
 def chart_model(root: Element) -> dict[str, Any]:
     """The chart's data and labels: ``{"types", "title", "axis_titles", "legend", "format",
-    "categories", "series": [{"name", "values"}]}``."""
+    "categories", "series": [{"name", "values"}]}``, and ``category_dates`` and
+    ``category_format`` where the categories are dates kept as serials
+    (:attr:`Chart.category_dates`)."""
     plot_area = find(root, "c:chart/c:plotArea")
     series = _series_of(root)
     categories: list = []
@@ -1341,7 +1367,7 @@ def chart_model(root: Element) -> dict[str, Any]:
         node = _axis_of(root, axis)
         if node is not None:
             axes[axis] = _title_text(node.find(qn("c:title")))
-    return {
+    model = {
         "types": [] if plot_area is None else [local_name(child)[:-5] for child in plot_area
                                                if child.tag in {qn(t) for t in PLOT_TAGS}],
         "title": _title_text(find(root, "c:chart/c:title")),
@@ -1352,6 +1378,35 @@ def chart_model(root: Element) -> dict[str, Any]:
         "series": [{"name": (ser.name.points() or [None])[0] if ser.name.ref is not None
                     else None, "values": ser.values.points()} for ser in series],
     }
+    dates = _category_dates(series)
+    if dates is not None:
+        # Dates kept as serials (``categories``): as ISO dates, and the code showing them.
+        model["category_dates"] = dates
+        model["category_format"] = _category_format(series)
+    return model
+
+
+def _category_format(series: "list[_Series]") -> str | None:
+    """The first series' with categories ``c:numCache/c:formatCode``; ``None`` for text."""
+    for ser in series:
+        if ser.categories.ref is not None:
+            cache = ser.categories.cache
+            node = None if cache is None or not ser.categories.numeric \
+                else cache.find(qn("c:formatCode"))
+            return None if node is None else (node.text or "")
+    return None
+
+
+def _category_dates(series: "list[_Series]") -> "list[str | None] | None":
+    """The categories as ISO dates where they are serials under a date code, else ``None``."""
+    if not _dates.is_date_code(_category_format(series)):
+        return None
+    points = next((ser.categories.points() for ser in series if ser.categories.ref is not None), [])
+    out: list[str | None] = []
+    for value in points:
+        day = _dates.from_serial(value) if isinstance(value, (int, float)) else None
+        out.append(None if day is None else day.isoformat())
+    return out
 
 
 def _title_text(title: Element | None) -> str | None:

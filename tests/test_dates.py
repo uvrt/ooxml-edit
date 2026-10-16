@@ -213,6 +213,12 @@ def test_a_chart_of_dates_reads_back_and_its_workbook_matches():
         document.package.mark_dirty(cs.MAIN)
     chart = document.chart("new")
     assert chart.categories == [46083, 46090, 46097]
+    # Read back as dates, for a model to read: ISO, whatever the code shows.
+    assert chart.category_format == r"[$-813]d\ mmm\ yyyy"
+    assert chart.category_dates == ["2026-03-02", "2026-03-09", "2026-03-16"]
+    model = chart.data
+    assert model["categories"] == [46083, 46090, 46097]
+    assert (model["category_dates"], model["category_format"]) == (chart.category_dates, CODE)
     assert chart.workbook_values()["categories"]["values"] == [46083, 46090, 46097]
     data = document.to_bytes()
     cs.assert_valid(data)
@@ -232,3 +238,28 @@ def test_a_chart_of_dates_reads_back_and_its_workbook_matches():
 def test_date_categories_that_cannot_be_charted_are_refused(kind, categories, message):
     with pytest.raises(ChartDataError, match=message):
         chart_space(kind, categories, [{"name": "a", "values": [1] * len(categories)}])
+
+
+@pytest.mark.parametrize("code, is_date", [
+    (r"[$-413]d\ mmmm\ yyyy", True), ("m/d/yyyy", True), ("dd/mm/yy;@", True), ("h:mm", True),
+    ("[h]:mm", True), ("General", False), ("@", False), ("#,##0.0", False), ('"days" 0', False),
+    (r"\d0", False), ("[Red]0.0", False), ("[$€-413] #,##0.0", False), ("", False), (None, False),
+])
+def test_a_date_code_is_told_from_a_number_code(code, is_date):
+    assert dates.is_date_code(code) is is_date
+
+
+def test_text_and_number_categories_are_no_dates():
+    document = cs.Opened(cs.package())
+    with document.history.batch():
+        for name, categories in (("text", ["a", "b", "c"]), ("numbers", [1, 2, 3])):
+            made = add_chart(document.package, cs.MAIN, "column", categories, UNITS)
+            root = document.package.tree(cs.MAIN)
+            frame = etree.SubElement(root, "{%s}frame" % cs.NS, name=name)
+            frame.append(made.graphic())
+        document.package.mark_dirty(cs.MAIN)
+    assert document.chart("text").category_format is None
+    assert document.chart("text").category_dates is None
+    assert document.chart("numbers").category_format == "General"
+    assert document.chart("numbers").category_dates is None
+    assert "category_dates" not in document.chart("text").data
