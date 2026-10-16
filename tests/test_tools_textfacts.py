@@ -14,7 +14,7 @@ import datetime as dt
 
 import pytest
 
-from ooxml_edit import provenance
+from ooxml_edit import dates, provenance
 from ooxml_edit.tools import (Dataset, DefaultLocale, DocumentFormat, Result, ToolError,
                               Toolbox, array, obj, shared, string, tool)
 from ooxml_edit.tools import textfacts
@@ -341,3 +341,123 @@ def test_a_quoted_column_or_a_plain_unknown_one_is_not_read_as_a_format(toolbox)
     assert "not a number format" not in error.message
     assert textfacts.bad_format("d:2024") is None
     assert textfacts.bad_format("d:x/#1/avg:0.0") is None
+
+
+# -- date patterns (round 6, R9) -----------------------------------------------------------------
+
+
+def _in(language: str) -> DefaultLocale:
+    return dataclasses.replace(NL_BE, language=language)
+
+
+#: ``{{d:by_item/N-1/when:dddd d mmmm yyyy}}`` (Sunday 1 March 2026) per locale: the names
+#: measured in Excel for Mac, 2026-10-16.
+@pytest.mark.parametrize("language, written", [
+    ("en-US", "Sunday 1 March 2026 (Sun, Mar, M)"),
+    ("en-GB", "Sunday 1 March 2026 (Sun, Mar, M)"),
+    ("nl-NL", "zondag 1 maart 2026 (zo, mrt, m)"),
+    ("nl-BE", "zondag 1 maart 2026 (zo, mrt, m)"),
+    ("de-DE", "Sonntag 1 März 2026 (So, Mär, M)"),
+    ("fr-FR", "dimanche 1 mars 2026 (dim., mars, m)"),
+    ("es-ES", "domingo 1 marzo 2026 (do., mar., m)"),
+    ("it-IT", "domenica 1 marzo 2026 (dom, mar, m)"),
+])
+def test_a_date_pattern_writes_the_locales_measured_names(toolbox, language, written):
+    session = _session(toolbox, locale=_in(language))
+    ok(toolbox.dispatch(session, "ds_keep", {"id": "by_item"}))
+    ok(say(toolbox, session, "{{d:by_item/N-1/when:dddd d mmmm yyyy}} "
+           "({{d:by_item/N-1/when:ddd}}, {{d:by_item/N-1/when:mmm}}, "
+           "{{d:by_item/N-1/when:mmmmm}})"))
+    assert SAID[-1]["items"][0]["text"] == written
+
+
+@pytest.mark.parametrize("language", ["en-US", "nl-BE", "de-DE", "ja-JP"])
+def test_a_date_patterns_separators_are_written_as_given_in_every_locale(toolbox, language):
+    session = _session(toolbox, locale=_in(language))
+    ok(toolbox.dispatch(session, "ds_keep", {"id": "by_item"}))
+    ok(say(toolbox, session, "{{d:by_item/N-1/when:dd/mm/yyyy}} {{d:by_item/#3/when:d-m-yy}} "
+           "{{d2/t:checks/'A/7'/when:yyyy.mm.dd}} {{d:by_item/N-1/when:DD/MM/YYYY}}"))
+    assert SAID[-1]["items"][0]["text"] == "01/03/2026 3-5-26 2026.04.02 01/03/2026"
+
+
+def test_a_date_patterns_fact_keeps_the_pattern_as_its_format(toolbox):
+    session = _session(toolbox)
+    ok(toolbox.dispatch(session, "ds_keep", {"id": "by_item"}))
+    result = ok(say(toolbox, session, "On {{d:by_item/N-1/when:d mmmm yyyy}}"))
+    assert result.data["facts"] == [{"from": "d:by_item/N-1/when", "text": "1 March 2026",
+                                     "sources": ["t:checks/N-1/when"]}]
+    assert SAID[-1]["facts"] == [("items[0].text", 3, 15, "1 March 2026", "d:by_item/N-1/when")]
+    record = SAID[-1]["first"][0]
+    assert record["format"] == "d mmmm yyyy" and record["source"] == "d:by_item/N-1/when"
+
+
+def test_a_name_token_without_measured_names_is_refused_numbers_still_work(toolbox):
+    session = _session(toolbox, locale=_in("ja-JP"))
+    ok(toolbox.dispatch(session, "ds_keep", {"id": "by_item"}))
+    error = failed(say(toolbox, session, "{{d:by_item/N-1/when:d mmmm yyyy}}"),
+                   "invalid_arguments")
+    assert "no month or day names are measured for ja-JP" in error.message
+    assert "dd/mm/yyyy" in error.message and error.field == "items[0].text"
+    ok(say(toolbox, session, "{{d:by_item/N-1/when:yyyy-mm-dd}}"))
+    assert SAID[-1]["items"][0]["text"] == "2026-03-01"
+
+
+def test_a_date_pattern_on_a_number_and_a_number_format_on_a_date_name_each_other(toolbox):
+    session = _session(toolbox)
+    ok(toolbox.dispatch(session, "ds_keep", {"id": "by_item"}))
+    error = failed(say(toolbox, session, "{{d:by_item/N-1/rating:d mmmm yyyy}}"),
+                   "invalid_arguments")
+    assert "a date pattern (:d mmmm yyyy) is for dates" in error.message
+    assert ":0.0" in error.message
+    error = failed(say(toolbox, session, "{{d:by_item/N-1/when:0.0}}"), "invalid_arguments")
+    assert "a number format (:0.0) is for numbers" in error.message
+    assert "date pattern" in error.message and "mmmm" in error.message
+    error = failed(say(toolbox, session, "{{d:by_item/N-1/item:dd/mm/yyyy}}"),
+                   "invalid_arguments")
+    assert "is for dates" in error.message
+
+
+@pytest.mark.parametrize("suffix, why", [
+    ("DD/MM/YYYY HH:mm", "'H' is no date token"),
+    ("%d-%m-%Y", "no date token"),
+    ("ddddd mmmm yyyy", "'ddddd' is no date token"),
+    ("d mmmm yyy", "'yyy' is no date token"),
+])
+def test_a_suffix_that_is_no_date_pattern_says_so_with_the_tokens(toolbox, suffix, why):
+    session = _session(toolbox)
+    ok(toolbox.dispatch(session, "ds_keep", {"id": "by_item"}))
+    error = failed(say(toolbox, session, f"{{{{d:by_item/#1/when:{suffix}}}}}"),
+                   "invalid_arguments")
+    assert f"{suffix!r} is not a date pattern" in error.message
+    assert why in error.message
+    assert "{{d:by_item/#1/when:d mmmm yyyy}}" in error.message
+    assert error.valid_options == list(dates.TOKENS)
+    assert SAID == []
+
+
+def test_the_number_format_refusal_lists_the_date_tokens_too(toolbox):
+    session = _session(toolbox)
+    ok(toolbox.dispatch(session, "ds_keep", {"id": "by_item"}))
+    error = failed(say(toolbox, session, "{{d:by_item/#1/rating:0.20}}"), "invalid_arguments")
+    assert "d dd ddd dddd m mm mmm mmmm mmmmm yy yyyy" in error.message
+    assert ":d mmmm yyyy" in error.message
+
+
+def test_a_date_suffix_is_read_only_after_the_sources_prefix():
+    assert textfacts.date_suffix("d:x/#1/when:dd/mm/yyyy") == ("d:x/#1/when", "dd/mm/yyyy")
+    assert textfacts.date_suffix("d2/t:c/N-1/when:d mmmm") == ("d2/t:c/N-1/when", "d mmmm")
+    assert textfacts.date_suffix("d:dmy") is None                    # a dataset's name
+    assert textfacts.date_suffix("d:x/#1/avg:0.0") is None           # a number format
+    assert textfacts.date_suffix("d:x/'a:dd'/v") is None             # a quoted key
+    assert textfacts.date_suffix("d:x/#1/avg:total") is None
+    assert textfacts.strip_format("d:x/#1/when:d mmmm yyyy") == "d:x/#1/when"
+    assert textfacts.split("d:x/#1/when:dd/mm/yyyy") == (
+        "d:x", [("#1", False), ("when", False)], "dd/mm/yyyy")
+
+
+def test_without_a_pattern_a_date_is_written_as_before(toolbox):
+    for locale, written in ((None, "3/1/2026"), (NL_BE, "1/3/2026")):
+        session = _session(toolbox, locale=locale)
+        ok(toolbox.dispatch(session, "ds_keep", {"id": "by_item"}))
+        ok(say(toolbox, session, "{{d:by_item/N-1/when}}"))
+        assert SAID[-1]["items"][0]["text"] == written

@@ -53,7 +53,7 @@ import datetime as dt
 import functools
 from typing import Any, Callable, Mapping
 
-from .. import provenance
+from .. import dates, provenance
 from . import sources
 from .datasets import briefs
 from .registry import (CORE, Param, Tool, ToolGroup, array, boolean, build_schema,
@@ -348,7 +348,9 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
           "from": string("add, set_values, add_series: rows of d:<id> or table t:<name>.",
                          optional=True),
           "columns": array(string(), "from's category column, then series columns; default all.",
-                           optional=True)},
+                           optional=True),
+          "date_format": string("add from: category dates' pattern, e.g. d mmmm yyyy.",
+                                optional=True)},
          group=MISC, mutates=True, refs=("target",), sources=("from",),
          reads=_reading_action, wrap=lambda fn: _chart_rows(fn),
          aliases={"slide": _slide_on_add, "from_columns": "columns", "colours": "colors"}),
@@ -453,16 +455,21 @@ def _chart_rows(handler: Callable[..., Any]) -> Callable[..., Any]:
     def run(call: Any, **arguments: Any) -> Any:
         source = arguments.pop("from", None)
         columns = arguments.pop("columns", None)
+        date_format = arguments.pop("date_format", None)
         if source is None:
             if columns is not None:
                 raise ToolError("invalid_arguments", "columns name the columns of from; "
                                 "give from too, or the values in data", field="columns")
+            if date_format is not None:
+                raise ToolError("invalid_arguments", "date_format is for the dates of add "
+                                "from; give the categories as text in categories instead",
+                                field="date_format")
             if arguments.get("action") == "read":
                 return _read_record(handler, call, arguments)
             if arguments.get("action") in RECORD_ACTIONS:
                 return _edit_record(handler, call, arguments)
             return handler(call, **arguments)
-        return _from_rows(handler, call, source, columns, arguments)
+        return _from_rows(handler, call, source, columns, arguments, date_format)
 
     return run
 
@@ -480,12 +487,22 @@ def _read_record(handler: Callable[..., Any], call: Any, arguments: dict[str, An
 
 
 def _from_rows(handler: Callable[..., Any], call: Any, source: str, columns: Any,
-               arguments: dict[str, Any]) -> Result:
+               arguments: dict[str, Any], date_format: str | None = None) -> Result:
     action = arguments.get("action")
     if action not in FROM_ACTIONS:
         raise ToolError("invalid_arguments", f"{action} takes no from; from is for "
                         f"{', '.join(FROM_ACTIONS)}", field="from",
                         valid_options=list(FROM_ACTIONS))
+    if date_format is not None:
+        if action != "add":
+            raise ToolError("invalid_arguments", "date_format is for add: it sets how a new "
+                            "chart's category dates are shown; set_values and add_series "
+                            "match the chart's categories as they are", field="date_format")
+        if arguments.get("chart_type") in ("scatter", "bubble"):
+            raise ToolError("invalid_arguments", "date_format is for category dates; a "
+                            f"{arguments['chart_type']} chart's x values are numbers",
+                            field="date_format")
+        sources.date_pattern(date_format, call.locale)
     for name in ("categories", "data", "values"):
         if arguments.get(name) is not None:
             raise ToolError("invalid_arguments", f"from replaces {name}: name the columns "
@@ -520,7 +537,9 @@ def _from_rows(handler: Callable[..., Any], call: Any, source: str, columns: Any
         if chart_type == "scatter":
             arguments["values"] = _numbers(rows, at[0], order, fields[0])
         else:
-            arguments["categories"] = _labels(call, rows, at[0], order, fields[0])
+            arguments["categories"] = (
+                _dates(call, rows, at[0], order, fields[0], date_format) if date_format
+                else _labels(call, rows, at[0], order, fields[0]))
         arguments["data"] = [{"name": names[column],
                               "values": _numbers(rows, column, order, field)}
                              for column, field in zip(at[1:], fields[1:])]
@@ -719,6 +738,26 @@ def _labels(call: Any, rows: Any, column: int, order: list[int], field: str) -> 
     return out
 
 
+def _dates(call: Any, rows: Any, column: int, order: list[int], field: str,
+           pattern: str) -> list[Any]:
+    """A date column's values as a new chart's date categories, in ``order``: each a
+    :class:`~ooxml_edit.dates.DateCategory` in the code ``pattern`` is in the
+    session's locale (:func:`ooxml_edit.dates.format_code`); a value that is no date is
+    refused, naming its cell."""
+    code = dates.format_code(pattern, call.locale)
+    out = []
+    for row in order:
+        day = rows.date(row, column)
+        if day is None:
+            value = rows.dataset.rows[row][column]
+            raise ToolError("invalid_arguments", f"{rows.where(row, column)} is "
+                            f"{sources.what(value) if value not in (None, '') else 'blank'}, "
+                            "not a date: date_format shows the category column's dates; "
+                            "choose a date column, or leave date_format out", field=field)
+        out.append(dates.DateCategory(day, code))
+    return out
+
+
 def _key(value: Any, locale: Any, moments: bool = False) -> tuple[str, Any]:
     """What a category is matched by: its number when it is or reads as one, else its text
     (a date's as its label writes it).  With ``moments`` (the rows are a date column's), a
@@ -727,6 +766,8 @@ def _key(value: Any, locale: Any, moments: bool = False) -> tuple[str, Any]:
     written ISO (an older file) or in the locale finds the same rows."""
     if moments:
         found = sources.moment_of(value, locale, written=True)
+        if found is None and sources.number(value):
+            found = dates.from_serial(value)     # a date category kept as its serial
         if found is not None:
             return ("t", sources.moment_text(found, locale))
     if sources.number(value):

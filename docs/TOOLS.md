@@ -374,6 +374,17 @@ declares (`Tool.facts`: `ppt_set_text`'s texts and runs, a table's cells, `repla
   "'0.20' is not a number format a reference takes", the forms, the reference with the
   nearest one (`:0.00`), the forms as `valid_options` -- not as "no column 'avg:0.20'";
   a column whose whole name is `avg:0.20` still resolves, quoted or not.
+- A date through a date pattern after the address (0.38.0, round 6, R9):
+  `{{d:events/#1/when:d mmmm yyyy}}` is `2 March 2026` (`2 maart 2026` in nl-BE),
+  `{{d:events/#1/when:dd/mm/yyyy}}` `02/03/2026`. See "Date patterns" below. The pattern
+  is everything after the first `:` past the source's prefix, so it may hold `/`. A date
+  pattern on a value that is no date ("a date pattern (:d mmmm yyyy) is for dates") and a
+  number format on a date ("... for a date write a date pattern instead, of d dd (day),
+  ...") are refused, each naming the other; a suffix that looks like a date pattern but is
+  none (`:DD/MM/YYYY HH:mm`, `:%d-%m-%Y`) is refused as that, with the tokens and the
+  reference written with `:d mmmm yyyy` and `:dd/mm/yyyy`. The number format refusal lists
+  the date tokens too. Without a pattern a date is written as before, in the locale's day
+  order.
 - Only `{{d:` and a loaded format's prefix (`{{t:`) start a reference; `{{name}}` stays as
   it is, and `\{{d:x}}` writes `{{d:x}}`. On by default, no flag. A reference that names
   no dataset, table, row or column, a blank, or more than one value refuses the call with
@@ -396,6 +407,46 @@ declares (`Tool.facts`: `ppt_set_text`'s texts and runs, a table's cells, `repla
   docx takes none" -- or in its own words when its `own_facts` names the prefix with a
   text instead of a function (Word's "slide references are for decks"), which works with
   no deck format loaded too.
+
+**Date patterns** (0.38.0, round 6, R9; `ooxml_edit.dates`). A text fact, a table placed
+with `from` (the format libraries' `date_format`) and a chart added with `from`
+(`edit_chart`'s `date_format`) take a pattern in Excel's date letters:
+
+| token | writes | token | writes |
+|---|---|---|---|
+| `d` / `dd` | 2 / 02 | `m` / `mm` | 3 / 03 |
+| `ddd` / `dddd` | Mon / Monday | `mmm` / `mmmm` | Mar / March |
+| `yy` / `yyyy` | 26 / 2026 | `mmmmm` | M (the name's first letter) |
+
+Letters in either case; every other character is written as given, text in double quotes
+(`d "de" mmmm "de" yyyy`) or one character after `\`; any other letter, or a run that is
+no token (`ddddd`, `yyy`), is refused with the tokens. Month and day names are measured
+in Excel for Mac, 2026-10-16, with an explicit locale code in the format (`[$-413]mmmm`),
+for en-US, en-GB, nl-NL, nl-BE, de-DE, fr-FR, es-ES and it-IT (`dates.NAMES`): en-US and
+en-GB alike (`Mar`, `Mon`), nl `mrt`/`ma`, de `Mär`/`Mo`, fr `mars`/`janv.`/`lun.`, es
+`mar.`/`lu.`, it `mar`/`lun`; `mmmmm` is the full name's first letter (lower case in nl,
+fr, es and it). A session in another locale refuses a name token ("no month or day names
+are measured for en-AU ...; write the date with numbers"), never guessing; the numeric
+tokens work in every locale.
+
+- **Text** (`dates.format_date`): fixed text, its separators exactly the pattern's in every
+  locale -- `dd/mm/yyyy` is `02/03/2026` in de-DE too.
+- **A chart** (`dates.format_code`, `dates.DateCategory`): the categories are kept as dates
+  -- serials of the 1900 date system in a `c:numRef` -- in a number format code as Excel
+  stores it, the locale's id first and spaces and commas escaped:
+  `[$-413]d\ mmmm\ yyyy` (`dates.LCIDS`, each measured accepted and honoured: 409, 809,
+  413, 813, 407, 40C, C0A, 410). The workbook's category cells hold the same serials in
+  that format; the category axis shows them source-linked and stays a text axis (`c:auto`
+  0), one band per date. **Measured caveat** (Excel for Mac, 2026-10-16, switching the
+  macOS region): Office shows a `/` in a kept code as the viewer's date separator
+  (`dd/mm/yyyy` reads `02-03-2026` in a Dutch (Netherlands) region, `02.03.2026` in a
+  German one; a `-` stays `-`), and the `[$-LCID]` prefix changes the names only, never the
+  separator or the order. The built-in short date (number format 14) follows the viewer's
+  region (`2/03/2026` nl-BE, `02/03/2026` en-GB, `02-03-2026` nl-NL, `02.03.26` de-DE,
+  `02/03/2026` fr-FR, `2/3/26` es-ES, `02/03/26` it-IT, `3/2/26` en-US), so no pattern
+  stands for "the locale's short date" and none is offered. A chart read back
+  (`action: "read"`) lists such categories as their serials.
+- Without a pattern nothing changes: dates are written as text in the locale's day order.
 
 **Loading tools and the prompt.** Every tool is in one group; the `core` group is always
 loaded, the others on demand. What `definitions()` sends by default:

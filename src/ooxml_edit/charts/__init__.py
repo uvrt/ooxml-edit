@@ -36,7 +36,7 @@ from .workbook import Workbook, Worksheet
 from .chart import Chart, ChartDataError, ChartDataWarning, Series, chart_model, workbook_part
 from .errors import FormatError
 from .styling import KEEP
-from .create import (CHART_KINDS, POWERPOINT_LOOK, WORD_LOOK, ChartLook, NewChart,
+from .create import (CHART_KINDS, POWERPOINT_LOOK, WORD_LOOK, ChartLook, DateCategory, NewChart,
                      add_chart)
 from .record import PROVENANCE_URI, provenance, store_provenance
 from .diagram import Diagram, DiagramDrawingError, DiagramNode, diagram_model
@@ -50,7 +50,7 @@ from .model import (
 
 __all__ = [
     "A_NS", "C_NS", "CHART_KINDS", "DGM_NS", "DSP_NS", "POWERPOINT_LOOK", "SML_NS",
-    "WORD_LOOK", "ChartLook", "NewChart", "add_chart",
+    "WORD_LOOK", "ChartLook", "DateCategory", "NewChart", "add_chart",
     "Chart", "ChartDataError", "ChartDataWarning", "FormatError", "KEEP", "ChartModelError", "Diagram",
     "DiagramDrawingError", "DiagramNode", "GraphicHost", "Series", "Workbook", "Worksheet",
     "apply_chart_model", "apply_diagram_model", "canonical_chart", "canonical_diagram",

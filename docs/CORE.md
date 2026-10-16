@@ -11,6 +11,7 @@ The modules of `ooxml_edit` and how a format layer uses them.
 | `ooxml_edit.history` | `History`: undo, redo and nested batches over anything with `snapshot` and `restore`; a failed batch rolls back; `version` numbers every state, never reusing a number, and undo and redo restore it, so a cache keyed by version is never stale |
 | `ooxml_edit.stamp` | `ExtensionStamp`: an id frozen into an `extLst`/`ext` extension, which Office keeps when it does not know the URI |
 | `ooxml_edit.provenance` | Provenance records: where values placed from a source came from, as compact versioned JSON (`record`, `dumps`, `loads`, `RecordError`), and `Holder`, `watch` and `note`, through which an embedded object that keeps a record in its own part says it was used, for code that places values without knowing that kind of object (see docs/TOOLS.md, "Source addresses in the saved file") |
+| `ooxml_edit.dates` | Date patterns in Office's date tokens (`d mmmm yyyy`, `dd/mm/yyyy`): `format_date` writes fixed text in a locale's measured month and day names (`NAMES`, eight locales; others refuse a name token), `format_code` the number format code Office stores for it (`[$-413]d\ mmmm\ yyyy`), `serial`/`from_serial` for the 1900 date system, `DateCategory` for a chart's date categories (see docs/TOOLS.md, "Date patterns") |
 
 The losslessness rule, which everything else rests on:
 
