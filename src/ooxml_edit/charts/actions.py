@@ -112,9 +112,10 @@ def apply_style_action(chart, action: str, *, series=None, category=None, axis: 
 
 #: How ``add``'s ``colors`` colour a series of each kind of chart: what Office's "series
 #: colour" is in the chart :func:`~.create.add_chart` makes -- a bar's, area's or bubble's
-#: fill, a line's line, a scatter series' markers (its line is off).  A pie's colours are
-#: its slices'.
-_SERIES_COLOUR = {"line": "line", "radar": "line", "scatter": "marker_fill", "pie": None}
+#: fill, a line's line, a scatter or dot series' markers (its line is off).  A pie's
+#: colours are its slices'.
+_SERIES_COLOUR = {"line": "line", "radar": "line", "scatter": "marker_fill", "dot": "marker_fill",
+                  "pie": None}
 
 
 def add_style_actions(chart_type: str, data: Any, *, data_labels: bool | None = None,

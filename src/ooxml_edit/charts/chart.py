@@ -556,6 +556,19 @@ class Chart(ChartStyling):
         return types[0] if types else None
 
     @property
+    def is_dot(self) -> bool:
+        """Whether the chart reads as a dot chart (``add_chart``'s ``"dot"``): one line plot
+        whose every series has its line off and a marker on -- however it was made::
+
+            chart.chart_type, chart.is_dot  # ('line', True)
+        """
+        plot_area = self._plot_area()
+        if plot_area is None or self.chart_types != ["line"]:
+            return False
+        series = self._series()
+        return bool(series) and all(_is_dot_series(ser) for ser in series)
+
+    @property
     def series(self) -> list["Series"]:
         return [Series(self, index) for index in range(len(self._series()))]
 
@@ -1594,9 +1607,23 @@ def _give_unique_id(editor: _Editor, element: Element) -> str:
     return value
 
 
+def _is_dot_series(ser: _Series) -> bool:
+    """A line series drawn as a dot chart's: no line (``a:ln/a:noFill``) and a marker, its
+    own symbol not ``none`` -- or, without one, the plot's ``c:marker`` on."""
+    if find(ser.element, "c:spPr/a:ln/a:noFill") is None:
+        return False
+    symbol = find(ser.element, "c:marker/c:symbol")
+    if symbol is not None:
+        return symbol.get("val") != "none"
+    shown = ser.plot.find(qn("c:marker")) if ser.plot is not None else None
+    return shown is not None and shown.get("val", "1") in ("1", "true")
+
+
 def _new_series(template: _Series, series: list[_Series], name, values: list) -> Element:
     """A copy of ``template`` for a new series: its data replaced, its own look dropped so
-    the application's automatic colour for the new index applies."""
+    the application's automatic colour for the new index applies.  A dot chart's series
+    (:func:`_is_dot_series`) keeps its line off and its marker, in its own new colour."""
+    dot = _is_dot_series(template)
     element = copy.deepcopy(template.element)
     for tag in ("c:spPr", "c:dPt", "c:trendline", "c:errBars", "c:extLst", "c:explosion"):
         for node in element.findall(qn(tag)):
@@ -1612,6 +1639,12 @@ def _new_series(template: _Series, series: list[_Series], name, values: list) ->
     idx = max((s.idx for s in series), default=-1) + 1
     subelement(element, "c:idx").set("val", str(idx))
     subelement(element, "c:order").set("val", str(idx))
+    if dot:
+        from .create import dot_marker, no_line_shape
+        if marker is not None:
+            remove(marker)
+        append_in_order(element, no_line_shape())
+        append_in_order(element, dot_marker(idx))
     new = _Series(element)
     # The name.
     if new.name.ref is not None and new.name.kind == "strRef":

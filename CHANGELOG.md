@@ -2,6 +2,20 @@
 
 Versions are those in `pyproject.toml`; none is published to PyPI yet.
 
+## 0.40.0 -- unreleased
+- A dot chart (round 6, R10): `add_chart(..., "dot", ...)` and `edit_chart` `chart_type:
+  "dot"`, one marker per category on the value axis -- averages on a fixed 1-5 scale with
+  `axis: "value"`, `scale: {"min": 1, "max": 5}` and `data_labels` in the one `add`. A
+  native line chart, so Office edits it as one: each series' line off (`a:ln/a:noFill`)
+  and a marker on, the group's `c:marker` 1. The marker is the one Office gives a new
+  scatter chart's series (measured): a 5 pt circle in the series colour; `colors` colour
+  the markers. Categories along the bottom: the schema has no horizontal line chart, and a
+  scatter chart has no category labels. `Chart.is_dot` reads any line chart whose series
+  all have no line and a marker as one, and the format libraries' `edit_chart read` reports
+  its type as `dot`; `add_series` on such a chart keeps the new series a dot (its line off,
+  its marker in the next colour). The `chart_type` enum gains `dot`; its description
+  is unchanged.
+
 ## 0.39.0 -- unreleased
 - A chart's dates read back as dates (round 6): `Chart.category_format` (the categories'
   `c:numCache/c:formatCode`, `None` for text categories) and `Chart.category_dates` (ISO

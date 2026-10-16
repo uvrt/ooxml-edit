@@ -62,7 +62,7 @@ from .results import Result, ToolError, page_text
 
 #: ``edit_chart``'s chart types for ``add`` (``ooxml_edit.charts.create``'s kinds).
 CHART_TYPES = ("column", "stacked_column", "bar", "stacked_bar", "line", "pie", "scatter",
-               "radar", "radar_filled", "bubble")
+               "radar", "radar_filled", "bubble", "dot")
 
 #: The group of the shared tools that are not core: loaded on demand.
 MISC = "shared_misc"
