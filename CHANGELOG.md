@@ -6,7 +6,8 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet.
 - A chart's dates read back as dates (round 6): `Chart.category_format` (the categories'
   `c:numCache/c:formatCode`, `None` for text categories) and `Chart.category_dates` (ISO
   dates, `2026-03-02`, where the categories are serials under a date code; `None`
-  otherwise), and `dates.is_date_code` to tell a date code from a number one. The format
+  otherwise), the same two in `chart_model` (`Chart.data`) for such charts only, and
+  `dates.is_date_code` to tell a date code from a number one. The format
   libraries' `edit_chart read` lists such categories as those dates, with the code, rather
   than as serials (`46083`), and takes one as a category's name. ISO rather than the
   code's own text: a model reads it whatever the locale and the viewer's separator, and

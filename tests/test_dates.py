@@ -216,6 +216,9 @@ def test_a_chart_of_dates_reads_back_and_its_workbook_matches():
     # Read back as dates, for a model to read: ISO, whatever the code shows.
     assert chart.category_format == r"[$-813]d\ mmm\ yyyy"
     assert chart.category_dates == ["2026-03-02", "2026-03-09", "2026-03-16"]
+    model = chart.data
+    assert model["categories"] == [46083, 46090, 46097]
+    assert (model["category_dates"], model["category_format"]) == (chart.category_dates, CODE)
     assert chart.workbook_values()["categories"]["values"] == [46083, 46090, 46097]
     data = document.to_bytes()
     cs.assert_valid(data)
@@ -259,3 +262,4 @@ def test_text_and_number_categories_are_no_dates():
     assert document.chart("text").category_dates is None
     assert document.chart("numbers").category_format == "General"
     assert document.chart("numbers").category_dates is None
+    assert "category_dates" not in document.chart("text").data
