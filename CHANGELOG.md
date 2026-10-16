@@ -13,8 +13,8 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet.
   scatter chart has no category labels. `Chart.is_dot` reads any line chart whose series
   all have no line and a marker as one, and the format libraries' `edit_chart read` reports
   its type as `dot`; `add_series` on such a chart keeps the new series a dot (its line off,
-  its marker in the next colour). The `chart_type` enum gains `dot` (a strict-schema
-  change), its description four words.
+  its marker in the next colour). The `chart_type` enum gains `dot`; its description
+  is unchanged.
 
 ## 0.39.0 -- unreleased
 - A chart's dates read back as dates (round 6): `Chart.category_format` (the categories'
