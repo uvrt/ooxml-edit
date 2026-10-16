@@ -446,3 +446,72 @@ def test_a_dot_chart_on_a_fixed_scale_with_labels():
 def test_a_dot_chart_s_series_are_all_dots():
     with pytest.raises(ChartDataError, match="only a column chart draws a series as a line"):
         chart_space("dot", QUARTERS, [dict(AVERAGES[0], type="line")])
+
+
+# -- a new series on a scatter chart (round 6, item 12) -------------------------------------
+
+
+def _scatter_look(chart) -> list[tuple]:
+    """Per series: (line off, marker symbol or None, size or None, marker fill's colour)."""
+    out = []
+    for ser in chart._root().iter(C + "ser"):
+        off = ser.find(f"{C}spPr/{A}ln/{A}noFill") is not None
+        symbol = ser.find(f"{C}marker/{C}symbol")
+        size = ser.find(f"{C}marker/{C}size")
+        fill = ser.find(f"{C}marker/{C}spPr/{A}solidFill/{A}schemeClr")
+        out.append((off, None if symbol is None else symbol.get("val"),
+                    None if size is None else size.get("val"),
+                    None if fill is None else fill.get("val")))
+    return out
+
+
+def _valid(document, chart) -> None:
+    data = document.to_bytes()
+    cs.assert_valid(data)
+    reopened = cs.Opened(data).chart("new")
+    part = cs.Opened(data).package.read(reopened.part)
+    assert not chart_order_violations(part)
+    assert check_chart_against_workbook(part, cs.Opened(data).package.read(
+        reopened.workbook_part)) > 0
+
+
+def test_a_new_series_on_a_marker_only_scatter_draws_no_line():
+    document, chart = new("scatter")
+    assert _scatter_look(chart) == [(True, "circle", "5", "accent1"), (True, "circle", "5", "accent2")]
+    chart.add_series("West", [1, 2, 3, 4])
+    chart.add_series("First", [4, 3, 2, 1], index=0)
+    assert _scatter_look(chart) == [(True, "circle", "5", f"accent{k}") for k in (4, 1, 2, 3)]
+    new_ln = chart._root().find(f"{C}chart/{C}plotArea/{C}scatterChart/{C}ser/{C}spPr/{A}ln")
+    assert new_ln.get("w") == "19050"   # as a new scatter's series
+    _valid(document, chart)
+
+
+def test_a_marker_only_scatter_keeps_its_symbol_and_size():
+    document, chart = new("scatter")
+    chart.format_series(1, marker="square", marker_size=9, marker_fill="tx2")
+    chart.add_series("West", [1, 2, 3, 4])
+    assert _scatter_look(chart)[2] == (True, "square", "9", "accent3")
+    _valid(document, chart)
+
+
+def test_a_scatter_with_lines_keeps_drawing_lines():
+    document, chart = new("scatter")
+    for index in (0, 1):
+        chart.format_series(index, line="accent1", line_width=1.5)
+    chart.add_series("West", [1, 2, 3, 4])
+    look = _scatter_look(chart)
+    assert look[2][0] is False
+    # Its own look dropped, as for any other series: the automatic line and marker.
+    assert chart._root().findall(f"{C}chart/{C}plotArea/{C}scatterChart/{C}ser")[2].find(
+        f"{C}spPr") is None
+    _valid(document, chart)
+
+
+def test_a_marker_only_scatter_without_its_own_marker_stays_line_less():
+    # Office's automatic marker: no c:marker in the series, only the line off.
+    document, chart = new("scatter")
+    for ser in chart._root().iter(C + "ser"):
+        ser.remove(ser.find(f"{C}marker"))
+    chart.add_series("West", [1, 2, 3, 4])
+    assert _scatter_look(chart) == [(True, None, None, None)] * 3
+    _valid(document, chart)

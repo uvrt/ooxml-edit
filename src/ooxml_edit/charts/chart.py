@@ -1619,11 +1619,24 @@ def _is_dot_series(ser: _Series) -> bool:
     return shown is not None and shown.get("val", "1") in ("1", "true")
 
 
+def _is_lineless_scatter(ser: _Series) -> bool:
+    """A scatter series drawn without its line (``c:spPr/a:ln/a:noFill``): markers only, as
+    a new scatter chart's series are (:func:`~.create.add_chart`) -- its own ``c:marker``
+    or none, where Office's automatic marker shows (``scatterChart`` has no group
+    ``c:marker`` for :func:`_is_dot_series` to read)."""
+    return (ser.plot is not None and local_name(ser.plot) == "scatterChart"
+            and find(ser.element, "c:spPr/a:ln/a:noFill") is not None)
+
+
 def _new_series(template: _Series, series: list[_Series], name, values: list) -> Element:
     """A copy of ``template`` for a new series: its data replaced, its own look dropped so
     the application's automatic colour for the new index applies.  A dot chart's series
-    (:func:`_is_dot_series`) keeps its line off and its marker, in its own new colour."""
-    dot = _is_dot_series(template)
+    (:func:`_is_dot_series`) keeps its line off and its marker, in its own new colour; so
+    does a scatter series drawn without its line (:func:`_is_lineless_scatter`), keeping
+    its marker's symbol and size -- without the ``a:noFill``, Office would draw the new
+    series' line (a scatter's ``lineMarker`` style)."""
+    lineless = _is_lineless_scatter(template)
+    dot = not lineless and _is_dot_series(template)
     element = copy.deepcopy(template.element)
     for tag in ("c:spPr", "c:dPt", "c:trendline", "c:errBars", "c:extLst", "c:explosion"):
         for node in element.findall(qn(tag)):
@@ -1645,6 +1658,13 @@ def _new_series(template: _Series, series: list[_Series], name, values: list) ->
             remove(marker)
         append_in_order(element, no_line_shape())
         append_in_order(element, dot_marker(idx))
+    elif lineless:
+        from .create import SCATTER_LINE_WIDTH, marker_shape, no_line_shape
+        append_in_order(element, no_line_shape(SCATTER_LINE_WIDTH))
+        symbol = find(element, "c:marker/c:symbol")
+        if marker is not None and (symbol is None or symbol.get("val") != "none"):
+            # The template's symbol and size, in the new series' own colour.
+            append_in_order(marker, marker_shape(idx))
     new = _Series(element)
     # The name.
     if new.name.ref is not None and new.name.kind == "strRef":
