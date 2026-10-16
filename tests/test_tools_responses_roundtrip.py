@@ -152,10 +152,16 @@ def test_a_deferred_call_arrives_by_bare_name_and_dispatches(toolbox):
 
 def test_a_qualified_name_is_not_needed_and_is_answered_with_the_bare_one(toolbox):
     session = _session(toolbox)
-    for name in ("toy_render.toy_ppt_render", "toy_render__toy_ppt_render"):
-        result = toolbox.dispatch(session, name, {"doc": "d1", "page": 1, "width": 32})
-        assert not result.ok and result.error.code == "invalid_arguments"
-        assert result.error.valid_options[0] == "toy_ppt_render"
+    result = toolbox.dispatch(session, "toy_render__toy_ppt_render",
+                              {"doc": "d1", "page": 1, "width": 32})
+    assert not result.ok and result.error.code == "invalid_arguments"
+    assert result.error.valid_options[0] == "toy_ppt_render"
+    # A dotted namespace (a model writing its harness's ``functions.``) is read as the
+    # bare name, as inside a batch (Toolbox.tool_named).
+    result = toolbox.dispatch(session, "toy_render.toy_ppt_render",
+                              {"doc": "d1", "page": 1, "width": 32})
+    assert result.ok and result.tool == "toy_ppt_render"
+    assert result.warnings[0] == "tool 'toy_render.toy_ppt_render' read as 'toy_ppt_render'"
 
 
 # -- 2. server-side tool search ---------------------------------------------------------------

@@ -199,7 +199,9 @@ class Tool:
     #: for ``add``) -- such a function may also take one of the tool's own names whose value
     #: can only mean another (a list of names given as a count).  The dispatcher renames the
     #: argument before validating and says so in the result's warnings.  Only where the
-    #: meaning is the same.
+    #: meaning is the same.  An alias inside an object argument is written as a path,
+    #: ``refs``-style: ``{"items[].top": "space_before"}`` renames ``top`` in each item
+    #: (a function gets that object).
     aliases: Mapping[str, str | Callable[[Mapping[str, Any]], str | None]] = field(
         default_factory=dict)
 
@@ -302,11 +304,17 @@ def definition_problems(tool: Tool) -> list[str]:
             elif name in required:
                 problems.append(f"exactly_one names {name!r}, which is required")
     for alias, name in tool.aliases.items():
+        *path, key = alias.split(".")
+        container = _object_at(tool.schema, path)
+        if container is None:
+            problems.append(f"aliases names {alias!r}, which is in no object parameter")
+            continue
         if callable(name):
             continue
-        if alias in properties:
+        names = container.get("properties", {})
+        if key in names:
             problems.append(f"aliases names {alias!r}, which is a parameter")
-        if name not in properties:
+        if name not in names:
             problems.append(f"aliases reads {alias!r} as {name!r}, which is not a parameter")
     if tool.route is not None and tool.route not in properties:
         problems.append(f"route names {tool.route!r}, which is not a parameter")
@@ -315,6 +323,20 @@ def definition_problems(tool: Tool) -> list[str]:
             if name in properties and properties[name].get("type") != "string":
                 problems.append(f"document argument {name!r} is not a string")
     return problems
+
+
+def _object_at(schema: Mapping[str, Any], parts: Sequence[str]) -> Mapping[str, Any] | None:
+    """The object schema at ``parts`` (``["items[]", "frame"]``; ``[]``: the root), or
+    ``None``."""
+    node: Any = schema
+    for part in parts:
+        array = part.endswith("[]")
+        name = part[:-2] if array else part
+        node = (node.get("properties") or {}).get(name) if isinstance(node, Mapping) else None
+        if array:
+            node = node.get("items") if isinstance(node, Mapping) and \
+                node.get("type") == "array" else None
+    return node if isinstance(node, Mapping) and node.get("type") == "object" else None
 
 
 def _path_exists(schema: Mapping[str, Any], path: str, *, nested: bool = False) -> bool:
