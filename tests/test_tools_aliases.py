@@ -8,8 +8,8 @@ import datetime as dt
 import pytest
 
 from ooxml_edit.tools import (Result, SubsetError, Toolbox, array, check_subset, integer,
-                              names_as, shared, string, tool, validate_call)
-from ooxml_edit.tools.dispatch import ref_rule
+                              names_as, number, obj, shared, string, tool, validate_call)
+from ooxml_edit.tools.dispatch import fold_ref, ref_rule
 from ooxml_edit.tools.registry import build_schema
 from ooxml_edit.tools.schema import CallError, canonical, close_match
 
@@ -62,7 +62,31 @@ def chart(call, doc, target, action, **given):
     return Result(summary=f"{action} on {target}", data={"target": target})
 
 
-TOOLS = [t_fit, t_set, t_count, t_make, chart, *shared.SESSION_TOOLS]
+@tool("t_name", "Name an address; or read a target as the handler resolves it.",
+      {"doc": string("Document id."), "ref": string("Ref name.", optional=True),
+       "address": string("Address.", optional=True),
+       "target": string("Where.", optional=True)},
+      kind="docx", mutates=True)
+def t_name(call, doc, ref=None, address=None, target=None):
+    if ref:
+        call.define_ref(ref, address or "item:1")
+    return Result(summary="named", data={"target": call.resolve_ref(target) if target else None})
+
+
+@tool("t_style", "Style items.",
+      {"doc": string("Document id."),
+       "items": array(obj({"target": string("Item."),
+                           "box": obj({"x": number(), "w": number()}, "Box.", optional=True),
+                           "space_before": number("Before.", optional=True),
+                           "space_after": number("After.", optional=True),
+                           "anchor": string("Anchor.", optional=True)}), "Items.")},
+      kind="docx", mutates=True,
+      aliases={"items[].top": "space_before", "items[].bottom": "space_after"})
+def t_style(call, doc, items):
+    return Result(summary="styled", data={"items": items})
+
+
+TOOLS = [t_fit, t_set, t_count, t_make, t_name, t_style, chart, *shared.SESSION_TOOLS]
 
 
 @pytest.fixture
@@ -249,7 +273,7 @@ def test_a_key_on_a_tool_without_one_explains_why(toolbox, session):
 
 
 def test_a_ref_name_refusal_says_the_rule_and_a_name_that_would_do(toolbox, session):
-    result = toolbox.dispatch(session, "t_make", {"doc": "d1", "ref": "catChart"})
+    result = toolbox.dispatch(session, "t_make", {"doc": "d1", "ref": "cat chart"})
     assert result.error.field == "ref"
     assert "starts with a lowercase letter" in result.error.message
     assert "'cat_chart'" in result.error.message
@@ -265,9 +289,141 @@ def test_ref_rule_suggests_a_valid_name(name, suggestion):
 
 
 def test_a_capitalised_use_of_a_known_ref_says_did_you_mean(toolbox, session):
-    assert toolbox.dispatch(session, "t_make", {"doc": "d1", "ref": "cat_chart"}).ok
+    # $catChart folds to cat_chart (read as it); catchart is a ref of another spelling.
+    assert toolbox.dispatch(session, "t_make", {"doc": "d1", "ref": "catchart"}).ok
     result = toolbox.dispatch(session, "t_make", {"doc": "d1", "target": "$catChart"})
-    assert result.error.code == "not_found" and "did you mean $cat_chart?" in result.error.message
+    assert result.error.code == "not_found" and "did you mean $catchart?" in result.error.message
     # Something that only looks like one stays an address.
     result = toolbox.dispatch(session, "t_make", {"doc": "d1", "target": "$A$1"})
     assert result.ok and result.data == {"target": "$A$1"}
+
+
+# -- round 6: folded ref names, namespaced tools in a batch, nesting -----------------------------
+
+
+@pytest.mark.parametrize("name, folded", [
+    ("recNow", "rec_now"), ("scale-note", "scale_note"), ("HTTPLink", "http_link"),
+    ("Sales-2024", "sales_2024"), ("rec_now", "rec_now"),
+    ("A1", None), ("big chart", None), ("2nd", None), ("x" * 40, None), ("$x", None)])
+def test_fold_ref(name, folded):
+    assert fold_ref(name) == folded
+
+
+def test_a_camel_case_or_hyphenated_ref_is_kept_folded_with_a_warning(toolbox, session):
+    result = toolbox.dispatch(session, "t_make", {"doc": "d1", "ref": "recNow"})
+    assert result.ok and result.refs == {"rec_now": "item:1"}
+    assert result.warnings == ["ref 'recNow' read as 'rec_now': write $rec_now"]
+    assert session.entry("d1").refs == {"rec_now": "item:1"}
+    result = toolbox.dispatch(session, "t_make", {"doc": "d1", "ref": "scale-note"})
+    assert result.ok and result.refs == {"scale_note": "item:1"}
+
+
+def test_a_folded_use_is_read_as_the_ref_with_a_warning(toolbox, session):
+    assert toolbox.dispatch(session, "t_make", {"doc": "d1", "ref": "rec_now"}).ok
+    result = toolbox.dispatch(session, "t_make", {"doc": "d1", "target": "$recNow/p1"})
+    assert result.ok and result.data == {"target": "item:1/p1"}
+    assert result.warnings == ["target '$recNow/p1' read as '$rec_now/p1'"]
+    # Resolved by the handler (call.resolve_ref) the same way.
+    result = toolbox.dispatch(session, "t_name", {"doc": "d1", "target": "$rec-now"})
+    assert result.ok and result.data == {"target": "item:1"}
+    assert result.warnings == ["'$rec-now' read as '$rec_now'"]
+    # No ref of that name: an address, as before.
+    result = toolbox.dispatch(session, "t_make", {"doc": "d1", "target": "$otherName"})
+    assert result.ok and result.data == {"target": "$otherName"} and not result.warnings
+
+
+def test_a_folded_name_that_names_another_address_is_refused(toolbox, session):
+    assert toolbox.dispatch(session, "t_name", {"doc": "d1", "ref": "rec_now",
+                                                "address": "item:1"}).ok
+    result = toolbox.dispatch(session, "t_name", {"doc": "d1", "ref": "recNow",
+                                                  "address": "item:2"})
+    assert result.error.code == "invalid_arguments" and result.error.field == "ref"
+    assert result.error.message == ("ref 'recNow' reads as 'rec_now', which already names "
+                                    "item:1: give ref 'rec_now' to point it here instead, "
+                                    "or a name of its own")
+    assert session.entry("d1").refs == {"rec_now": "item:1"}
+    # The same address again is no collision.
+    result = toolbox.dispatch(session, "t_name", {"doc": "d1", "ref": "recNow",
+                                                  "address": "item:1"})
+    assert result.ok and result.warnings == ["ref 'recNow' read as 'rec_now': write $rec_now"]
+
+
+def test_folded_refs_in_a_batch(toolbox, session):
+    result = toolbox.dispatch(session, "batch", {"ops": [
+        {"tool": "t_make", "arguments": {"doc": "d1", "ref": "catChart"}},
+        {"tool": "t_make", "arguments": {"doc": "d1", "target": "$catChart"}}]})
+    assert result.ok and result.data["ops"][1]["data"] == {"target": "item:1"}
+    assert result.warnings == ["ops[0]: ref 'catChart' read as 'cat_chart': write $cat_chart",
+                               "ops[1]: target '$catChart' read as '$cat_chart'"]
+    # A use of a ref a failed op would have made says so, folded or not.
+    result = toolbox.dispatch(session, "batch", {"ops": [
+        {"tool": "t_make", "arguments": {"doc": "d1", "ref": "newOne", "nope": 1}},
+        {"tool": "t_make", "arguments": {"doc": "d1", "target": "$newOne"}}]})
+    assert "$new_one was to be made by ops[0]" in result.error.message
+
+
+def test_a_namespaced_tool_in_a_batch_is_read_as_the_tool(toolbox, session):
+    for atomic in (False, True):
+        result = toolbox.dispatch(session, "batch", {"atomic": atomic, "ops": [
+            {"tool": "functions.t_set", "arguments": {"doc": "d1", "item": 2, "text": "a"}},
+            {"tool": "word_x.t_fit", "arguments": {"doc": "d1", "fit": "shrink"}}]})
+        assert result.ok, result.error
+        assert [op["tool"] for op in result.data["ops"]] == ["t_set", "t_fit"]
+        assert result.warnings[:3] == [
+            "ops[0]: tool 'functions.t_set' read as 't_set'",
+            "ops[1]: tool 'word_x.t_fit' read as 't_fit'",
+            "ops[1]: fit 'shrink' read as 'normal'"]
+    result = toolbox.dispatch(session, "batch", {"ops": [
+        {"tool": "functions.t_nothing", "arguments": {"doc": "d1"}}]})
+    assert result.error.message.startswith("ops[0] (functions.t_nothing) failed")
+    assert "no tool 'functions.t_nothing'" in result.error.message
+
+
+def test_a_namespaced_tool_at_the_top_level(toolbox, session):
+    result = toolbox.dispatch(session, "functions.t_set", {"doc": "d1", "item": 2, "text": "a"})
+    assert result.ok and result.tool == "t_set"
+    assert result.warnings == ["tool 'functions.t_set' read as 't_set'"]
+
+
+def test_an_unknown_key_one_level_down_says_where_it_belongs(toolbox, session):
+    result = toolbox.dispatch(session, "t_style", {"doc": "d1", "items": [
+        {"target": "a", "box": {"x": 1, "w": 2, "space_after": 3}}]})
+    assert result.error.field == "items[0].box.space_after"
+    assert result.error.message == ("unknown argument 'items[0].box.space_after'; "
+                                    "space_after belongs one level up, on items[0], not in box")
+    result = toolbox.dispatch(session, "t_style", {"doc": "d1", "items": [
+        {"target": "a", "x": 1}]})
+    assert result.error.message == ("unknown argument 'items[0].x'; x belongs one level "
+                                    "down: items[0].box.x")
+    result = toolbox.dispatch(session, "t_style", {"doc": "d1", "target": "a", "items": [
+        {"target": "a", "doc": "d1"}]})
+    assert result.error.message == ("unknown argument 'target'; target belongs one level "
+                                    "down: items[].target")
+    result = toolbox.dispatch(session, "t_style", {"doc": "d1", "items": [
+        {"target": "a", "Doc": "d1"}]})
+    assert result.error.message == ("unknown argument 'items[0].Doc'; doc belongs one level "
+                                    "up, at the top level, not in items[0]")
+    assert result.error.valid_options == ["anchor", "box", "space_after", "space_before",
+                                          "target"]
+
+
+def test_a_nested_alias_is_read_with_its_place(toolbox, session):
+    result = toolbox.dispatch(session, "t_style", {"doc": "d1", "items": [
+        {"target": "a"}, {"target": "b", "top": 6, "bottom": 4}]})
+    assert result.ok and result.data["items"][1] == {"target": "b", "space_before": 6,
+                                                     "space_after": 4}
+    assert result.warnings == ["items[1].top read as space_before",
+                               "items[1].bottom read as space_after"]
+    result = toolbox.dispatch(session, "t_style", {"doc": "d1", "items": [
+        {"target": "b", "top": 6, "space_before": 4}]})
+    assert result.error.field == "items[0].top" and "give space_before only" in result.error.message
+
+
+def test_nested_alias_definitions_are_checked():
+    params = {"doc": string("Doc."), "items": array(obj({"a": string()}), "Items.")}
+    with pytest.raises(SubsetError, match="which is a parameter"):
+        tool("t_x", "X.", params, aliases={"items[].a": "a"})(lambda call, doc, items: None)
+    with pytest.raises(SubsetError, match="which is not a parameter"):
+        tool("t_x", "X.", params, aliases={"items[].b": "c"})(lambda call, doc, items: None)
+    with pytest.raises(SubsetError, match="in no object parameter"):
+        tool("t_x", "X.", params, aliases={"rows[].b": "a"})(lambda call, doc, items: None)

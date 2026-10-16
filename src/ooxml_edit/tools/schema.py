@@ -380,7 +380,7 @@ def validate_call(schema: Mapping[str, Any], arguments: Any,
     """
     if not isinstance(arguments, Mapping):
         raise CallError("the arguments must be a JSON object")
-    return _validate(schema, arguments, "", notes if notes is not None else [])
+    return _validate(schema, arguments, "", notes if notes is not None else [], None)
 
 
 def close_match(value: str, options: Iterable[str]) -> str | None:
@@ -434,7 +434,44 @@ def _did_you_mean(value: str, options: Iterable[str]) -> str:
     return f"; did you mean {match!r}?" if match is not None and match != value else ""
 
 
-def _validate(node: Mapping[str, Any], value: Any, where: str, notes: list[str]) -> Any:
+def _misplaced(key: str, node: Mapping[str, Any], where: str,
+               outer: tuple[Mapping[str, Any], str] | None) -> str:
+    """Where an unknown ``key`` of the object at ``where`` belongs when it is a property one
+    level up (the enclosing object, ``outer``: its schema and place) or one level down (an
+    object property of this one, or its array's items) -- ``preset_name`` given in
+    ``items[4].box`` belongs on ``items[4]``; ``""`` when neither has it.  Matched
+    ignoring case and ``-``/``_``."""
+    folded = _fold(key)
+
+    def named(schema: Mapping[str, Any]) -> str | None:
+        return {_fold(name): name for name in schema.get("properties") or {}}.get(folded)
+
+    if outer is not None:
+        meant = named(outer[0])
+        if meant is not None:
+            inner = where[len(outer[1]):].lstrip(".") if outer[1] else where
+            return (f"; {meant} belongs one level up, "
+                    + (f"on {outer[1]}" if outer[1] else "at the top level")
+                    + f", not in {inner}")
+    below = []
+    for name, child in (node.get("properties") or {}).items():
+        many = child.get("type") == "array"
+        child = child.get("items") or {} if many else child
+        if child.get("type") == "object" and not is_free(child):
+            meant = named(child)
+            if meant is not None:
+                below.append(f"{_join(where, name)}{'[]' if many else ''}.{meant}")
+    if len(below) == 1:
+        return f"; {key} belongs one level down: {below[0]}"
+    if below:
+        return f"; {key} belongs one level down, in one of: {', '.join(below)}"
+    return ""
+
+
+def _validate(node: Mapping[str, Any], value: Any, where: str, notes: list[str],
+              outer: tuple[Mapping[str, Any], str] | None = None) -> Any:
+    """``value`` checked against ``node`` at ``where``; ``outer``: the enclosing object's
+    schema and place, for an unknown key that belongs there (:func:`_misplaced`)."""
     kind = node.get("type")
     label = where or "the arguments"
     if kind == "object":
@@ -447,8 +484,9 @@ def _validate(node: Mapping[str, Any], value: Any, where: str, notes: list[str])
         unknown = [key for key in value if key not in properties]
         if unknown:
             name = _join(where, unknown[0])
-            raise CallError(f"unknown argument {name!r}" + _did_you_mean(unknown[0], properties),
-                            name, sorted(properties))
+            hint = _misplaced(unknown[0], node, where, outer) or _did_you_mean(unknown[0],
+                                                                               properties)
+            raise CallError(f"unknown argument {name!r}" + hint, name, sorted(properties))
         result: dict[str, Any] = {}
         for name, child in properties.items():
             path = _join(where, name)
@@ -456,7 +494,7 @@ def _validate(node: Mapping[str, Any], value: Any, where: str, notes: list[str])
                 if name in required:
                     raise CallError(f"{path!r} is required", path)
                 continue
-            result[name] = _validate(child, value[name], path, notes)
+            result[name] = _validate(child, value[name], path, notes, (node, where))
         return result
     if kind == "array":
         if not isinstance(value, list):
@@ -466,7 +504,7 @@ def _validate(node: Mapping[str, Any], value: Any, where: str, notes: list[str])
         if "maxItems" in node and len(value) > node["maxItems"]:
             raise CallError(f"{label} has {len(value)} items; at most {node['maxItems']}", where)
         items = node.get("items") or {}
-        return [_validate(items, item, f"{where}[{index}]", notes)
+        return [_validate(items, item, f"{where}[{index}]", notes, outer)
                 for index, item in enumerate(value)]
     if kind == "string":
         if "orInteger" in node and not isinstance(value, (str, bool)) and isinstance(value, (int, float)):

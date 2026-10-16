@@ -91,6 +91,8 @@ from .worker import WorkerPool
 #: A ref's name: what ``$name`` may say.
 REF = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
 _REF_USE = re.compile(r"^\$([a-z][a-z0-9_]{0,31})(/.*)?$")
+#: What :func:`fold_ref` folds: letters, digits, ``_`` and ``-``, from a letter.
+_FOLDABLE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*$")
 
 
 class CallContext:
@@ -197,10 +199,24 @@ class Call:
                 seen.append(scope)
 
     def define_ref(self, name: str, address: str, *, doc: str | None = None) -> None:
-        """Name ``address`` ``name``, so later calls on the document may write ``$name``."""
-        if not REF.match(name):
-            raise ToolError("invalid_arguments", ref_rule(name), field="ref")
+        """Name ``address`` ``name``, so later calls on the document may write ``$name``.
+
+        A camelCase or hyphenated name (``recNow``, ``scale-note``) is kept as the ref name
+        it folds to (:func:`fold_ref`), with a warning -- unless that name already names
+        another address: then the call is refused rather than moving that ref."""
         doc = doc or (self.entry.doc_id if self.entry else None)
+        if not REF.match(name):
+            folded = fold_ref(name)
+            if folded is None:
+                raise ToolError("invalid_arguments", ref_rule(name), field="ref")
+            taken = self.refs(doc).get(folded) if doc is not None else None
+            if taken is not None and taken != address:
+                raise ToolError("invalid_arguments", f"ref {name!r} reads as {folded!r}, which "
+                                f"already names {taken}: give ref {folded!r} to point it here "
+                                "instead, or a name of its own", field="ref",
+                                details={"ref": folded, "address": taken})
+            self.result.warnings.append(f"ref {name!r} read as {folded!r}: write ${folded}")
+            name = folded
         if doc is None:
             raise ToolError("invalid_arguments", "a ref needs a document")
         self.context.refs.setdefault(doc, {})[name] = address
@@ -217,9 +233,14 @@ class Call:
     def resolve_ref(self, value: str, *, doc: str | None = None, field: str | None = None) -> str:
         """``value`` with a leading ``$name`` replaced by its address; other values as given."""
         match = _REF_USE.match(value) if isinstance(value, str) else None
-        if match is None:
-            return value
         known = self.refs(doc)
+        if match is None:
+            folded = _folded_use(value, known, self.context.failed_refs)
+            if folded is None:
+                return value
+            self.result.warnings.append(f"{field + ' ' if field else ''}{value!r} read as "
+                                       f"{folded!r}")
+            match = _REF_USE.match(folded)
         name, rest = match.group(1), match.group(2) or ""
         if name not in known:
             raise self.context.missing_ref(name, field) or ToolError(
@@ -632,7 +653,23 @@ class Toolbox:
                        font_dirs=self.font_dirs if font_dirs is _TOOLBOX_DEFAULT else font_dirs,
                        locale=self.locale if locale is _TOOLBOX_DEFAULT else locale)
 
-    def tool(self, name: str) -> Tool:
+    def tool_named(self, name: Any, notes: list[str] | None = None) -> Any:
+        """The tool name ``name`` stands for: itself, or the name after the last dot when a
+        model wrote a namespace before a tool's name (``functions.ppt_set_text``, a group's
+        ``charts.edit_chart``) -- no tool name has a dot.  ``notes`` gets a line for that.
+        The calls a provider sends and a batch's ops are read the same way."""
+        if not isinstance(name, str) or name in self.tools or "." not in name:
+            return name
+        bare = name.rsplit(".", 1)[1]
+        if bare not in self.tools:
+            return name
+        if notes is not None:
+            notes.append(f"tool {name!r} read as {bare!r}")
+        return bare
+
+    def tool(self, name: str, notes: list[str] | None = None) -> Tool:
+        """The tool ``name`` names (:meth:`tool_named`); ``invalid_arguments`` otherwise."""
+        name = self.tool_named(name, notes)
         if name not in self.tools:
             raise ToolError("invalid_arguments", f"no tool {name!r}",
                             valid_options=difflib.get_close_matches(name, self.tools, 5, 0.5)
@@ -746,7 +783,8 @@ class Toolbox:
         clean: Any = arguments
         notes: list[str] = []       # aliases read: warnings first
         try:
-            tool = self.tool(name)
+            tool = self.tool(name, notes)
+            name = tool.name
             clean = self._arguments(tool, arguments, notes)
             if tool.composite:
                 doc_ids = self._batch_documents(clean)
@@ -803,7 +841,7 @@ class Toolbox:
                          arguments: Any) -> frozenset[str]:
         """The documents a call will lock, as far as can be told before validating it."""
         try:
-            tool = self.tools[name]
+            tool = self.tools[self.tool_named(name)]
             parsed = json.loads(arguments) if isinstance(arguments, str) else arguments
             if not isinstance(parsed, Mapping):
                 return frozenset()
@@ -869,8 +907,10 @@ class Toolbox:
                           refs=dict(replay.refs), data=replay.data)
         context = CallContext()
         with collect_warnings() as caught:
-            arguments = self._with_refs(tool, arguments, entries, primary, context)
+            read: list[str] = []
+            arguments = self._with_refs(tool, arguments, entries, primary, context, read)
             call = Call(self, session, tool, arguments, entries, primary, context)
+            call.result.warnings += read
             self._with_datasets(tool, arguments, call)
             arguments = self._with_facts(tool, arguments, call)
             call.held = list(entries.values())   # dispatch() holds each once
@@ -919,8 +959,10 @@ class Toolbox:
 
     def _with_refs(self, tool: Tool, arguments: dict[str, Any],
                    entries: dict[str, DocumentEntry], primary: DocumentEntry | None,
-                   context: CallContext) -> dict[str, Any]:
-        """``arguments`` with every ``$name`` in a declared target replaced by its address."""
+                   context: CallContext, notes: list[str] | None = None) -> dict[str, Any]:
+        """``arguments`` with every ``$name`` in a declared target replaced by its address.
+        A camelCase or hyphenated ``$recNow`` that folds to a ref (:func:`fold_ref`) is read
+        as it, ``notes`` getting a line for that."""
         if not tool.refs or primary is None:
             return arguments
         doc = primary.doc_id
@@ -929,6 +971,11 @@ class Toolbox:
 
         def resolve(value: Any, where: str) -> Any:
             match = _REF_USE.match(value) if isinstance(value, str) else None
+            folded = _folded_use(value, known, context.failed_refs) if match is None else None
+            if folded is not None:
+                if notes is not None:
+                    notes.append(f"{where} {value!r} read as {folded!r}")
+                value, match = folded, _REF_USE.match(folded)
             if match is None:
                 meant = _misspelt_ref(value, known)
                 if meant is not None:
@@ -1058,7 +1105,8 @@ class Toolbox:
         are validated (an op that names none it can is refused when it runs)."""
         found: list[str] = []
         for op in arguments.get("ops") or []:
-            tool = self.tools.get(op.get("tool", "")) if isinstance(op, Mapping) else None
+            tool = self.tools.get(self.tool_named(op.get("tool", ""))) \
+                if isinstance(op, Mapping) else None
             args = op.get("arguments") if isinstance(op, Mapping) else None
             if tool is None or not (tool.sources or tool.facts) or not isinstance(args, Mapping):
                 continue
@@ -1109,7 +1157,7 @@ class Toolbox:
         """One op's tool and its validated arguments (the aliases read added to ``notes``).
         A :class:`ToolError`'s ``field`` is the op's own: ``tool``, or ``arguments`` and the
         path in them."""
-        name = op.get("tool", "") if isinstance(op, Mapping) else ""
+        name = self.tool_named(op.get("tool", "") if isinstance(op, Mapping) else "", notes)
         if name not in self.tools:
             raise ToolError("invalid_arguments", f"no tool {name!r}", field="tool",
                             valid_options=difflib.get_close_matches(name, self.tools, 5, 0.5)
@@ -1149,7 +1197,8 @@ class Toolbox:
         """Every document a batch's ops name, before they are validated (for the locks)."""
         found: list[str] = []
         for op in arguments.get("ops") or []:
-            tool = self.tools.get(op.get("tool", "")) if isinstance(op, Mapping) else None
+            tool = self.tools.get(self.tool_named(op.get("tool", ""))) \
+                if isinstance(op, Mapping) else None
             args = op.get("arguments") if isinstance(op, Mapping) else None
             if tool is None or tool.composite or not isinstance(args, Mapping):
                 continue
@@ -1318,7 +1367,8 @@ class Toolbox:
                     raise ToolError("refused", f"{doc} was opened after the batch began: "
                                     "call it on its own", field="doc")
             handler = self._handler(session, tool, arguments, primary)
-            arguments = self._with_refs(tool, arguments, entries, primary, context)
+            read: list[str] = []
+            arguments = self._with_refs(tool, arguments, entries, primary, context, read)
             arguments, found = self._sources(
                 session, tool, arguments,
                 hint=lambda value: self._source_hint(session, doc_ids, value))
@@ -1326,6 +1376,7 @@ class Toolbox:
             call = Call(self, session, tool, arguments,
                         {doc: held[doc] for doc in [*doc_ids, *found] if doc in held},
                         primary, context)
+            call.result.warnings += read
             self._with_datasets(tool, arguments, call)
             arguments = self._with_facts(tool, arguments, call)
             result = _as_result(handler(call, **arguments), call.result)
@@ -1388,23 +1439,37 @@ class Toolbox:
 
 def _aliased(tool: Tool, arguments: Any, notes: list[str]) -> Any:
     """``arguments`` with every name in ``tool.aliases`` renamed to the tool's own, a note
-    for each (``from_columns read as columns``).  An alias given with the name it stands for is
+    for each (``from_columns read as columns``; a nested one with its place,
+    ``items[2].top read as space_before``).  An alias given with the name it stands for is
     refused: the call says one thing twice."""
     if not tool.aliases or not isinstance(arguments, Mapping):
         return arguments
-    renamed = dict(arguments)
+    renamed: Any = dict(arguments)
     for alias, name in tool.aliases.items():
-        if renamed.get(alias) is None:
-            continue
-        meant = name(renamed) if callable(name) else name
-        if meant is None or meant == alias:
-            continue
-        if renamed.get(meant) is not None:
-            raise ToolError("invalid_arguments", f"{alias} and {meant} say the same here; "
-                            f"give {meant} only", field=alias, valid_options=[meant])
-        renamed[meant] = renamed.pop(alias)
-        notes.append(f"{alias} read as {meant}")
+        *path, key = alias.split(".")
+        if path:
+            renamed = _walk(renamed, path, "", lambda node, where, key=key, name=name:
+                            _renamed(node, key, name, where, notes))
+        else:
+            renamed = _renamed(renamed, key, name, "", notes)
     return renamed
+
+
+def _renamed(node: Any, alias: str, name: Any, where: str, notes: list[str]) -> Any:
+    """One object of the arguments (at ``where``) with ``alias`` read as ``name``."""
+    if not isinstance(node, Mapping) or node.get(alias) is None:
+        return node
+    meant = name(node) if callable(name) else name
+    if meant is None or meant == alias:
+        return node
+    field = f"{where}.{alias}" if where else alias
+    if node.get(meant) is not None:
+        raise ToolError("invalid_arguments", f"{alias} and {meant} say the same here; "
+                        f"give {meant} only", field=field, valid_options=[meant])
+    node = dict(node)
+    node[meant] = node.pop(alias)
+    notes.append(f"{field} read as {meant}")
+    return node
 
 
 def ref_rule(name: str) -> str:
@@ -1417,6 +1482,32 @@ def ref_rule(name: str) -> str:
     return (f"ref {name!r} is not a ref name: a ref starts with a lowercase letter, then "
             f"up to 31 lowercase letters, digits or _ (no capitals, spaces or -); "
             f"e.g. {suggestion!r}")
+
+
+def fold_ref(name: Any) -> str | None:
+    """The ref name a camelCase or hyphenated name stands for: ``recNow`` -> ``rec_now``,
+    ``scale-note`` -> ``scale_note``, ``HTTPLink`` -> ``http_link``; ``None`` when it
+    folds to no ref name, holds anything but letters, digits, ``_`` and ``-``, or has no
+    lowercase letter (``A1`` is an address, not a ref)."""
+    if not isinstance(name, str) or not _FOLDABLE.match(name) or not re.search("[a-z]", name):
+        return None
+    folded = re.sub(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])", "_", name)
+    folded = folded.replace("-", "_").lower()
+    return folded if REF.match(folded) else None
+
+
+def _folded_use(value: Any, known: Mapping[str, str],
+                failed: Mapping[str, int] | None = None) -> str | None:
+    """``$recNow`` (or ``$recNow/rest``) as ``$rec_now`` when it folds (:func:`fold_ref`)
+    to a known ref -- or one a failed op of the batch would have made, whose refusal then
+    says so; ``None`` for anything else."""
+    if not isinstance(value, str) or not value.startswith("$"):
+        return None
+    head, slash, rest = value[1:].partition("/")
+    folded = fold_ref(head)
+    if folded is None or folded == head or (folded not in known and folded not in (failed or {})):
+        return None
+    return f"${folded}{slash}{rest}"
 
 
 def _misspelt_ref(value: Any, known: Mapping[str, str]) -> str | None:
@@ -1524,8 +1615,8 @@ def _ref_names(node: Any) -> list[str]:
         item = stack.pop()
         if isinstance(item, Mapping):
             ref = item.get("ref")
-            if isinstance(ref, str) and REF.match(ref):
-                found.append(ref)
+            if isinstance(ref, str) and (REF.match(ref) or fold_ref(ref)):
+                found.append(ref if REF.match(ref) else fold_ref(ref))
             stack.extend(item.values())
         elif isinstance(item, list):
             stack.extend(item)

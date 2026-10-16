@@ -2,6 +2,35 @@
 
 Versions are those in `pyproject.toml`; none is published to PyPI yet.
 
+## 0.35.0 -- unreleased
+- Forgiving the model's small mistakes (round 6, R2, R3, R7), at no cost in tool
+  definitions: each is read with a line in the result's `warnings` (in a batch,
+  `ops[i]: ...`), never guessed.
+  - Ref names in camelCase or with hyphens (`recNow`, `scale-note`) were refused. A ref
+    defined so is kept as the name it folds to (`rec_now`, `scale_note`; `HTTPLink`:
+    `http_link`), "ref 'recNow' read as 'rec_now': write $rec_now"; `$recNow` in a
+    declared target, or through `call.resolve_ref`, is read as `$rec_now` when that ref
+    exists (or a failed op of the batch would have made it, which the refusal then says).
+    `dispatch.fold_ref`. A folded name that already names another address is refused
+    ("give ref 'rec_now' to point it here instead, or a name of its own"); the same address
+    again is not. A name with spaces or other characters is refused as before, with the
+    rule in words; one without a lowercase letter (`$A1`, `$A$1`) is never folded: it stays
+    an address.
+  - A tool name with a namespace before it, `functions.ppt_set_text` or a group's
+    `charts.edit_chart`, is read as the tool (no tool name has a dot):
+    `Toolbox.tool_named`, used for a call's name and for a batch's `ops[i].tool` alike
+    (and for the documents a batch locks). Before, a batch op so named was "no tool"; at
+    the top level a provider strips the prefix, and the dispatcher now reads it too.
+  - An unknown key that is a property of the enclosing object, or of an object one level
+    down, says where it belongs instead of "did you mean": "unknown argument
+    'items[4].box.preset_name'; preset_name belongs one level up, on items[4], not in box",
+    "x belongs one level down: items[0].box.x" (matched ignoring case and `-`/`_`).
+    `valid_options` is unchanged.
+  - `Tool.aliases` may name an argument inside an object by its path, `refs`-style:
+    `{"items[].top": "space_before"}` reads `top` in each item as `space_before`
+    ("items[11].top read as space_before"); a function alias gets that object. The
+    definition check names a path that is in no object parameter.
+
 ## 0.34.0 -- unreleased
 - Asset catalogues (round 5, T20): production shipped two tools of its own over a brand
   icon set (about 2,800 SVGs with a keyword index) to search and insert icons. A catalogue

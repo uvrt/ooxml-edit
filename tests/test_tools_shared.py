@@ -306,7 +306,7 @@ def test_a_ref_names_an_object_for_later_calls_and_is_listed(toolbox, session):
 
 
 def test_a_bad_ref_name_rolls_the_call_back(toolbox, session):
-    result = call(toolbox, session, "t_add", doc="d1", items=[{"text": "a", "ref": "Bad-Name"}])
+    result = call(toolbox, session, "t_add", doc="d1", items=[{"text": "a", "ref": "Bad Name"}])
     assert result.error.code == "invalid_arguments"
     assert session.entry("d1").document.items() == [] and session.entry("d1").refs == {}
 

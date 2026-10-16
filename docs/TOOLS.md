@@ -68,14 +68,27 @@ as the tool's own before validation, never sent, so it costs no tokens: a string
 `aliases` (`string(enum=[...], aliases={"shrink": "normal"})`, the validation schema's
 `valueAliases`, matched ignoring case) and a tool's `aliases` for argument names
 (`{"from_columns": "columns"}`, or a function of the arguments where the alias means the
-name only in some calls). Each one read adds a line to the result's `warnings`
+name only in some calls; inside an object argument a path, `{"items[].top":
+"space_before"}`). Each one read adds a line to the result's `warnings`
 (`frame.autofit 'shrink' read as 'normal'`, `slide read as target`; in a batch,
 `ops[i]: ...`); an alias given together with its name is refused. Only where the meaning is
 the same. A refusal says what would do: an enum value or an argument name close to an
 allowed one adds "did you mean ...?" (`valid_options` still lists them all), a `key` on a
 changing tool without one says that keys are for creating tools and this one is safe to
 repeat, and a ref name that is not one says the rule in words with a name that would do
-(`catChart`: `'cat_chart'`); `$Name` for a known ref, capitalised, says which it means.
+(`cat chart`: `'cat_chart'`); `$Name` for a known ref, capitalised, says which it means.
+An unknown key that is a property one level up or down says where it belongs
+(`items[4].box.preset_name`: "preset_name belongs one level up, on items[4], not in box";
+`items[0].w`: "w belongs one level down: items[0].box.w") instead of "did you mean".
+
+Round 6 reads three more of a model's small mistakes, each with a warning. A ref name in
+camelCase or with hyphens (`recNow`, `scale-note`) is kept as the name it folds to
+(`rec_now`, `scale_note`; `dispatch.fold_ref`), and `$recNow` in a target, or in
+`call.resolve_ref`, is read as `$rec_now` when that ref exists -- a name with no lowercase
+letter (`$A1`) stays an address. A folded name that already names another address is
+refused rather than moved. A tool name with a namespace before it
+(`functions.ppt_set_text`, `charts.edit_chart`: no tool name has a dot) is read as the
+tool's, in a call and in a batch's `ops[i].tool` alike (`Toolbox.tool_named`).
 
 **Datasets.** A call that derives figures from a document -- counts, sums, groups -- may
 keep them for the session as a `Dataset`: columns, rows, and beside every value its
