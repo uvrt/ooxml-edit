@@ -376,6 +376,9 @@ class Call:
         try:
             return self._fact(address, field)
         except ToolError as error:
+            suffix = textfacts.bad_format(address)
+            if suffix is not None and error.code in ("not_found", "invalid_arguments"):
+                raise textfacts.format_error(address, suffix, field) from error
             if error.field is None:
                 error.field = field
             raise

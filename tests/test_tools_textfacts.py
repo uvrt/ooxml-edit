@@ -282,3 +282,62 @@ def test_the_tool_declaration_is_checked():
     with pytest.raises(Exception, match="facts names 'nope'"):
         tool("bad_tool", "x", {"doc": string("d")}, facts=("nope",))(lambda call, doc: None)
     assert shared.definition("replace_text").facts == ("replace",)
+
+
+# -- a suffix that is no number format (round 6, R5) ----------------------------------------------
+
+
+@pytest.mark.parametrize("suffix, near", [("0.20", "0.00"), ("0,0", "0.0"), (".2f", "0.00"),
+                                          ("#,###.0", "#,##0.0"), ("0.0 %", "0.0%"),
+                                          ("00", "0")])
+def test_a_suffix_that_is_no_number_format_says_so_with_the_forms(toolbox, suffix, near):
+    session = _session(toolbox)
+    ok(toolbox.dispatch(session, "ds_keep", {"id": "by_item"}))
+    error = failed(say(toolbox, session, f"{{{{d:by_item/#1/rating:{suffix}}}}}"),
+                   "invalid_arguments")
+    assert f"{suffix.strip()!r} is not a number format" in error.message
+    assert "no column" not in error.message
+    assert f"{{{{d:by_item/#1/rating:{near}}}}}" in error.message
+    assert error.valid_options == list(textfacts.FORMS)
+    assert error.field == "items[0].text"
+    assert SAID == []
+
+
+def test_a_bad_suffix_on_an_unknown_column_or_a_source_says_the_same(toolbox):
+    session = _session(toolbox)
+    ok(toolbox.dispatch(session, "ds_keep", {"id": "by_item"}))
+    error = failed(say(toolbox, session, "{{d:by_item/#1/avg:0.20}}"), "invalid_arguments")
+    assert "'0.20' is not a number format" in error.message
+    error = failed(say(toolbox, session, "{{d2/t:checks/N-1/rating:0.20}}"),
+                   "invalid_arguments")
+    assert "'0.20' is not a number format" in error.message
+
+
+def test_a_column_named_with_a_colon_still_resolves(toolbox):
+    session = _session(toolbox)
+
+    @tool("ds_colon", "Keep a dataset with a colon in a column.", {}, documents=())
+    def ds_colon(call):
+        call.define_dataset("odd", Dataset(("item", "avg:0.20"), [("N-1", 7)], keys=1))
+        return Result(summary="kept")
+
+    with Toolbox([toy_say, ds_colon, *shared.SESSION_TOOLS], workers=0,
+                 formats=tools_toys.FORMATS, groups=shared.GROUPS) as box:
+        session = box.session(clock=CLOCK)
+        session.open(synthetic.outer_package(), "deck.pptx")
+        ok(box.dispatch(session, "ds_colon", {}))
+        ok(say(box, session, "{{d:odd/N-1/avg:0.20}}", "{{d:odd/N-1/'avg:0.20':0.0}}"))
+    assert SAID[-1]["items"] == [{"text": "7"}, {"text": "7.0"}]
+
+
+def test_a_quoted_column_or_a_plain_unknown_one_is_not_read_as_a_format(toolbox):
+    session = _session(toolbox)
+    ok(toolbox.dispatch(session, "ds_keep", {"id": "by_item"}))
+    error = failed(say(toolbox, session, "{{d:by_item/#1/'avg:0.20'}}"), "not_found")
+    assert "no column 'avg:0.20'" in error.message
+    error = failed(say(toolbox, session, "{{d:by_item/#1/avg:total}}"), "not_found")
+    assert "no column" in error.message
+    error = failed(say(toolbox, session, "{{d:2024}}"), "not_found")
+    assert "not a number format" not in error.message
+    assert textfacts.bad_format("d:2024") is None
+    assert textfacts.bad_format("d:x/#1/avg:0.0") is None

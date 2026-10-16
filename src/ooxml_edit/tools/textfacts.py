@@ -40,7 +40,9 @@ format after the address rounds it, half away from zero as a table format's deri
 does: ``{{d:by_topic/door/mean:0.0}}`` -- ``0`` whole, ``0.0`` to ``0.000000000`` that many
 decimals, ``#,##0...`` grouping thousands with the locale's separator, ``%`` at the end a
 percent (``0.0%``).  Nothing else: a source column's own number format is not known to a
-dataset, and a derive that rounds (``round``) has its values rounded already.
+dataset, and a derive that rounds (``round``) has its values rounded already.  A suffix
+that looks like a format but is none (``{{d:x/#1/avg:0.20}}``) is refused as such, listing
+the forms (:func:`bad_format`), unless a column of that whole name (``avg:0.20``) exists.
 
 **Dates** are written as a table cell gets them, in the locale's day order.
 """
@@ -61,6 +63,11 @@ from .sources import QUALIFIED, Rows, label, merged, number, prefixes, what
 REFERENCE = re.compile(r"(\\?)\{\{([^{}]{1,500})\}\}")
 #: A number format after the address: ``:0.0``, ``:#,##0``, ``:0%``.
 FORMAT = re.compile(r":((?:#,##)?0(?:\.(0{1,9}))?(%)?)\s*$")
+#: A suffix after the last ``:`` that a model meant as a number format: digits, ``#``,
+#: ``.``, ``,``, ``%`` and spaces (``0.20``, ``0,0``, ``##.#``), or a Python-style ``.2f``.
+ATTEMPTED_FORMAT = re.compile(r"\s*(?:[#0-9.,%\s]*[#0-9][#0-9.,%\s]*|\.?[0-9]*[fFgGdD%])\s*")
+#: The number formats a reference takes, as an error lists them.
+FORMS = ("0", "0.0", "0.00", "#,##0", "#,##0.0", "0%", "0.0%")
 #: How many values one argument may reference.
 MAX_FACTS = 50
 
@@ -177,6 +184,44 @@ def split(address: str) -> tuple[str, list[tuple[str, bool]], str | None]:
     if len(parts) > 1 and re.fullmatch(r"d[0-9]+", parts[0][0]) and not parts[0][1]:
         parts = [(parts[0][0] + "/" + parts[1][0], False)] + parts[2:]
     return parts[0][0], parts[1:], fmt
+
+
+def bad_format(address: str) -> str | None:
+    """The suffix after the last ``:`` of ``address``'s last segment when it looks like a
+    number format (:data:`ATTEMPTED_FORMAT`) and is not one :data:`FORMAT` takes
+    (``0.20`` of ``d:x/#1/avg:0.20``); ``None`` otherwise, or when that segment is quoted
+    (``'avg:0.20'`` names a column)."""
+    if FORMAT.search(address):
+        return None
+    parts = _segments(address.strip())
+    last = parts[-1]
+    source = len(parts) == 1 or (len(parts) == 2 and re.fullmatch(r"d[0-9]+", parts[0][0]))
+    if last[1] or last[0].count(":") < (2 if source else 1):    # d:2024 is a source
+        return None
+    suffix = last[0].rpartition(":")[2]
+    return suffix if suffix.strip() and ATTEMPTED_FORMAT.fullmatch(suffix) else None
+
+
+def format_error(address: str, suffix: str, field: str | None) -> ToolError:
+    """The refusal of a reference whose suffix :func:`bad_format` found: what it is not, the
+    forms there are, and the reference written with the nearest one."""
+    body = address.strip()
+    body = body[:body.rfind(":")]
+    grouped = "#," in suffix
+    point = "." if "." in suffix or grouped else ","          # 0,00: a decimal comma
+    decimals = re.search(re.escape(point) + r"([0-9#]+)", suffix)
+    count = min(len(decimals.group(1)), 9) if decimals else 0
+    python = re.fullmatch(r"\s*\.([0-9])[fF%]\s*", suffix)
+    if python:
+        count = int(python.group(1))
+    near = ("#,##0" if grouped else "0") + ("." + "0" * count if count else "") + \
+        ("%" if "%" in suffix else "")
+    return ToolError("invalid_arguments", f"{{{{{address}}}}}: {suffix.strip()!r} is not a "
+                     "number format a reference takes. Write :0 (a whole number), :0.0 to "
+                     ":0.000000000 (that many decimals, one 0 each), :#,##0 or :#,##0.0 "
+                     "(thousands grouped), with % at the end for a percent (:0.0%); e.g. "
+                     f"{{{{{body}:{near}}}}}", field=field,
+                     valid_options=list(FORMS))
 
 
 def _segments(body: str) -> list[tuple[str, bool]]:
@@ -421,6 +466,6 @@ def briefs(facts: Iterable[Fact]) -> list[dict[str, Any]]:
     return [fact.brief() for fact in facts]
 
 
-__all__ = ["FORMAT", "Fact", "MAX_FACTS", "REFERENCE", "briefs", "expand", "known_prefixes",
-           "number_text", "pick", "quote", "qualify_text", "record", "references", "split",
+__all__ = ["ATTEMPTED_FORMAT", "FORMAT", "FORMS", "Fact", "MAX_FACTS", "REFERENCE", "bad_format",
+           "briefs", "expand", "format_error", "known_prefixes", "number_text", "pick", "quote", "qualify_text", "record", "references", "split",
            "value_text", "walk_texts"]

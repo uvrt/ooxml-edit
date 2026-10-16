@@ -2,6 +2,24 @@
 
 Versions are those in `pyproject.toml`; none is published to PyPI yet.
 
+## 0.36.0 -- unreleased
+- A text fact's bad number format says so (round 6, R5): `{{d:x/#1/avg:0.20}}` was "no
+  column 'avg:0.20'". When the call fails and the part after the last `:` of the last
+  segment looks like an attempted format (digits, `#`, `.`, `,`, `%`, spaces; or `.2f`) but
+  is none `FORMAT` takes, the refusal is `invalid_arguments`: "'0.20' is not a number
+  format a reference takes. Write :0 ..., :0.0 to :0.000000000 ..., :#,##0 or :#,##0.0
+  ..., with % at the end for a percent (:0.0%); e.g. {{d:x/#1/avg:0.00}}", the forms
+  (`textfacts.FORMS`) as `valid_options`. Only when the reference fails: a column named
+  `avg:0.20` keeps resolving; a quoted last segment (`'avg:0.20'`) and a source's own
+  colon (`d:2024`) are never read as a format. `textfacts.bad_format`,
+  `textfacts.format_error`. No change to any definition.
+- `find_text`'s and `replace_text`'s `slides` take slide ids as `render`'s and `check`'s do
+  (round 6, R6): a number from 1, `s:<id>` or a `$ref` (strings with `orInteger`, "or ids
+  (s:256, $ref)"; `refs` on `slides[]`); a deck format's handler reads them. Definitions:
+  +6 estimated tokens per tool (pptx-agent's core 3,542 -> 3,560 with its own change,
+  docx-agent's 2,558 -> 2,570, xlsx-agent's 3,490 -> 3,496 with find_text alone). The
+  strict set changes: replace_text's `slides` items are strings. `shared._slides` is gone.
+
 ## 0.35.0 -- unreleased
 - Forgiving the model's small mistakes (round 6, R2, R3, R7), at no cost in tool
   definitions: each is read with a line in the result's `warnings` (in a batch,
