@@ -369,7 +369,11 @@ declares (`Tool.facts`: `ppt_set_text`'s texts and runs, a table's cells, `repla
   column's value as a percent; or through a number format after the address -- `:0`,
   `:0.0` (up to nine decimals), `:#,##0.0` (the locale's thousands separator), `:0.0%` --
   rounded half away from zero on the decimal shown. Datasets carry no number format; a
-  derive that rounds gives rounded values already.
+  derive that rounds gives rounded values already. A suffix after the last `:` that looks
+  like a format but is none (`{{d:x/#1/avg:0.20}}`, `:0,0`, `:.2f`) is refused as that --
+  "'0.20' is not a number format a reference takes", the forms, the reference with the
+  nearest one (`:0.00`), the forms as `valid_options` -- not as "no column 'avg:0.20'";
+  a column whose whole name is `avg:0.20` still resolves, quoted or not.
 - Only `{{d:` and a loaded format's prefix (`{{t:`) start a reference; `{{name}}` stays as
   it is, and `\{{d:x}}` writes `{{d:x}}`. On by default, no flag. A reference that names
   no dataset, table, row or column, a blank, or more than one value refuses the call with
