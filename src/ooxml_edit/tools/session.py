@@ -45,7 +45,7 @@ from collections import OrderedDict
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
 from os import PathLike, fspath
-from typing import Any, Callable, Hashable, Iterable, Iterator, Sequence
+from typing import Any, Callable, Hashable, Iterable, Iterator, Mapping, Sequence
 
 from .datasets import DATASET_PREFIX, DatasetEntry, dataset_id
 from .limits import LimitError, Limits, check_declared_type, check_image, check_package
@@ -133,6 +133,17 @@ class DocumentFormat:
     #: own drawings, not a dataset).  It only adds wording: what resolves never changes,
     #: and a hint that raises is ignored.  ``None``: the message is left as it is.
     source_hint: Callable[[Any, str], str | None] | None = None
+    #: References a text argument may hold to things of this format's own document -- the
+    #: call's (:mod:`.textfacts`): ``{prefix: resolve}``, ``resolve(document, name) ->
+    #: (text, fields)`` for ``{{<prefix><name>}}``, ``name`` with a ``$ref`` already
+    #: replaced by its address, ``fields`` what the kept fact adds.  Raise
+    #: :class:`~.results.ToolError` for a name that is not there.  Keeping the text current
+    #: is the format's.  Another format's document refuses the prefix.  Never ``d:``.  A
+    #: text instead of a function refuses the prefix in this format's documents in those
+    #: words -- a prefix another format resolves, which this one wants to say no to even
+    #: when no such format is loaded.
+    own_facts: dict[str, Callable[[Any, str], tuple[str, Mapping[str, Any]]] | str] = \
+        field(default_factory=dict)
     #: Keeps where values placed from a source came from, in the saved document:
     #: ``store_provenance(document, address, record)``, with ``address`` the table or chart
     #: the values went into and ``record`` an :mod:`ooxml_edit.provenance` record (a dict:

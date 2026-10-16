@@ -2,6 +2,23 @@
 
 Versions are those in `pyproject.toml`; none is published to PyPI yet.
 
+## 0.37.0 -- unreleased
+- A document's own references in text (round 6, R8): `DocumentFormat.own_facts`,
+  `{prefix: resolve}`, lets a format resolve `{{<prefix><name>}}` in the call's own
+  document -- pptx-agent's `{{slide:s:262}}`, that slide's number. `resolve(document,
+  name) -> (text, fields)`; a `$ref` in the name is replaced first (`{{slide:$intro}}`), and
+  the fact's `source` is the prefix with the address (`slide:s:262`), never the ref. The
+  fact is a `textfacts.Fact` like a dataset value's (`call.facts`, `data.facts`), so a format
+  keeps it where it keeps the others. A document handle (`{{d1/slide:...}}`) and a number
+  format are refused with the form; a document whose format does not take the prefix
+  refuses it naming the formats that do ("slide: references are for pptx documents; a
+  docx takes none"), since every loaded format's prefixes are known; a format may name a
+  prefix with a text instead of a function to refuse it in its own words even when no
+  format that takes it is loaded (docx-agent: "slide references are for decks"). Own
+  references are
+  never qualified as sources (`qualify_text`'s `own`). `textfacts.own_prefixes`,
+  `own_prefix`, `own_name`, `own_record`, `not_own`. No change to any definition.
+
 ## 0.36.0 -- unreleased
 - A text fact's bad number format says so (round 6, R5): `{{d:x/#1/avg:0.20}}` was "no
   column 'avg:0.20'". When the call fails and the part after the last `:` of the last

@@ -385,6 +385,17 @@ declares (`Tool.facts`: `ppt_set_text`'s texts and runs, a table's cells, `repla
   keeps the facts an edit leaves true (moved with the text; a touched or bordering one is
   dropped) and `provenance.facts_found(facts, text)` the ones still where they say -- what a
   reader checks, since another application may have edited the text since.
+- A document's own references (0.37.0): a format may resolve a prefix in the call's own
+  document (`DocumentFormat.own_facts`, `{prefix: resolve}`) -- a deck's
+  `{{slide:s:262}}`, that slide's number. `resolve(document, name)` gives the text and the
+  fields the fact adds; `name` comes with a `$ref` replaced (`{{slide:$intro}}`), and the
+  fact's `source` is the prefix and that address. No document handle (`{{d1/slide:...}}`)
+  and no number format. Keeping the text current is the format's (a deck renumbers its
+  slide facts as slides move). Every loaded format's prefixes are known, so a document
+  whose format does not take one refuses it: "slide: references are for pptx documents; a
+  docx takes none" -- or in its own words when its `own_facts` names the prefix with a
+  text instead of a function (Word's "slide references are for decks"), which works with
+  no deck format loaded too.
 
 **Loading tools and the prompt.** Every tool is in one group; the `core` group is always
 loaded, the others on demand. What `definitions()` sends by default:
