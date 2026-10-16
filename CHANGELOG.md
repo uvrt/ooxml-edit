@@ -2,6 +2,18 @@
 
 Versions are those in `pyproject.toml`; none is published to PyPI yet.
 
+## 0.42.0 -- unreleased
+- `add_series` on a scatter chart keeps a marker-only scatter line-less (round 6, item
+  12): a template series whose line is off (`c:spPr/a:ln/a:noFill`, as `add_chart`'s
+  scatter writes it) lost its `c:spPr` with the rest of its own look, so Office drew the
+  new series' line (a scatter's `lineMarker` style). The new series now gets the line
+  off (`a:ln w="19050"`, a new scatter's) and keeps the template's marker symbol and size
+  in its own colour; a template with no `c:marker` of its own (Office's automatic marker)
+  stays marker-automatic and line-less. A scatter with lines still drops the template's
+  look and draws Office's automatic line. Previously a scatter series with its own
+  marker went through 0.40's dot path and came back a 5 pt circle whatever its symbol,
+  at a line chart's 2.25 pt (unfilled) width. Tool definitions unchanged.
+
 ## 0.41.0 -- unreleased
 - `render` takes a deck's layouts and masters (round 6, R11): its `slides` description
   says so (`; layouts L2, masters M0`, the addresses ppt_edit_master and the add tools

@@ -546,9 +546,9 @@ def _series(kind: str, index: int, entry: dict, labels: list, format_code: str, 
         ser.append(_sp(_e("a:ln", {"w": "28575", "cap": "rnd"}, _fill(color), _e("a:round"))))
         ser.append(_e("c:marker", None, _val("c:symbol", "none")))
     elif plot == "scatter":
-        ser.append(_sp(_e("a:ln", {"w": "19050", "cap": "rnd"}, _e("a:noFill"), _e("a:round"))))
-        ser.append(_e("c:marker", None, _val("c:symbol", "circle"), _val("c:size", 5),
-                      _sp(_fill(color), _e("a:ln", {"w": "9525"}, _fill(series_color(index))))))
+        # Office's new scatter: markers, no line (measured).
+        ser.append(no_line_shape(SCATTER_LINE_WIDTH))
+        ser.append(dot_marker(index))
     elif plot == "bubble":
         # Office's bubble: the series colour at 75% opacity, no line (measured).
         translucent = series_color(index)
@@ -577,10 +577,23 @@ def _series(kind: str, index: int, entry: dict, labels: list, format_code: str, 
     return ser
 
 
-def no_line_shape() -> Element:
-    """A dot chart series' ``c:spPr``: a line series' line (as :func:`_series` writes
-    it) with its fill off."""
-    return _sp(_e("a:ln", {"w": "28575", "cap": "rnd"}, _e("a:noFill"), _e("a:round")))
+#: The width of a line series' line, in EMU (2.25 pt), as Office writes a new one.
+LINE_WIDTH = 28575
+#: The width of a new scatter series' (unfilled) line, in EMU (1.5 pt), as Office writes it.
+SCATTER_LINE_WIDTH = 19050
+
+
+def no_line_shape(width: int = LINE_WIDTH) -> Element:
+    """A series' ``c:spPr`` with its line off: a dot chart's -- a line series' line (as
+    :func:`_series` writes it) with its fill off -- or, at :data:`SCATTER_LINE_WIDTH`, a
+    new scatter chart's."""
+    return _sp(_e("a:ln", {"w": str(width), "cap": "rnd"}, _e("a:noFill"), _e("a:round")))
+
+
+def marker_shape(index: int) -> Element:
+    """A marker's ``c:spPr``, filled and outlined (0.75 pt) in series ``index``'s colour, as
+    Office writes a new scatter chart's series."""
+    return _sp(_fill(series_color(index)), _e("a:ln", {"w": "9525"}, _fill(series_color(index))))
 
 
 def dot_marker(index: int) -> Element:
@@ -588,8 +601,7 @@ def dot_marker(index: int) -> Element:
     new scatter chart's series (measured, as :func:`_series` writes it) -- a 5 pt circle
     filled and outlined in the series colour."""
     return _e("c:marker", None, _val("c:symbol", "circle"), _val("c:size", 5),
-              _sp(_fill(series_color(index)), _e("a:ln", {"w": "9525"},
-                                                 _fill(series_color(index)))))
+              marker_shape(index))
 
 
 def _no_labels(pie: bool = False) -> Element:
