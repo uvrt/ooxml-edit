@@ -2,6 +2,19 @@
 
 Versions are those in `pyproject.toml`; none is published to PyPI yet.
 
+## 0.39.0 -- unreleased
+- A chart's dates read back as dates (round 6): `Chart.category_format` (the categories'
+  `c:numCache/c:formatCode`, `None` for text categories) and `Chart.category_dates` (ISO
+  dates, `2026-03-02`, where the categories are serials under a date code; `None`
+  otherwise), and `dates.is_date_code` to tell a date code from a number one. The format
+  libraries' `edit_chart read` lists such categories as those dates, with the code, rather
+  than as serials (`46083`), and takes one as a category's name. ISO rather than the
+  code's own text: a model reads it whatever the locale and the viewer's separator, and
+  it is the form `from` columns and Python dates already use. `chart.categories` is
+  unchanged (the serials), as are the workbook's values. No definition changes.
+  ooxml-common 0.17.0 keeps a copy of `dates.NAMES` and `LCIDS` to draw such categories;
+  its tests check the two agree.
+
 ## 0.38.0 -- unreleased
 - Date patterns (round 6, R9): `ooxml_edit.dates`, a pattern in Excel's date tokens (`d dd
   ddd dddd m mm mmm mmmm mmmmm yy yyyy`, either case; every other character literal, text

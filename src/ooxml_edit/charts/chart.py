@@ -42,6 +42,7 @@ from lxml import etree
 from ..xml import Element, append_in_order, find, local_name, make, qn, remove, subelement
 from .dmltext import paragraph_text, replace_body_text
 from . import record as _record
+from .. import dates as _dates
 from .host import GraphicHost, chart_part
 from .namespaces import C_NS  # noqa: F401  (re-exported)
 from .workbook import Area, Cell, SheetRange, Workbook, Worksheet, number_text, parse_formula
@@ -571,6 +572,39 @@ class Chart(ChartStyling):
             if series.categories.ref is not None:
                 return series.categories.points()
         return []
+
+    @property
+    def category_format(self) -> str | None:
+        """The categories' number format (their ``c:numCache/c:formatCode``), from the
+        first series that has categories: ``[$-413]d\\ mmmm\\ yyyy`` for dates kept as
+        serials; ``None`` for text categories or none."""
+        for series in self._series():
+            if series.categories.ref is not None:
+                cache = series.categories.cache
+                node = None if cache is None or not series.categories.numeric \
+                    else cache.find(qn("c:formatCode"))
+                return None if node is None else (node.text or "")
+        return None
+
+    @property
+    def category_dates(self) -> "list[str | None] | None":
+        """The categories as ISO dates when they are dates kept as serials -- numbers under a
+        date code (:attr:`category_format`, :func:`ooxml_edit.dates.is_date_code`), as
+        ``add_chart`` keeps :class:`~ooxml_edit.dates.DateCategory` values::
+
+            chart.categories        # [46027, 46063]
+            chart.category_dates    # ['2026-01-05', '2026-02-10']
+
+        A time of day comes after a ``T`` (``2026-01-05T12:00:00``); a point that names no
+        date (blank, before 1 March 1900) is ``None``.  ``None`` for categories that are not
+        dates."""
+        if not _dates.is_date_code(self.category_format):
+            return None
+        out: list[str | None] = []
+        for value in self.categories:
+            day = _dates.from_serial(value) if isinstance(value, (int, float)) else None
+            out.append(None if day is None else day.isoformat())
+        return out
 
     @property
     def point_count(self) -> int:

@@ -445,7 +445,11 @@ tokens work in every locale.
   region (`2/03/2026` nl-BE, `02/03/2026` en-GB, `02-03-2026` nl-NL, `02.03.26` de-DE,
   `02/03/2026` fr-FR, `2/3/26` es-ES, `02/03/26` it-IT, `3/2/26` en-US), so no pattern
   stands for "the locale's short date" and none is offered. A chart read back
-  (`action: "read"`) lists such categories as their serials.
+  (`action: "read"`) lists such categories as ISO dates (`2026-03-02`) with the code in
+  `category_format` (0.39.0, round 6; `Chart.category_dates`, `dates.is_date_code`): a
+  model reads the date without decoding a serial or a viewer's separator, and names a
+  category by it (`category: "2026-03-02"`). pptx2svg and docx2svg draw them as Office
+  does (ooxml-common 0.17.0: `5 januari 2026` for `[$-413]d\ mmmm\ yyyy`).
 - Without a pattern nothing changes: dates are written as text in the locale's day order.
 
 **Loading tools and the prompt.** Every tool is in one group; the `core` group is always
