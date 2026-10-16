@@ -76,14 +76,10 @@ _DOC = string("Document id.")
 _TARGET = string("Address as a read tool printed it, or $ref.")
 
 
-def _slides(what: str) -> Param:
-    return array(integer(minimum=1), f"Decks: slide numbers from 1{what}.", optional=True)
-
-
 def _slide_addresses(what: str) -> Param:
-    """``render``'s and ``check``'s slides: a number, or an address -- ``s:<id>`` or a ``$ref``
-    -- which stays the same slide while other calls add or move slides.  A string to the
-    provider (the subset has no unions); a number still passes (``orInteger``)."""
+    """Every shared tool's slides (``find_text``, ``replace_text``, ``render``, ``check``): a
+    number, or an address -- ``s:<id>`` or a ``$ref`` -- which stays the same slide while
+    other calls add or move slides.  A string to the provider (the subset has no unions); a number still passes (``orInteger``)."""
     return array(string(or_integer=1), f"Decks: slide numbers from 1, or ids (s:256, $ref){what}.",
                  optional=True)
 
@@ -228,10 +224,11 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
          {"doc": _DOC,
           "text": string("Text to find."),
           "regex": boolean("text is a Python regex. Default false.", optional=True),
-          "slides": _slides(". Default all"),
+          "slides": _slide_addresses(". Default all"),
           "range": _FIND_RANGE,
           "stories": _STORIES,
-          "cursor": _CURSOR}),
+          "cursor": _CURSOR},
+         refs=("slides[]",)),
     # S7
     Spec("replace_text",
          "Replace text, keeping its formatting. expect=one needs exactly one match (else the "
@@ -241,10 +238,10 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
           "replace": string("Replacement; with regex, \\1 is a group."),
           "expect": string("Matches expected.", enum=["one", "all"]),
           "regex": boolean("find is a Python regex. Default false.", optional=True),
-          "slides": _slides(". Default all"),
+          "slides": _slide_addresses(". Default all"),
           "range": _RANGE,
           "stories": _STORIES},
-         mutates=True, facts=("replace",)),
+         mutates=True, facts=("replace",), refs=("slides[]",)),
     # S8
     Spec("render",
          "Render slides or pages to PNG to look at them, at most 4 per call. Images cost "
