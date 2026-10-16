@@ -576,8 +576,10 @@ class Chart(ChartStyling):
     @property
     def category_format(self) -> str | None:
         """The categories' number format (their ``c:numCache/c:formatCode``), from the
-        first series that has categories: ``[$-413]d\\ mmmm\\ yyyy`` for dates kept as
-        serials; ``None`` for text categories or none."""
+        first series that has categories; ``None`` for text categories or none::
+
+            chart.category_format   # '[$-413]d\\ mmmm\\ yyyy' for dates kept as serials
+        """
         for series in self._series():
             if series.categories.ref is not None:
                 cache = series.categories.cache
