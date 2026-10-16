@@ -2,6 +2,15 @@
 
 Versions are those in `pyproject.toml`; none is published to PyPI yet.
 
+## 0.41.0 -- unreleased
+- `render` takes a deck's layouts and masters (round 6, R11): its `slides` description
+  says so (`; layouts L2, masters M0`, the addresses ppt_edit_master and the add tools
+  already take), and pptx-agent draws each as a new slide on it starts, its placeholders
+  outlined and tagged. `slides` and `pages` no longer repeat "at most 4", which the
+  tool's description states, so the definitions stay as long: pptx's core +1 estimated
+  token (3,560 -> 3,561), every definition unchanged (12,592), docx's and xlsx's
+  unchanged. render stays strict; its schema's types are unchanged.
+
 ## 0.40.0 -- unreleased
 - A dot chart (round 6, R10): `add_chart(..., "dot", ...)` and `edit_chart` `chart_type:
   "dot"`, one marker per category on the value axis -- averages on a fixed 1-5 scale with

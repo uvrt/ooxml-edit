@@ -247,8 +247,8 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
          "Render slides or pages to PNG to look at them, at most 4 per call. Images cost "
          "tokens; the result states how many.",
          {"doc": _DOC,
-          "slides": _slide_addresses(", at most 4"),
-          "pages": _pages(", at most 4"),
+          "slides": _slide_addresses("; layouts L2, masters M0"),
+          "pages": _pages(""),
           "width": integer("Pixels, 200-2576. Default 1280 (slides), 1000 (pages).",
                            minimum=200, maximum=2576, optional=True)},
          batchable=False, refs=("slides[]",)),
