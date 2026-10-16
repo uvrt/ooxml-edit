@@ -372,7 +372,12 @@ class Call:
         """The text a reference's ``address`` writes (:mod:`.textfacts`) and the record of
         it: one value of a dataset (``d:by_topic/door/mean``) or of an address in a
         document this call holds (``d2/t:checks/N-1/rating``), in the session's locale,
-        through the number format after it (``:0.0``) when there is one."""
+        through the number format after it (``:0.0``) when there is one; or a thing of the
+        call's own document, as its format writes it (``DocumentFormat.own_facts``)."""
+        owners = textfacts.own_prefixes(self.session.formats)
+        prefix = textfacts.own_prefix(address, {p for found in owners.values() for p in found})
+        if prefix is not None:
+            return self._own_fact(address, prefix, owners, field)
         try:
             return self._fact(address, field)
         except ToolError as error:
@@ -382,6 +387,27 @@ class Call:
             if error.field is None:
                 error.field = field
             raise
+
+    def _own_fact(self, address: str, prefix: str, owners: Mapping[str, Sequence[str]],
+                  field: str | None) -> tuple[str, dict[str, Any]]:
+        name = textfacts.own_name(address, prefix, field)
+        entry = self.entry
+        fmt = self.session.formats.get(entry.kind) if entry is not None else None
+        resolve = (getattr(fmt, "own_facts", None) or {}).get(prefix)
+        if resolve is None or isinstance(resolve, str):
+            takers = sorted(kind for kind, other in self.session.formats.items()
+                            if callable((getattr(other, "own_facts", None) or {}).get(prefix)))
+            raise textfacts.not_own(address, prefix, entry.kind if entry is not None else None,
+                                    takers, field, said=resolve)
+        if name.startswith("$"):
+            name = self.resolve_ref(name, field=field)
+        try:
+            text, fields = resolve(entry.document, name)
+        except ToolError as error:
+            if error.field is None:
+                error.field = field
+            raise
+        return text, textfacts.own_record(prefix, name, text, fields)
 
     def _fact(self, address: str, field: str | None) -> tuple[str, dict[str, Any]]:
         source, segments, fmt = textfacts.split(address)
@@ -1075,12 +1101,14 @@ class Toolbox:
             arguments = _walk(arguments, path.split("."), "", resolve)
         if tool.facts:
             known = textfacts.known_prefixes(session.formats)
+            own = {p for found in textfacts.own_prefixes(session.formats).values()
+                   for p in found}
 
             def references(text: str, where: str) -> str:
                 if "{{" not in text:
                     return text
                 return textfacts.qualify_text(text, known,
-                                              lambda address: resolve(address, where))
+                                              lambda address: resolve(address, where), own)
 
             for path in tool.facts:
                 arguments = textfacts.walk_texts(arguments, path.split("."), "", references)

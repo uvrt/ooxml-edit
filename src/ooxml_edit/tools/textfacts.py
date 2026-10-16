@@ -45,6 +45,16 @@ that looks like a format but is none (``{{d:x/#1/avg:0.20}}``) is refused as suc
 the forms (:func:`bad_format`), unless a column of that whole name (``avg:0.20``) exists.
 
 **Dates** are written as a table cell gets them, in the locale's day order.
+
+**A document's own references.**  A format may resolve references to a thing of the
+document the text is written into (``DocumentFormat.own_facts``, ``{prefix: resolve}``):
+``{{<prefix><name>}}`` is written as what ``resolve(document, name)`` gives -- ``name`` a
+``$ref`` replaced by its address -- and kept as a fact like the others: ``source`` the
+prefix and the name the format resolved (never the ``$ref``, which only the session
+knows), ``text``, and the fields the format adds.  Keeping it current is the format's
+business.  It takes no document handle and no number format.  Every loaded format's prefixes
+are known, so a document whose own format does not resolve one refuses it, naming the
+formats that do (:func:`not_own`), rather than leaving the braces in its text.
 """
 
 from __future__ import annotations
@@ -96,9 +106,27 @@ class Fact:
 
 
 def known_prefixes(formats: Mapping[str, Any]) -> list[str]:
-    """``d:`` and the prefixes the loaded formats resolve, longest first."""
+    """``d:``, the prefixes the loaded formats resolve to rows and their own references'
+    (:func:`own_prefixes`), longest first."""
     found = {DATASET_PREFIX} | {p for values in prefixes(formats).values() for p in values}
+    found |= {p for values in own_prefixes(formats).values() for p in values}
     return sorted(found, key=len, reverse=True)
+
+
+def own_prefixes(formats: Mapping[str, Any]) -> dict[str, list[str]]:
+    """``{kind: [prefix, ...]}``: the prefixes of the references each format resolves in its
+    own document (``DocumentFormat.own_facts``)."""
+    return {kind: sorted((getattr(fmt, "own_facts", None) or {}), key=len, reverse=True)
+            for kind, fmt in formats.items()}
+
+
+def own_prefix(address: str, own: Iterable[str]) -> str | None:
+    """The own-reference prefix ``address`` starts with (after a document handle, if it
+    has one), or ``None``."""
+    body = address.strip()
+    match = QUALIFIED.match(body)
+    body = match.group(2) if match else body
+    return next((p for p in sorted(own, key=len, reverse=True) if body.startswith(p)), None)
 
 
 def _inside(text: str, known: Sequence[str]) -> str | None:
@@ -121,12 +149,16 @@ def references(text: str, known: Sequence[str]) -> list[tuple[re.Match, str]]:
 
 
 def qualify_text(text: str, known: Sequence[str],
-                 qualify: Callable[[str], str]) -> str:
+                 qualify: Callable[[str], str], own: Iterable[str] = ()) -> str:
     """``text`` with each reference's address through ``qualify`` (``t:x/...`` ->
-    ``d2/t:x/...``); datasets and escaped references as they are."""
+    ``d2/t:x/...``); datasets, a document's own references (prefixes ``own``) and escaped
+    references as they are."""
+    own = tuple(own)
+
     def replace(match: re.Match) -> str:
         address = _inside(match.group(2), known)
-        if address is None or match.group(1) or address.startswith(DATASET_PREFIX):
+        if address is None or match.group(1) or address.startswith(DATASET_PREFIX) or \
+                own_prefix(address, own) is not None:
             return match.group(0)
         return "{{" + qualify(address) + "}}"
 
@@ -462,10 +494,52 @@ def _leaf(value: Any, where: str, visit: Callable[[str, str], str]) -> Any:
     return value
 
 
+# -- a document's own references -----------------------------------------------------------------
+
+
+def own_name(address: str, prefix: str, field: str | None = None) -> str:
+    """The name a reference to the document's own ``prefix`` gives (``7`` of ``{{n:7}}``,
+    ``n:`` the prefix), refused with the form when it carries a document handle or a number
+    format."""
+    body = address.strip()
+    qualified = QUALIFIED.match(body)
+    if qualified:
+        raise ToolError("invalid_arguments", f"{{{{{body}}}}}: a {prefix} reference names a "
+                        "thing of the document it is written into; leave the document "
+                        f"out: {{{{{qualified.group(2)}}}}}", field=field)
+    name = body[len(prefix):].strip()
+    found = FORMAT.search(name)
+    if found:
+        raise ToolError("invalid_arguments", f"{{{{{body}}}}}: a {prefix} reference takes no "
+                        f"number format; write {{{{{prefix}{name[:found.start()]}}}}}",
+                        field=field)
+    return name
+
+
+def own_record(prefix: str, name: str, text: str,
+               fields: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """What a document keeps of an own reference written: ``source`` (the prefix and the
+    name resolved), ``text``, and the format's ``fields``."""
+    return {"source": prefix + name, "text": text, **dict(fields or {})}
+
+
+def not_own(address: str, prefix: str, kind: str | None, takers: Sequence[str],
+            field: str | None, said: str | None = None) -> ToolError:
+    """The refusal of an own reference in a document whose format does not resolve its
+    prefix: in the format's words (``said``, its ``own_facts`` entry for the prefix), else
+    naming the kinds whose documents do."""
+    why = said.strip().rstrip(".") if said else (
+        f"{prefix} references are for {' and '.join(takers) or 'other'} documents; a "
+        f"{kind or 'document like this'} takes none")
+    return ToolError("invalid_arguments", f"{{{{{address.strip()}}}}}: {why}. Write the "
+                     "text itself, or \\{{ for the braces", field=field)
+
+
 def briefs(facts: Iterable[Fact]) -> list[dict[str, Any]]:
     return [fact.brief() for fact in facts]
 
 
 __all__ = ["ATTEMPTED_FORMAT", "FORMAT", "FORMS", "Fact", "MAX_FACTS", "REFERENCE", "bad_format",
-           "briefs", "expand", "format_error", "known_prefixes", "number_text", "pick", "quote", "qualify_text", "record", "references", "split",
-           "value_text", "walk_texts"]
+           "briefs", "expand", "format_error", "known_prefixes", "not_own", "number_text",
+           "own_name", "own_prefix", "own_prefixes", "own_record", "pick", "quote",
+           "qualify_text", "record", "references", "split", "value_text", "walk_texts"]
