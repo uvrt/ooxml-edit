@@ -546,8 +546,8 @@ reviewing tools there (`Tool.review_core`: the comments tool, a deck's slide com
 which would otherwise wait in their groups. `allowed_tools(roles=...)` and
 `system_prompt(roles=...)` follow: a role set without `edit` gets one role line after the
 formats' fragments (`Role: review. Do not change the document; ... Report each finding with
-the call that would fix it (tool and arguments). You may add comments and reply to them.`),
-one with `edit` none. The libraries list each format's role sets' token counts.
+the call that would fix it (tool and arguments). You may add comments and reply to them.`;
+the last sentence only where a tool places comments), one with `edit` none. The libraries list each format's role sets' token counts.
 
 A tool's role by default: `edit` if it changes the document (`mutates`), `review` if not --
 an application's own tools included; `role=` overrides it (`ANY_ROLE` for every role set).

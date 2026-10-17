@@ -390,3 +390,11 @@ def test_a_review_set_s_prompt_has_its_role_line(toolbox):
         "You may also resolve, reopen and delete them.")
     assert role_line(["review", "edit"]) == role_line(["edit"]) == role_line(ROLES) == ""
     assert role_line(["resolve"]).startswith("Role: resolve.")
+
+
+def test_a_reviewer_without_a_comments_tool_is_not_told_it_may_comment():
+    with Toolbox(TEXT_TOOLS + [t_check], formats=[TEXT]) as box:
+        prompt = box.system_prompt(roles=["review"])
+    assert "Role: review." in prompt and "comment" not in prompt.split("Role: review.")[1]
+    assert role_line(["review"], comments=False) == role_line(["review"]).replace(
+        " You may add comments and reply to them.", "")

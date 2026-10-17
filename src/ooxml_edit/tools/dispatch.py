@@ -785,11 +785,15 @@ class Toolbox:
     def system_prompt(self, *, extra: str | None = None,
                       roles: str | Iterable[str] | None = _TOOLBOX_DEFAULT) -> str:
         """The shared fragment, each format's fragment, the role line of ``roles`` (default
-        the toolbox's; a role set without ``edit`` is told it reviews, :func:`.prompts.role_line`;
-        one with ``edit`` gets no line), then the application's ``extra``."""
+        the toolbox's; a role set without ``edit`` is told it reviews, and that it may comment
+        where a tool places comments, :func:`.prompts.role_line`; one with ``edit`` gets no
+        line), then the application's ``extra``."""
         roles = self.roles if roles is _TOOLBOX_DEFAULT else role_set(roles)
+        # Comments are what a resolver acts on: a toolbox with a resolve action has them.
+        comments = any(RESOLVE in tool.roles and tool.base_role != ANY_ROLE
+                       for tool in self.tools.values())
         return prompts.system_prompt(*(fmt.prompt for fmt in self.formats.values()), extra=extra,
-                                     roles=roles)
+                                     roles=roles, comments=comments)
 
     def render_result(self, provider: str, result: Result, call_id: str, *,
                       images: str | None = None, detail: str | None = None) -> Any:

@@ -29,7 +29,8 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet.
 - What a role set is sent: only its tools, a mixed tool's `action` enum only its actions;
   the core is the roles' core tools, and for a set without `edit` the tools marked
   `Tool.review_core` too (the comments tools, a deck's slide comparison). A set without
-  `edit` gets a role line in the prompt (`prompts.role_line`); one with `edit` none.
+  `edit` gets a role line in the prompt (`prompts.role_line`; that it may comment only
+  where a tool places comments); one with `edit` none.
   docs/TOOLS.md, "Roles", has the three typical setups.
 
 ## 0.44.0 -- unreleased
