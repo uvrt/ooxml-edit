@@ -1,4 +1,5 @@
-"""Roles (round 7, item 9): additive toolsets -- ``review``, ``resolve``, ``edit`` -- that a
+"""Roles (round 7, item 9): additive toolsets -- ``review``, ``resolve``, ``accept``,
+``edit`` -- that a
 toolbox or session loads in any combination, enforced by the dispatcher, inside ``batch``
 too.  All three, the default, is the toolbox as it was without roles.  Made-up tools only."""
 
@@ -6,7 +7,7 @@ from __future__ import annotations
 
 import pytest
 
-from ooxml_edit.tools import (ANY_ROLE, EDIT, RESOLVE, REVIEW, ROLES, Result, SubsetError,
+from ooxml_edit.tools import (ACCEPT, ANY_ROLE, EDIT, RESOLVE, REVIEW, ROLES, Result, SubsetError,
                               ToolGroup, Toolbox, array, boolean, obj, role_set, shared,
                               string, tool)
 from ooxml_edit.tools.adapters import anthropic_problems, openai_problems
@@ -43,6 +44,16 @@ def t_chart(call, doc, action, text=None):
     return Result(summary=f"chart {action}")
 
 
+@tool("t_changes", "Tracked changes: list, accept or reject them.",
+      {"doc": string("Document id."),
+       "action": string("What to do; list changes nothing.", enum=["list", "accept", "reject"])},
+      kind="docx", group="t_review", mutates=True,
+      reads=lambda arguments: arguments.get("action") == "list",
+      action_roles={"list": REVIEW, "accept": ACCEPT, "reject": ACCEPT}, review_core=True)
+def t_changes(call, doc, action):
+    return Result(summary=f"changes {action}")
+
+
 @tool("t_tracking", "Turn tracking on or off.", {"doc": string("Document id."),
                                                  "on": boolean("Track.")},
       kind="docx", group="t_objects", mutates=True)
@@ -55,7 +66,7 @@ def t_check(call, doc):
     return {"items": len(call.document.items())}
 
 
-ROLE_TOOLS = [t_comments, t_chart, t_tracking, t_check]
+ROLE_TOOLS = [t_comments, t_changes, t_chart, t_tracking, t_check]
 GROUPS = [*shared.GROUPS, ToolGroup("t_review", "Comments."),
           ToolGroup("t_objects", "Charts and tracking.")]
 
@@ -90,16 +101,19 @@ def test_a_tool_s_roles_come_from_its_actions_and_whether_it_changes():
     assert t_tracking.roles == {EDIT}                  # a changing one
     assert t_chart.roles == {REVIEW, EDIT}
     assert t_comments.roles == set(ROLES)
-    assert t_comments.actions_for([REVIEW]) == ["list", "add", "reply"]
+    # Editing a comment's text is every role's (the user's decision, 2026-10-17).
+    assert t_comments.actions_for([REVIEW]) == ["list", "add", "reply", "edit"]
     assert t_comments.actions_for([REVIEW, RESOLVE]) == ["list", "add", "reply", "resolve",
-                                                         "reopen", "delete"]
+                                                         "reopen", "edit", "delete"]
     assert t_comments.actions_for([EDIT]) == ["edit"]
+    assert t_changes.roles == {REVIEW, ACCEPT}
+    assert t_changes.actions_for([ACCEPT]) == ["accept", "reject"]
     assert t_comments.role_of({"action": "add"}) == REVIEW
     assert t_comments.role_of({"action": "reply", "items": [{"text": "ok"}]}) == REVIEW
     assert t_comments.role_of({"action": "reply",
                                "items": [{"text": "ok", "resolve": True}]}) == RESOLVE
     assert t_comments.role_of({"action": "delete"}) == RESOLVE
-    assert t_comments.role_of({"action": "edit"}) == EDIT
+    assert t_comments.role_of({"action": "edit"}) == ANY_ROLE
 
 
 def test_the_shared_tools_roles():
@@ -121,6 +135,8 @@ def test_role_sets_are_named_roles_in_order():
     assert role_set(None) == ROLES
     assert role_set("review") == (REVIEW,)
     assert role_set(["edit", "review"]) == (REVIEW, EDIT)
+    assert role_set(["edit", "accept", "review"]) == (REVIEW, ACCEPT, EDIT)
+    assert ROLES == (REVIEW, RESOLVE, ACCEPT, EDIT)
     with pytest.raises(ValueError, match="unknown role"):
         role_set(["reviewer"])
     with pytest.raises(ValueError, match="no roles"):
@@ -136,10 +152,10 @@ def test_a_definition_with_a_wrong_role_is_refused_when_made():
         tool("t_bad", "Bad.", {"doc": string("Document id."),
                                "action": string("What.", enum=["read"])},
              action_roles={"publish": REVIEW})(lambda call, doc, action: 0)
-    with pytest.raises(SubsetError, match="the role 'any'"):
+    with pytest.raises(SubsetError, match="the role 'owner'"):
         tool("t_bad", "Bad.", {"doc": string("Document id."),
                                "action": string("What.", enum=["read"])},
-             action_roles={"read": ANY_ROLE})(lambda call, doc, action: 0)
+             action_roles={"read": "owner"})(lambda call, doc, action: 0)
 
 
 # -- the default: the toolbox as without roles --------------------------------------------------
@@ -182,14 +198,15 @@ def test_a_review_set_is_sent_only_its_tools_and_actions(toolbox):
     sent = {d["name"]: d for d in toolbox.definitions("anthropic", roles=["review"],
                                                       defer=False)}
     assert sent["t_comments"]["input_schema"]["properties"]["action"]["enum"] == \
-        ["list", "add", "reply"]
+        ["list", "add", "reply", "edit"]
+    assert sent["t_changes"]["input_schema"]["properties"]["action"]["enum"] == ["list"]
     assert sent["t_chart"]["input_schema"]["properties"]["action"]["enum"] == ["read"]
     # The toolbox's own tools keep every action: only what is sent is trimmed.
     assert toolbox.tools["t_comments"].actions == COMMENT_ACTIONS
     second = {d["name"]: d for d in toolbox.definitions("anthropic", roles=["review", "resolve"],
                                                         defer=False)}
     assert second["t_comments"]["input_schema"]["properties"]["action"]["enum"] == \
-        ["list", "add", "reply", "resolve", "reopen", "delete"]
+        ["list", "add", "reply", "resolve", "reopen", "edit", "delete"]
 
 
 def test_the_core_of_a_role_set_is_its_roles_core_tools(toolbox):
@@ -199,9 +216,9 @@ def test_the_core_of_a_role_set_is_its_roles_core_tools(toolbox):
                                                    roles=["edit"])))}
     everything = set(_names(toolbox.definitions("anthropic", groups="core")))
     # A reviewer's main tool joins the core of a role set without edit: comments.
-    assert core["review"] | core["edit"] == everything | {"t_comments"}
+    assert core["review"] | core["edit"] == everything | {"t_comments", "t_changes"}
     assert "undo" in core["edit"] - core["review"]
-    assert {"t_read", "t_check", "t_comments"} <= core["review"] - core["edit"]
+    assert {"t_read", "t_check", "t_comments", "t_changes"} <= core["review"] - core["edit"]
     assert {"open_document", "save_document", "batch"} <= core["review"] & core["edit"]
 
 
@@ -218,7 +235,7 @@ def test_a_reviewer_s_main_tools_are_in_the_core_of_a_set_without_edit(toolbox, 
 
 
 @pytest.mark.parametrize("roles", [["review"], ["review", "resolve"], ["resolve"], ["edit"],
-                                   ["review", "edit"]])
+                                   ["review", "edit"], ["accept"], ["review", "accept"]])
 def test_every_role_set_s_definitions_meet_each_provider_s_rules(toolbox, roles):
     for groups in ("core", None):
         assert anthropic_problems(toolbox.definitions("anthropic", groups=groups,
@@ -296,7 +313,7 @@ def test_resolving_a_comment_needs_the_resolve_role(toolbox):
         assert result.error.code == "refused", arguments
         assert "needs the resolve role" in result.error.message
         assert "Leave the thread as it is" in result.error.message
-        assert result.error.valid_options == ["list", "add", "reply"]
+        assert result.error.valid_options == ["list", "add", "reply", "edit"]
     closing = toolbox.dispatch(review, "t_comments", {
         "doc": "d1", "action": "reply", "items": [{"text": "done", "resolve": True}]})
     assert closing.error.code == "refused"
@@ -307,10 +324,8 @@ def test_resolving_a_comment_needs_the_resolve_role(toolbox):
                       {"action": "delete"},
                       {"action": "reply", "items": [{"text": "done", "resolve": True}]}):
         assert toolbox.dispatch(second, "t_comments", {"doc": "d1", **arguments}).ok, arguments
-    edit = toolbox.dispatch(second, "t_comments", {"doc": "d1", "action": "edit",
-                                                   "items": [{"text": "new"}]})
-    assert edit.error.code == "refused" and "t_comments edit needs the edit role" in \
-        edit.error.message
+    assert toolbox.dispatch(second, "t_comments", {"doc": "d1", "action": "edit",
+                                                   "items": [{"text": "new"}]}).ok
     assert not toolbox.dispatch(second, "t_set", {"doc": "d1", "target": "item:1",
                                                   "text": "x"}).ok
 
@@ -323,6 +338,9 @@ def test_an_editor_alone_has_no_reading_tools(toolbox):
     assert toolbox.dispatch(session, "t_comments", {"doc": "d1", "action": "edit",
                                                     "items": [{"text": "y"}]}).ok
     assert not toolbox.dispatch(session, "t_comments", {"doc": "d1", "action": "add"}).ok
+    accept = toolbox.dispatch(session, "t_changes", {"doc": "d1", "action": "accept"})
+    assert accept.error.code == "refused" and "t_changes needs the accept role" in \
+        accept.error.message
     assert toolbox.dispatch(session, "save_document",
                             {"doc": "d1", "name": "x.docx", "format": "docx"}).ok
 
@@ -389,7 +407,15 @@ def test_a_review_set_s_prompt_has_its_role_line(toolbox):
     assert role_line(["review", "resolve"]).endswith(
         "You may also resolve, reopen and delete them.")
     assert role_line(["review", "edit"]) == role_line(["edit"]) == role_line(ROLES) == ""
-    assert role_line(["resolve"]).startswith("Role: resolve.")
+    assert role_line(["resolve"]) == ("Role: resolve. Do not change the document; you may "
+                                      "only resolve, reopen and delete comments.")
+    assert role_line(["review", "accept"]).endswith(
+        "reply to them. You may also accept and reject tracked changes.")
+    assert role_line(["review", "accept"], tracked=False) == role_line(["review"])
+    assert role_line(["accept"]) == ("Role: accept. Do not change the document; you may only "
+                                     "accept and reject tracked changes.")
+    assert role_line(["resolve", "accept"]).startswith("Role: resolve and accept.")
+    assert role_line(["accept", "edit"]) == ""
 
 
 def test_a_reviewer_without_a_comments_tool_is_not_told_it_may_comment():
@@ -398,3 +424,61 @@ def test_a_reviewer_without_a_comments_tool_is_not_told_it_may_comment():
     assert "Role: review." in prompt and "comment" not in prompt.split("Role: review.")[1]
     assert role_line(["review"], comments=False) == role_line(["review"]).replace(
         " You may add comments and reply to them.", "")
+
+
+# -- accept: settling tracked changes ------------------------------------------------------------
+
+
+def test_an_editor_in_chief_accepts_and_rejects_but_does_not_edit(toolbox):
+    session = _session(toolbox, ["review", "accept"])
+    for action in ("list", "accept", "reject"):
+        assert toolbox.dispatch(session, "t_changes", {"doc": "d1", "action": action}).ok
+    assert toolbox.dispatch(session, "t_comments", {"doc": "d1", "action": "add",
+                                                    "items": [{"text": "ok"}]}).ok
+    for name, arguments in (("t_add", {"doc": "d1", "items": [{"text": "x"}]}),
+                            ("t_comments", {"doc": "d1", "action": "resolve"})):
+        assert toolbox.dispatch(session, name, arguments).error.code == "refused", name
+    sent = {d["name"]: d for d in toolbox.definitions("anthropic", groups="core",
+                                                      roles=["review", "accept"])}
+    assert sent["t_changes"]["input_schema"]["properties"]["action"]["enum"] == [
+        "list", "accept", "reject"]
+    assert "You may also accept and reject tracked changes." in \
+        toolbox.system_prompt(roles=["review", "accept"])
+
+
+def test_accepting_needs_the_accept_role(toolbox):
+    review = _session(toolbox, ["review", "resolve"])
+    refused = toolbox.dispatch(review, "t_changes", {"doc": "d1", "action": "reject"})
+    assert refused.error.code == "refused" and refused.error.field == "action"
+    assert refused.error.message == (
+        "t_changes reject needs the accept role; this session has review, resolve. Leave "
+        "the tracked changes as they are and say which should be accepted or rejected.")
+    assert refused.error.valid_options == ["list"]
+    assert refused.error.details == {"role": "accept", "roles": ["review", "resolve"]}
+
+
+def test_accept_alone_settles_changes_and_reads_nothing(toolbox):
+    session = _session(toolbox, ["accept"])
+    assert toolbox.dispatch(session, "t_changes", {"doc": "d1", "action": "accept"}).ok
+    listed = toolbox.dispatch(session, "t_changes", {"doc": "d1", "action": "list"})
+    assert listed.error.code == "refused" and "needs the review role" in listed.error.message
+    core = _names(toolbox.definitions("anthropic", groups="core", roles=["accept"]))
+    assert "t_changes" in core
+    # The comments tool is there for its text edits, every role's, but not in the core.
+    assert "t_comments" not in core
+    assert "t_comments" in _names(toolbox.definitions("anthropic", roles=["accept"]))
+
+
+def test_a_batch_holds_each_op_to_the_accept_role(toolbox):
+    session = _session(toolbox, ["review", "accept"])
+    result = toolbox.dispatch(session, "batch", {"ops": _ops(
+        ("t_changes", {"doc": "d1", "action": "accept"}),
+        ("t_add", {"doc": "d1", "items": [{"text": "x"}]}),
+        ("t_changes", {"doc": "d1", "action": "reject"}))})
+    assert result.ok and result.data["failed"] == [1]
+    review = _session(toolbox, ["review"])
+    atomic = toolbox.dispatch(review, "batch", {"atomic": True, "ops": _ops(
+        ("t_changes", {"doc": "d1", "action": "list"}),
+        ("t_changes", {"doc": "d1", "action": "accept"}))})
+    assert atomic.error.code == "refused" and atomic.error.field == "ops[1].arguments.action"
+    assert "t_changes accept needs the accept role" in atomic.error.message

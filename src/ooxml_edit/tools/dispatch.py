@@ -79,7 +79,8 @@ from .datasets import (DATASET_PREFIX, Dataset, DatasetEntry, check_dataset_id,
                        dataset_id, row_range, rows_text)
 from .limits import LimitError, Limits
 from .logs import CallRecord, digest, log_call, logger, shape
-from .registry import ANY_ROLE, CORE, EDIT, RESOLVE, Tool, ToolGroup, merge_tools, role_set
+from .registry import (ACCEPT, ANY_ROLE, CORE, EDIT, RESOLVE, Tool, ToolGroup, merge_tools,
+                       role_set)
 from .results import Image, Result, ToolError
 from .schema import CallError, validate_call
 from .session import (Clock, DocumentEntry, DocumentFormat, Output, Session, doc_order,
@@ -641,10 +642,11 @@ class Toolbox:
 
         ``roles`` -- what the model may do: any of ``review`` (read, find, render, check,
         compare; add and reply to comments), ``resolve`` (resolve, reopen and delete
-        comments) and ``edit`` (every other change) -- is the default of the sessions this
+        comments), ``accept`` (accept and reject tracked changes) and ``edit`` (every other
+        change) -- is the default of the sessions this
         toolbox makes and of :meth:`definitions`, :meth:`allowed_tools` and
         :meth:`system_prompt`; each takes ``roles=`` to override it.  ``None``, the
-        default, is all three: every tool, the definitions and prompt as without roles.  A
+        default, is all four: every tool, the definitions and prompt as without roles.  A
         call outside the session's roles is refused, inside ``batch`` too."""
         self.formats: dict[str, DocumentFormat] = {fmt.kind: fmt for fmt in formats}
         self.tools: dict[str, Tool] = _with_format_tools(merge_tools(tools),
@@ -789,11 +791,12 @@ class Toolbox:
         where a tool places comments, :func:`.prompts.role_line`; one with ``edit`` gets no
         line), then the application's ``extra``."""
         roles = self.roles if roles is _TOOLBOX_DEFAULT else role_set(roles)
-        # Comments are what a resolver acts on: a toolbox with a resolve action has them.
-        comments = any(RESOLVE in tool.roles and tool.base_role != ANY_ROLE
-                       for tool in self.tools.values())
+        # Comments are what a resolver acts on, tracked changes what accept settles: a toolbox
+        # with a resolve (accept) action has them.
+        comments = any(_needs(tool, RESOLVE) for tool in self.tools.values())
+        tracked = any(_needs(tool, ACCEPT) for tool in self.tools.values())
         return prompts.system_prompt(*(fmt.prompt for fmt in self.formats.values()), extra=extra,
-                                     roles=roles, comments=comments)
+                                     roles=roles, comments=comments, tracked=tracked)
 
     def render_result(self, provider: str, result: Result, call_id: str, *,
                       images: str | None = None, detail: str | None = None) -> Any:
@@ -1556,6 +1559,11 @@ def _renamed(node: Any, alias: str, name: Any, where: str, notes: list[str]) -> 
     return node
 
 
+def _needs(tool: Tool, role: str) -> bool:
+    """Whether some call of ``tool`` needs ``role`` itself (not every role's)."""
+    return tool.base_role == role or role in tool.action_roles.values()
+
+
 def _check_role(tool: Tool, arguments: Mapping[str, Any] | None, roles: Sequence[str], *,
                 field: str | None = None) -> None:
     """Refuse a call outside ``roles``: with ``arguments`` ``None``, a tool in none of the
@@ -1583,6 +1591,9 @@ def _check_role(tool: Tool, arguments: Mapping[str, Any] | None, roles: Sequence
                     "(tool and arguments).")
     elif needed == RESOLVE:
         message += "Leave the thread as it is and say it should be resolved."
+    elif needed == ACCEPT:
+        message += ("Leave the tracked changes as they are and say which should be accepted "
+                    "or rejected.")
     else:
         message += "Reading needs the review role."
     allowed = tool.actions_for(roles) if action else []

@@ -494,17 +494,21 @@ checks, rendering, saving, units), each format's fragment, then the application'
 guidance: house style and design rules belong there, never in the shipped fragments.
 
 **Roles: who may change what** (0.45.0, round 7). A toolbox or a session loads *roles*,
-additive toolsets, in any combination; the default, all three, is the toolbox as it was
+additive toolsets, in any combination; the default, all four, is the toolbox as it was
 without roles -- the same definitions byte for byte, the same strict set, the same prompt.
 
 | Role | Its calls |
 | --- | --- |
 | `review` | everything that does not change a document: describe, read, find, render, check, compare, inspect, a chart's `read`, a mixed tool's `list`; adding comments and replying to them |
 | `resolve` | resolving, reopening and deleting comments (a reply with `resolve: true` too) |
-| `edit` | every other change, editing a comment's text and accepting tracked changes among them |
+| `accept` | accepting and rejecting tracked changes (`word_changes` accept and reject; listing them is `review`'s) |
+| `edit` | every other change |
 
 Every role set has the session's documents -- `open_document`, `save_document`,
 `close_document`, `read_blob` -- and `batch`: a reviewer saves the copy it commented.
+Editing a comment's text is every role's too (the user's decision, 2026-10-17: who wrote a
+comment is not known, and keeping a model from rewording one is not the library's aim), so
+every role set that has a comments tool can edit comment text.
 `new_document` and `undo` are `edit`'s (undo steps back through any role's changes).
 
 ```python
@@ -518,7 +522,7 @@ session = toolbox.session(roles=["review", "resolve"])
 tools = toolbox.definitions("anthropic", roles=["review", "resolve"])
 ```
 
-Three typical setups:
+Four typical setups:
 - **Builder** -- `roles=None` (all) or `["review", "edit"]`: reads and changes the document;
   without `resolve` it leaves the reviewers' threads as they are.
 - **First-pass reviewer** -- `["review"]`: reads, checks, compares and renders; reports each
@@ -526,6 +530,8 @@ Three typical setups:
   `batch`, and may add comments and replies; saves the commented copy.
 - **Second-pass reviewer** -- `["review", "resolve"]`: checks the builder's fixes, resolves
   the threads they settle, reopens the others.
+- **Editor-in-chief** -- `["review", "accept"]` (with `"resolve"` to close the threads too):
+  reads the tracked changes and accepts or rejects them, changing nothing else.
 
 *Enforced by the dispatcher.* A call outside the session's roles (`Session.roles`) is refused
 with `refused`, saying which role it needs and what to do instead (`ppt_set_text needs the
@@ -540,17 +546,22 @@ an `atomic` batch with one runs nothing; `batch` itself is in every role set.
 
 *What is sent.* `definitions(roles=...)` sends only the roles' tools, and a mixed tool's
 `action` enum only their actions (a reviewer's `edit_chart` offers `read` alone, its
-comments tool `list`, `add`, `reply`): definitions differ per role set, each stable for the
+comments tool `list`, `add`, `reply`, `edit`): definitions differ per role set, each stable for the
 cache. The core is the roles' core tools; a role set without `edit` also loads its
-reviewing tools there (`Tool.review_core`: the comments tool, a deck's slide comparison),
-which would otherwise wait in their groups. `allowed_tools(roles=...)` and
+reviewing tools there (`Tool.review_core`: the comments tool, a deck's slide comparison,
+Word's tracked changes) when it has one of their own actions (not only a comment's text
+edit), which would otherwise wait in their groups. `allowed_tools(roles=...)` and
 `system_prompt(roles=...)` follow: a role set without `edit` gets one role line after the
 formats' fragments (`Role: review. Do not change the document; ... Report each finding with
 the call that would fix it (tool and arguments). You may add comments and reply to them.`;
-the last sentence only where a tool places comments), one with `edit` none. The libraries list each format's role sets' token counts.
+the last sentence only where a tool places comments; `You may also resolve, reopen and
+delete them.` with `resolve`, `You may also accept and reject tracked changes.` with
+`accept` where a tool settles them; a set without `review` is told only what it may do),
+one with `edit` none. The libraries list each format's role sets' token counts.
 
 A tool's role by default: `edit` if it changes the document (`mutates`), `review` if not --
-an application's own tools included; `role=` overrides it (`ANY_ROLE` for every role set).
+an application's own tools included; `role=` overrides it (`ANY_ROLE` for every role set,
+in `action_roles` too: a comment's text edit).
 A changing tool's reading mode that is not an action (`ppt_add_shape`'s `measure`) stays
 with its tool, `edit`.
 

@@ -34,14 +34,16 @@ CORE = "core"
 #: The roles, additive toolsets an application loads in any combination (``Toolbox(roles=...)``,
 #: ``Toolbox.session(roles=...)``): ``review`` changes nothing in a document but its comments
 #: (reading, finding, rendering, checking, comparing; adding and replying to comments);
-#: ``resolve`` closes, reopens and deletes comments; ``edit`` makes every other change.  All
-#: three, the default, is the whole toolbox.
+#: ``resolve`` closes, reopens and deletes comments; ``accept`` accepts and rejects tracked
+#: changes; ``edit`` makes every other change.  All four, the default, is the whole toolbox.
 REVIEW = "review"
 RESOLVE = "resolve"
+ACCEPT = "accept"
 EDIT = "edit"
-ROLES = (REVIEW, RESOLVE, EDIT)
-#: A tool in every role's toolset: the session's documents (open, save, close), inputs, and
-#: ``batch``, whose ops are each held to the roles.
+ROLES = (REVIEW, RESOLVE, ACCEPT, EDIT)
+#: A tool or action in every role's toolset: the session's documents (open, save, close),
+#: inputs, ``batch`` (whose ops are each held to the roles), a comment's text edited (whose
+#: author no one knows: the library does not stand between a model and it).
 ANY_ROLE = "any"
 
 
@@ -286,12 +288,12 @@ class Tool:
     def roles(self) -> frozenset[str]:
         """The roles whose toolsets hold the tool: every role one of its actions needs
         (:data:`ANY_ROLE`: all of them)."""
-        if self.base_role == ANY_ROLE:
-            return frozenset(ROLES)
-        actions = self.actions
-        if not actions:
-            return frozenset({self.base_role})
-        return frozenset(self.action_roles.get(action, self.base_role) for action in actions)
+        needed = {self.action_roles.get(action, self.base_role) for action in self.actions} \
+            or {self.base_role}
+        return frozenset(ROLES) if ANY_ROLE in needed else frozenset(needed)
+
+    def _action_role(self, action: str) -> str:
+        return self.action_roles.get(action, self.base_role)
 
     def role_of(self, arguments: Mapping[str, Any]) -> str:
         """The role a call with ``arguments`` needs: :data:`ANY_ROLE`, or one of
@@ -310,19 +312,20 @@ class Tool:
         an empty list)."""
         roles = set(roles)
         return [action for action in self.actions
-                if self.action_roles.get(action, self.base_role) in roles
-                or self.base_role == ANY_ROLE]
+                if self._action_role(action) in roles or self._action_role(action) == ANY_ROLE]
 
     def for_roles(self, roles: Iterable[str]) -> "Tool | None":
         """The tool as a role set is sent it: itself, ``None`` when it is in none of the
         roles' toolsets, or a copy whose ``action`` enum lists only the roles' actions --
-        in the core, for a :attr:`review_core` tool and a role set without ``edit``."""
+        in the core, for a :attr:`review_core` tool and a role set without ``edit`` that has
+        one of its own actions (not only one every role has)."""
         roles = frozenset(roles)
         if not self.roles & roles:
             return None
         actions = self.actions
         allowed = self.actions_for(roles)
-        promoted = self.review_core and EDIT not in roles and self.group != CORE
+        own = not actions or any(self._action_role(action) in roles for action in actions)
+        promoted = self.review_core and EDIT not in roles and self.group != CORE and own
         if len(allowed) == len(actions) and not promoted:
             return self
         sent = copy.copy(self)
@@ -430,9 +433,9 @@ def definition_problems(tool: Tool) -> list[str]:
         for action, role in tool.action_roles.items():
             if action not in actions:
                 problems.append(f"action_roles names {action!r}, which is not an action")
-            if role not in ROLES:
+            if role not in (*ROLES, ANY_ROLE):
                 problems.append(f"action_roles gives {action!r} the role {role!r}, which is "
-                                f"not one of {', '.join(ROLES)}")
+                                f"not one of {', '.join((*ROLES, ANY_ROLE))}")
     if tool.route is not None and tool.route not in properties:
         problems.append(f"route names {tool.route!r}, which is not a parameter")
     if not callable(tool.documents):

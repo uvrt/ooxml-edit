@@ -6,10 +6,13 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet.
 - Roles (round 7, item 9; proposal P1, decided by the user 2026-10-17): additive toolsets
   a toolbox or session loads in any combination -- `review` (everything that does not
   change a document, plus adding and replying to comments), `resolve` (resolving,
-  reopening and deleting comments) and `edit` (every other change).
+  reopening and deleting comments), `accept` (accepting and rejecting tracked changes) and
+  `edit` (every other change). Editing a comment's text is every role's (`ANY_ROLE` in
+  `action_roles`; the user's decision: authorship is not known, and preventing it is not
+  the library's aim).
   `Toolbox(roles=...)` sets the default of its sessions, `definitions`, `allowed_tools`
   and `system_prompt`, each of which takes `roles=` too (`Toolbox.session(roles=...)`,
-  `Session.roles`). The default, all three, changes nothing: every definition, the strict
+  `Session.roles`). The default, all four, changes nothing: every definition, the strict
   set and the prompt are byte-identical to 0.44.0's (held by a snapshot of every
   provider's definitions for the three libraries, and by tests).
 - Enforced in dispatch: a call outside the session's roles is `refused`, naming the role
@@ -25,12 +28,14 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet.
   set (a reviewer saves the copy it commented), `new_document` and `undo` `edit`'s,
   `edit_chart`'s `read` `review`'s. `shared.COMMENT_ACTION_ROLES` and
   `shared.comment_role` give both comments tools their roles (a reply with
-  `resolve: true` needs `resolve`; editing a comment's text `edit`).
+  `resolve: true` needs `resolve`; editing a comment's text any role).
 - What a role set is sent: only its tools, a mixed tool's `action` enum only its actions;
   the core is the roles' core tools, and for a set without `edit` the tools marked
   `Tool.review_core` too (the comments tools, a deck's slide comparison). A set without
   `edit` gets a role line in the prompt (`prompts.role_line`; that it may comment only
-  where a tool places comments); one with `edit` none.
+  where a tool places comments, accept tracked changes only where a tool settles them);
+  one with `edit` none. A `review_core` tool is promoted only for a set with one of its
+  own actions, not only a comment's text edit.
   docs/TOOLS.md, "Roles", has the three typical setups.
 
 ## 0.44.0 -- unreleased

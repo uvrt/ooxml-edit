@@ -428,7 +428,7 @@ class Session:
     the regional settings of every render and measurement (an
     :class:`ooxml_common.locales.Locale`); ``None``, the default, is en-US.  ``roles`` is
     what the session's calls may do (:data:`~.registry.ROLES`, any of ``review``,
-    ``resolve`` and ``edit``); ``None``, the default, is all three: every tool.
+    ``resolve``, ``accept`` and ``edit``); ``None``, the default, is all four: every tool.
     """
 
     def __init__(self, formats: Iterable[DocumentFormat] = (), *, clock: Clock | None = None,

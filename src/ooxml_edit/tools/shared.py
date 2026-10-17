@@ -164,9 +164,11 @@ def _slide_on_add(arguments: Mapping[str, Any]) -> str | None:
 
 #: The roles of a comments tool's actions (``ppt_comments``, ``word_comments``): a reviewer
 #: lists, adds and replies; closing, reopening and deleting a thread is ``resolve``'s;
-#: editing a comment's text, as every other change, ``edit``'s.
+#: editing a comment's text is every role's (the user's decision, 2026-10-17: who wrote a
+#: comment is not known, and keeping a model from rewording one is not the library's aim).
 COMMENT_ACTION_ROLES = {"list": REVIEW, "add": REVIEW, "reply": REVIEW,
-                        "resolve": RESOLVE, "reopen": RESOLVE, "delete": RESOLVE}
+                        "resolve": RESOLVE, "reopen": RESOLVE, "delete": RESOLVE,
+                        "edit": ANY_ROLE}
 
 
 def comment_role(arguments: Mapping[str, Any]) -> str | None:

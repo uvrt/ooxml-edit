@@ -21,7 +21,7 @@ What is here:
 
 * :mod:`.registry` -- :class:`Tool`, :class:`ToolGroup`, the :func:`tool` decorator and the
   parameter helpers that build each tool's canonical schema; the roles (:data:`ROLES`:
-  ``review``, ``resolve``, ``edit``), additive toolsets a toolbox or session loads;
+  ``review``, ``resolve``, ``accept``, ``edit``), additive toolsets a toolbox or session loads;
 * :mod:`.schema` -- the common strict subset both providers accept, its checker, and the
   call validator (no jsonschema dependency);
 * :mod:`.adapters` -- definitions and results for the Anthropic Messages API, the OpenAI
@@ -66,8 +66,8 @@ from .dispatch import REF, Call, CallContext, Toolbox, collect_warnings
 from .limits import LimitError, Limits
 from .logs import CallRecord
 from .prompts import SYSTEM, system_prompt
-from .registry import (ANY_ROLE, CORE, EDIT, RESOLVE, REVIEW, ROLES, Param, Tool, ToolGroup,
-                       array, boolean, build_schema, free_object, integer, names_as,
+from .registry import (ACCEPT, ANY_ROLE, CORE, EDIT, RESOLVE, REVIEW, ROLES, Param, Tool,
+                       ToolGroup, array, boolean, build_schema, free_object, integer, names_as,
                        number, obj, role_set, string, tool)
 from .results import (ERROR_CODES, Image, Result, ToolError, anthropic_image_tokens,
                       openai_image_tokens, page_list, page_text, truncate)
@@ -78,7 +78,7 @@ from .session import (DEFAULT_LOCALE, LOCALE_FIELDS, Blob, DefaultLocale, Docume
 from .worker import InProcess, SubprocessPool, WorkerPool, worker_task
 
 __all__ = [
-    "ANY_ROLE", "EDIT", "RESOLVE", "REVIEW", "ROLES", "role_set",
+    "ACCEPT", "ANY_ROLE", "EDIT", "RESOLVE", "REVIEW", "ROLES", "role_set",
     "Asset", "AssetCatalogue", "Blob", "FolderCatalogue", "assets", "CORE", "Call", "CallContext", "CallError", "CallRecord", "DATASET_ID",
     "DATASET_PREFIX", "DEFAULT_LOCALE", "Dataset", "DatasetEntry", "DefaultLocale", "DocumentEntry", "DocumentFormat",
     "ERROR_CODES", "LOCALE_FIELDS", "REF", "Image", "LimitError", "Limits", "Output", "Param",
