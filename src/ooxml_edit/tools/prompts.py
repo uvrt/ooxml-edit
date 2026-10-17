@@ -69,9 +69,48 @@ them only when the user's task asks you to. If you decline part of a request, sa
 """
 
 
-def system_prompt(*fragments: str, extra: str | None = None) -> str:
-    """The shared fragment, then each format's, then the application's own guidance."""
+#: The role line of a role set without ``edit`` (a reviewer's), after the formats' fragments.
+REVIEW_ONLY = """\
+Role: review. Do not change the document; the tools that would are not yours. Report each \
+finding with the call that would fix it (tool and arguments)."""
+#: Its last sentences where comments can be placed, with ``resolve``, and with ``accept``
+#: where changes are tracked.
+REVIEW_COMMENTS = " You may add comments and reply to them."
+REVIEW_RESOLVE = " You may also resolve, reopen and delete them."
+REVIEW_ACCEPT = " You may also accept and reject tracked changes."
+
+
+def role_line(roles: Iterable[str], *, comments: bool = True, tracked: bool = True) -> str:
+    """The prompt's line for a role set: none for one with ``edit`` (the default's
+    prompt is unchanged), the reviewer's line otherwise.  ``comments`` and ``tracked``:
+    whether a tool places comments, or settles tracked changes (a format without one is not
+    told it may)."""
+    roles = set(roles)
+    if "edit" in roles:
+        return ""
+    resolve = comments and "resolve" in roles
+    accept = tracked and "accept" in roles
+    if "review" not in roles:
+        names = " and ".join(role for role in ("resolve", "accept") if role in roles)
+        may = [what for what, given in (("resolve, reopen and delete comments", resolve),
+                                        ("accept and reject tracked changes", accept)) if given]
+        return (f"Role: {names}. Do not change the document"
+                + (f"; you may only {' and '.join(may)}." if may else "."))
+    line = REVIEW_ONLY
+    if comments:
+        line += REVIEW_COMMENTS + (REVIEW_RESOLVE if resolve else "")
+    return line + (REVIEW_ACCEPT if accept else "")
+
+
+def system_prompt(*fragments: str, extra: str | None = None,
+                  roles: Iterable[str] | None = None, comments: bool = True,
+                  tracked: bool = True) -> str:
+    """The shared fragment, then each format's, the role set's line (none for one with
+    ``edit``), then the application's own guidance."""
     parts = [SYSTEM.strip()] + [fragment.strip() for fragment in fragments if fragment.strip()]
+    line = role_line(roles, comments=comments, tracked=tracked) if roles is not None else ""
+    if line:
+        parts.append(line)
     if extra and extra.strip():
         parts.append(extra.strip())
     return "\n\n".join(parts) + "\n"

@@ -56,8 +56,8 @@ from typing import Any, Callable, Mapping
 from .. import dates, provenance
 from . import sources
 from .datasets import briefs
-from .registry import (CORE, Param, Tool, ToolGroup, array, boolean, build_schema,
-                       free_object, integer, number, obj, string)
+from .registry import (ANY_ROLE, CORE, EDIT, RESOLVE, REVIEW, Param, Tool, ToolGroup, array,
+                       boolean, build_schema, free_object, integer, number, obj, string)
 from .results import Result, ToolError, page_text
 
 #: ``edit_chart``'s chart types for ``add`` (``ooxml_edit.charts.create``'s kinds).
@@ -108,7 +108,8 @@ class Spec:
                  sources: tuple[str, ...] = (), facts: tuple[str, ...] = (),
                  reads: Callable[[Mapping[str, Any]], bool] | None = None,
                  wrap: Callable[[Callable[..., Any]], Callable[..., Any]] | None = None,
-                 aliases: Mapping[str, Any] | None = None) -> None:
+                 aliases: Mapping[str, Any] | None = None, role: str | None = None,
+                 action_roles: Mapping[str, str] | None = None) -> None:
         self.name = name
         self.description = description
         self.params = dict(params)
@@ -127,6 +128,9 @@ class Spec:
         self.reads = reads
         #: Argument names read as the tool's own (:attr:`~.registry.Tool.aliases`).
         self.aliases = dict(aliases or {})
+        #: The roles its calls need (:attr:`~.registry.Tool.role`).
+        self.role = role
+        self.action_roles = dict(action_roles or {})
         #: What every kind's handler runs inside: the shared part of a tool's work (taking
         #: ``edit_chart``'s rows from a source), done once here for every library.
         self.wrap = wrap
@@ -141,7 +145,7 @@ class Spec:
                     batchable=self.batchable, composite=self.composite, refs=self.refs,
                     datasets=self.datasets, sources=self.sources, facts=self.facts,
                     reads=self.reads,
-                    aliases=self.aliases)
+                    aliases=self.aliases, role=self.role, action_roles=self.action_roles)
 
     @property
     def schema(self) -> dict[str, Any]:
@@ -158,6 +162,25 @@ def _slide_on_add(arguments: Mapping[str, Any]) -> str | None:
     return "target" if arguments.get("action") == "add" else None
 
 
+#: The roles of a comments tool's actions (``ppt_comments``, ``word_comments``): a reviewer
+#: lists, adds and replies; closing, reopening and deleting a thread is ``resolve``'s;
+#: editing a comment's text is every role's (the user's decision, 2026-10-17: who wrote a
+#: comment is not known, and keeping a model from rewording one is not the library's aim).
+COMMENT_ACTION_ROLES = {"list": REVIEW, "add": REVIEW, "reply": REVIEW,
+                        "resolve": RESOLVE, "reopen": RESOLVE, "delete": RESOLVE,
+                        "edit": ANY_ROLE}
+
+
+def comment_role(arguments: Mapping[str, Any]) -> str | None:
+    """A comments tool's :attr:`~.registry.Tool.call_role`: a reply that also resolves its
+    thread (an item's ``resolve: true``) needs ``resolve``."""
+    items = arguments.get("items")
+    if arguments.get("action") == "reply" and isinstance(items, list) and any(
+            isinstance(item, Mapping) and item.get("resolve") for item in items):
+        return RESOLVE
+    return None
+
+
 def _reading_action(arguments: Mapping[str, Any]) -> bool:
     """``action: "read"``: the call reads, changing nothing."""
     return arguments.get("action") == "read"
@@ -169,7 +192,7 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
          "Open an input blob as a deck or document. Returns its doc id and a summary; "
          "describe it next.",
          {"blob": string("Blob handle, e.g. b1.")},
-         documents=_no_documents, batchable=False),
+         documents=_no_documents, batchable=False, role=ANY_ROLE),
     # S2
     Spec("new_document",
          "Make a new deck or document, optionally from a template blob (its layouts, styles "
@@ -182,7 +205,7 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
           "title": string("Title property.", optional=True),
           "author": string("Author property.", optional=True),
           "name": string("Name, e.g. plan.pptx. Default new.<kind>.", optional=True)},
-         documents=_no_documents, route="kind", batchable=False),
+         documents=_no_documents, route="kind", batchable=False, role=EDIT),
     # S3
     Spec("save_document",
          "Give the document to the application as a file. Refuses new validation problems. "
@@ -193,11 +216,11 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
                            "(documents): a text copy.",
                            enum=["pptx", "potx", "docx", "dotx", "xlsx", "xlsm", "xltx",
                                  "markdown", "outline"])},
-         batchable=False),
+         batchable=False, role=ANY_ROLE),
     # S4 (list_documents went post-T4: the application names the documents and inputs)
     Spec("close_document", "Close a document, discarding unsaved changes. The session holds "
          "a few documents at a time: close a source once you have taken what you need.",
-         {"doc": _DOC}, group=MISC, batchable=False),
+         {"doc": _DOC}, group=MISC, batchable=False, role=ANY_ROLE),
     # S5
     Spec("undo",
          "Undo the last changing calls, one call per step; redo=true steps forward again. "
@@ -207,7 +230,7 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
           "redo": boolean("Redo instead. Default false.", optional=True),
           "scope": string("Decks: only this slide's changes, e.g. 256. Default: the latest, "
                           "anywhere.", optional=True)},
-         batchable=False),
+         batchable=False, role=EDIT),
     # S16: describe, one schema for every kind
     Spec("describe",
          "The document at a glance; call once, first. Decks: slides (id, title, layout, "
@@ -353,6 +376,7 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
                                 optional=True)},
          group=MISC, mutates=True, refs=("target",), sources=("from",),
          reads=_reading_action, wrap=lambda fn: _chart_rows(fn),
+         action_roles={"read": REVIEW},
          aliases={"slide": _slide_on_add, "from_columns": "columns", "colours": "colors"}),
     # S12
     Spec("edit_smartart",
@@ -379,7 +403,7 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
          "documents with open_document; place images with a picture tool.",
          {"blob": string("Blob handle, e.g. b2."),
           "cursor": _CURSOR},
-         group=MISC, documents=_no_documents, batchable=False),
+         group=MISC, documents=_no_documents, batchable=False, role=ANY_ROLE),
     # the generic batch
     Spec("batch",
          "Run calls to several tools in order as one undo step, checks once at the end; a "
@@ -391,7 +415,7 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
                        min_items=1),
           "atomic": boolean("All or none.", optional=True)},
          documents=_no_documents, mutates=True, strict=False, batchable=False,
-         composite=True),
+         composite=True, role=ANY_ROLE),
 ]}
 
 # -- edit_chart's rows from a source ------------------------------------------------------------
@@ -946,5 +970,5 @@ SESSION_TOOLS: list[Tool] = [
     SPECS["read_blob"].make({None: _read_blob}),
 ]
 
-__all__ = ["CORE_NAMES", "FROM_ACTIONS", "GROUPS", "KINDS", "MISC", "SESSION_TOOLS", "SPECS", "Spec",
-           "definition", "handler"]
+__all__ = ["COMMENT_ACTION_ROLES", "CORE_NAMES", "FROM_ACTIONS", "GROUPS", "KINDS", "MISC", "SESSION_TOOLS", "SPECS", "Spec",
+           "comment_role", "definition", "handler"]

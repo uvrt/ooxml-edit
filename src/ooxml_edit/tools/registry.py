@@ -31,6 +31,36 @@ from .schema import NAME, SubsetError, canonical, subset_problems, walk_properti
 #: The group whose tools are always loaded, never deferred.
 CORE = "core"
 
+#: The roles, additive toolsets an application loads in any combination (``Toolbox(roles=...)``,
+#: ``Toolbox.session(roles=...)``): ``review`` changes nothing in a document but its comments
+#: (reading, finding, rendering, checking, comparing; adding and replying to comments);
+#: ``resolve`` closes, reopens and deletes comments; ``accept`` accepts and rejects tracked
+#: changes; ``edit`` makes every other change.  All four, the default, is the whole toolbox.
+REVIEW = "review"
+RESOLVE = "resolve"
+ACCEPT = "accept"
+EDIT = "edit"
+ROLES = (REVIEW, RESOLVE, ACCEPT, EDIT)
+#: A tool or action in every role's toolset: the session's documents (open, save, close),
+#: inputs, ``batch`` (whose ops are each held to the roles), a comment's text edited (whose
+#: author no one knows: the library does not stand between a model and it).
+ANY_ROLE = "any"
+
+
+def role_set(roles: str | Iterable[str] | None) -> tuple[str, ...]:
+    """``roles`` -- a role, roles, or ``None`` for all -- in :data:`ROLES` order; an
+    unknown or empty one is a ``ValueError``."""
+    if roles is None:
+        return ROLES
+    wanted = {roles} if isinstance(roles, str) else set(roles)
+    unknown = wanted - set(ROLES)
+    if unknown:
+        raise ValueError(f"unknown role(s) {sorted(map(str, unknown))}; the roles are "
+                         f"{', '.join(ROLES)}")
+    if not wanted:
+        raise ValueError(f"no roles: give one or more of {', '.join(ROLES)}, or None for all")
+    return tuple(role for role in ROLES if role in wanted)
+
 
 # -- parameter builders ------------------------------------------------------------------------
 
@@ -204,6 +234,21 @@ class Tool:
     #: (a function gets that object).
     aliases: Mapping[str, str | Callable[[Mapping[str, Any]], str | None]] = field(
         default_factory=dict)
+    #: The role a call needs (:data:`ROLES`), or :data:`ANY_ROLE`.  ``None``: ``edit`` for a
+    #: changing tool (``mutates``), ``review`` for a reading one.
+    role: str | None = None
+    #: For a tool with an ``action`` argument: the role each action needs where it is not
+    #: the tool's (``{"read": "review"}`` on ``edit_chart``).  A role set's definitions offer
+    #: only the actions of its roles.
+    action_roles: Mapping[str, str] = field(default_factory=dict)
+    #: For a call whose action does not settle its role: a function of the arguments giving
+    #: the role it needs instead, or ``None`` for its action's (a comment reply that also
+    #: resolves the thread needs ``resolve``).
+    call_role: Callable[[Mapping[str, Any]], str | None] | None = None
+    #: A reviewer's main tool (comments, comparing like pages): in the core of a role set
+    #: without ``edit``, which has few tools of its own; in its group otherwise, as without
+    #: roles.
+    review_core: bool = False
 
     def __post_init__(self) -> None:
         problems = definition_problems(self)
@@ -227,6 +272,69 @@ class Tool:
         """Whether a call with ``arguments`` changes its document: a changing tool, unless
         ``reads`` says this call only reads."""
         return self.mutates and not (self.reads is not None and bool(self.reads(arguments)))
+
+    @property
+    def base_role(self) -> str:
+        """The role of a call whose action names none of its own."""
+        return self.role or (EDIT if self.mutates else REVIEW)
+
+    @property
+    def actions(self) -> list[str]:
+        """The values of the ``action`` argument, if the tool has one with an enum."""
+        action = self.schema.get("properties", {}).get("action") or {}
+        return list(action.get("enum") or ())
+
+    @property
+    def roles(self) -> frozenset[str]:
+        """The roles whose toolsets hold the tool: every role one of its actions needs
+        (:data:`ANY_ROLE`: all of them)."""
+        needed = {self.action_roles.get(action, self.base_role) for action in self.actions} \
+            or {self.base_role}
+        return frozenset(ROLES) if ANY_ROLE in needed else frozenset(needed)
+
+    def _action_role(self, action: str) -> str:
+        return self.action_roles.get(action, self.base_role)
+
+    def role_of(self, arguments: Mapping[str, Any]) -> str:
+        """The role a call with ``arguments`` needs: :data:`ANY_ROLE`, or one of
+        :data:`ROLES`."""
+        if self.call_role is not None:
+            needed = self.call_role(arguments)
+            if needed is not None:
+                return needed
+        action = arguments.get("action")
+        if isinstance(action, str) and action in self.action_roles:
+            return self.action_roles[action]
+        return self.base_role
+
+    def actions_for(self, roles: Iterable[str]) -> list[str]:
+        """The actions a role set may call (all of them for a tool without ``action``:
+        an empty list)."""
+        roles = set(roles)
+        return [action for action in self.actions
+                if self._action_role(action) in roles or self._action_role(action) == ANY_ROLE]
+
+    def for_roles(self, roles: Iterable[str]) -> "Tool | None":
+        """The tool as a role set is sent it: itself, ``None`` when it is in none of the
+        roles' toolsets, or a copy whose ``action`` enum lists only the roles' actions --
+        in the core, for a :attr:`review_core` tool and a role set without ``edit`` that has
+        one of its own actions (not only one every role has)."""
+        roles = frozenset(roles)
+        if not self.roles & roles:
+            return None
+        actions = self.actions
+        allowed = self.actions_for(roles)
+        own = not actions or any(self._action_role(action) in roles for action in actions)
+        promoted = self.review_core and EDIT not in roles and self.group != CORE and own
+        if len(allowed) == len(actions) and not promoted:
+            return self
+        sent = copy.copy(self)
+        if promoted:
+            sent.group = CORE
+        if len(allowed) != len(actions):
+            sent.schema = copy.deepcopy(self.schema)
+            sent.schema["properties"]["action"]["enum"] = allowed
+        return sent
 
     def optional_parameters(self) -> list[str]:
         """Every optional property at any depth (Claude's strict limit counts these)."""
@@ -257,6 +365,8 @@ class Tool:
             other.name, other.description, other.schema, other.group, other.mutates,
             other.route, other.strict, other.batchable, other.composite, tuple(other.refs),
             other.reads) and tuple(self.datasets) == tuple(other.datasets) \
+            and (self.role, dict(self.action_roles), self.call_role, self.review_core) == (
+                other.role, dict(other.action_roles), other.call_role, other.review_core) \
             and tuple(self.sources) == tuple(other.sources) \
             and tuple(self.facts) == tuple(other.facts) \
             and dict(self.aliases) == dict(other.aliases)
@@ -316,6 +426,16 @@ def definition_problems(tool: Tool) -> list[str]:
             problems.append(f"aliases names {alias!r}, which is a parameter")
         if name not in names:
             problems.append(f"aliases reads {alias!r} as {name!r}, which is not a parameter")
+    if tool.role is not None and tool.role not in (*ROLES, ANY_ROLE):
+        problems.append(f"role {tool.role!r} is not one of {', '.join((*ROLES, ANY_ROLE))}")
+    if tool.action_roles:
+        actions = (properties.get("action") or {}).get("enum") or ()
+        for action, role in tool.action_roles.items():
+            if action not in actions:
+                problems.append(f"action_roles names {action!r}, which is not an action")
+            if role not in (*ROLES, ANY_ROLE):
+                problems.append(f"action_roles gives {action!r} the role {role!r}, which is "
+                                f"not one of {', '.join((*ROLES, ANY_ROLE))}")
     if tool.route is not None and tool.route not in properties:
         problems.append(f"route names {tool.route!r}, which is not a parameter")
     if not callable(tool.documents):
@@ -365,13 +485,19 @@ def tool(name: str, description: str, params: Mapping[str, Param] | None = None,
          priority: int | None = None, strict: bool = True, batchable: bool = True,
          refs: Sequence[str] = (), datasets: Sequence[str] = (), sources: Sequence[str] = (),
          facts: Sequence[str] = (), reads: Callable[[Mapping[str, Any]], bool] | None = None,
-         aliases: Mapping[str, Any] | None = None) -> Callable[[Handler], Tool]:
+         aliases: Mapping[str, Any] | None = None, role: str | None = None,
+         action_roles: Mapping[str, str] | None = None,
+         call_role: Callable[[Mapping[str, Any]], str | None] | None = None,
+         review_core: bool = False) -> Callable[[Handler], Tool]:
     """Make a :class:`Tool` of a handler.  ``kind`` restricts it to one document kind;
     ``reads`` marks the calls of a changing tool that only read (:attr:`Tool.reads`);
     ``aliases`` the argument names read as its own (:attr:`Tool.aliases`);
     ``refs``, ``datasets`` and ``sources`` declare the arguments that may hold a ref, a
     dataset, or a source (a dataset or another document's rows); ``facts`` the text that
-    may hold references to one value (:attr:`Tool.facts`)."""
+    may hold references to one value (:attr:`Tool.facts`); ``role``, ``action_roles`` and
+    ``call_role`` the roles its calls need (:attr:`Tool.role`; by default ``edit`` for a
+    changing tool, ``review`` for a reading one); ``review_core`` puts it in a reviewer's
+    core (:attr:`Tool.review_core`)."""
 
     def make(handler: Handler) -> Tool:
         return Tool(name=name, description=description, schema=build_schema(params or {}),
@@ -379,7 +505,9 @@ def tool(name: str, description: str, params: Mapping[str, Param] | None = None,
                     documents=documents, exactly_one=exactly_one, priority=priority,
                     strict=strict, batchable=batchable, refs=tuple(refs),
                     datasets=tuple(datasets), sources=tuple(sources), facts=tuple(facts),
-                    reads=reads, aliases=dict(aliases or {}))
+                    reads=reads, aliases=dict(aliases or {}), role=role,
+                    action_roles=dict(action_roles or {}), call_role=call_role,
+                    review_core=review_core)
 
     return make
 
