@@ -361,6 +361,10 @@ def _in(language: str) -> DefaultLocale:
     ("fr-FR", "dimanche 1 mars 2026 (dim., mars, m)"),
     ("es-ES", "domingo 1 marzo 2026 (do., mar., m)"),
     ("it-IT", "domenica 1 marzo 2026 (dom, mar, m)"),
+    # A region shows its language's names (measured, Office for Mac, 2026-10-17).
+    ("en-BE", "Sunday 1 March 2026 (Sun, Mar, M)"),
+    ("fr-BE", "dimanche 1 mars 2026 (dim., mars, m)"),
+    ("de-CH", "Sonntag 1 März 2026 (So, Mär, M)"),
 ])
 def test_a_date_pattern_writes_the_locales_measured_names(toolbox, language, written):
     session = _session(toolbox, locale=_in(language))

@@ -92,12 +92,47 @@ def test_a_locale_is_read_by_its_language_tag():
     assert dates.format_date(MONDAY, "mmmm") == "March"                 # en-US, the default
 
 
-@pytest.mark.parametrize("language", ["en-AU", "nl", "pt-BR", "ja-JP"])
-def test_a_locale_without_measured_names_refuses_name_tokens_only(language):
+@pytest.mark.parametrize("language", ["pt-BR", "ja-JP", "sv", "zh-Hant-TW", "es-AR"])
+def test_a_language_without_measured_names_refuses_name_tokens_only(language):
     with pytest.raises(PatternError, match=f"no month or day names are measured for "
-                                           f"{language}"):
+                                           f"{language} \\(they are for the languages en, nl, "
+                                           "de, fr and it, in any region, and for es-ES, es-MX "
+                                           "and es\\)"):
         dates.format_date(MONDAY, "d mmm yyyy", language)
     assert dates.format_date(MONDAY, "dd/mm/yyyy", language) == "02/03/2026"
+
+
+@pytest.mark.parametrize("language, written", [
+    # Measured on Office for Mac, 2026-10-17: these regions show their language's names.
+    ("en-BE", "Monday 2 Mar 2026"), ("en-IE", "Monday 2 Mar 2026"),
+    ("fr-BE", "lundi 2 mars 2026"), ("fr-CH", "lundi 2 mars 2026"),
+    ("de-BE", "Montag 2 Mär 2026"), ("de-CH", "Montag 2 Mär 2026"),
+    # By the same rule: any region, or none, of a language with measured names.
+    ("en-AU", "Monday 2 Mar 2026"), ("nl", "maandag 2 mrt 2026"),
+    ("it-CH", "lunedì 2 mar 2026"), ("it", "lunedì 2 mar 2026"),
+])
+def test_a_region_shows_its_languages_names(language, written):
+    assert dates.format_date(MONDAY, "dddd d mmm yyyy", language) == written
+    assert dates.names_for(language) == dates.NAMES[dates.LANGUAGES[language[:2]]]
+
+
+#: Measured on Office for Mac's charts, 2026-10-17: Spanish regions abbreviate otherwise.
+@pytest.mark.parametrize("language, written", [
+    ("es-ES", "lu. 2 mar. 2026 · mi. 2 sep. 2026"),
+    ("es-MX", "lun. 2 mar. 2026 · mié. 2 sep. 2026"),
+    ("es", "lun 2 mar 2026 · mié 2 set 2026"),
+])
+def test_spanish_names_are_each_regions_own(language, written):
+    assert " · ".join(dates.format_date(day, "ddd d mmm yyyy", language)
+                      for day in (MONDAY, dt.date(2026, 9, 2))) == written
+    assert dates.format_date(MONDAY, "dddd d mmmm", language) == "lunes 2 marzo"
+
+
+def test_names_tag():
+    assert dates.names_tag("nl-BE") == "nl-BE" and dates.names_tag("en-GB") == "en-GB"
+    assert dates.names_tag("fr_be") == "fr-FR" and dates.names_tag("en") == "en-US"
+    assert dates.names_tag("pt-BR") is None and dates.names_for("pt-BR") is None
+    assert all(tag in dates.NAMES for tag in dates.LANGUAGES.values())
 
 
 @pytest.mark.parametrize("pattern, message", [
@@ -136,10 +171,28 @@ def test_the_codes_escapes():
     assert dates.format_code("mmmm d, yyyy", "en-US") == r"[$-409]mmmm\ d\,\ yyyy"
     assert dates.format_code('d "de" mmmm', "es-ES") == r'[$-C0A]d\ "de"\ mmmm'
     assert dates.format_code("DD/MM/YYYY", "en-GB") == "[$-809]dd/mm/yyyy"
-    # No measured locale id: no prefix, and a name token is refused as in text.
-    assert dates.format_code("dd/mm/yyyy", "en-AU") == "dd/mm/yyyy"
-    with pytest.raises(PatternError, match="en-AU"):
-        dates.format_code("mmmm", "en-AU")
+    # No measured names for the language: no prefix, and a name token is refused as in text.
+    assert dates.format_code("dd/mm/yyyy", "pt-BR") == "dd/mm/yyyy"
+    with pytest.raises(PatternError, match="pt-BR"):
+        dates.format_code("mmmm", "pt-BR")
+
+
+@pytest.mark.parametrize("language, code", [
+    # The ids Office for Mac stored for these prefixes, 2026-10-17 ([$-fr-BE] -> [$-80C]).
+    ("fr-BE", r"[$-80C]d\ mmmm\ yyyy"), ("en-IE", r"[$-1809]d\ mmmm\ yyyy"),
+    ("fr-CH", r"[$-100C]d\ mmmm\ yyyy"), ("en", r"[$-9]d\ mmmm\ yyyy"),
+    ("fr", r"[$-C]d\ mmmm\ yyyy"), ("de", r"[$-7]d\ mmmm\ yyyy"),
+    ("nl", r"[$-13]d\ mmmm\ yyyy"),
+    # No id measured for the region: the id of the tag whose names it shows.
+    ("en-BE", r"[$-409]d\ mmmm\ yyyy"), ("de-BE", r"[$-407]d\ mmmm\ yyyy"),
+    ("de-CH", r"[$-407]d\ mmmm\ yyyy"), ("en-AU", r"[$-409]d\ mmmm\ yyyy"),
+    ("it-SM", r"[$-410]d\ mmmm\ yyyy"),
+    # Measured on re-saving [$-es-MX], [$-it-CH]; [$-A], [$-10] honoured.
+    ("es-MX", r"[$-80A]d\ mmmm\ yyyy"), ("it-CH", r"[$-810]d\ mmmm\ yyyy"),
+    ("es", r"[$-A]d\ mmmm\ yyyy"), ("it", r"[$-10]d\ mmmm\ yyyy"),
+])
+def test_a_regions_code_takes_its_own_measured_id_else_its_languages(language, code):
+    assert dates.format_code("d mmmm yyyy", language) == code
 
 
 def test_serials_are_the_1900_systems():
@@ -227,6 +280,40 @@ def test_a_chart_of_dates_reads_back_and_its_workbook_matches():
     assert check_chart_against_workbook(reopened.package.read(part),
                                         reopened.package.read(workbook)) > 0
     assert not chart_order_violations(reopened.package.read(part))
+
+
+#: The shape Office re-saves a code with a language tag in (measured, Office for Mac,
+#: 2026-10-17): a Choice's ``c16r2:formatcode2`` and a Fallback ``c:formatCode`` of ``[$]``.
+C16R2 = "http://schemas.microsoft.com/office/drawing/2015/06/chart"
+MC = "http://schemas.openxmlformats.org/markup-compatibility/2006"
+
+
+@pytest.mark.parametrize("choice, read", [(True, r"[$-en-BE]d\ mmm\ yyyy"),
+                                          (False, r"[$]d\ mmm\ yyyy")])
+def test_a_code_office_wrote_as_alternate_content_reads_back(choice, read):
+    document = cs.Opened(cs.package())
+    with document.history.batch():
+        made = add_chart(document.package, cs.MAIN, "line", DAYS, UNITS)
+        root = document.package.tree(cs.MAIN)
+        frame = etree.SubElement(root, "{%s}frame" % cs.NS, name="new")
+        frame.append(made.graphic())
+        document.package.mark_dirty(cs.MAIN)
+    chart = document.chart("new")
+    space = document.package.tree(chart.part)
+    code = space.find(".//{%s}cat//{%s}formatCode" % (cs.C, cs.C))
+    cache = code.getparent()
+    alternate = etree.Element("{%s}AlternateContent" % MC, nsmap={"mc": MC})
+    if choice:
+        branch = etree.SubElement(alternate, "{%s}Choice" % MC, Requires="c16r2",
+                                  nsmap={"c16r2": C16R2})
+        etree.SubElement(branch, "{%s}formatcode2" % C16R2).text = r"[$-en-BE]d\ mmm\ yyyy"
+    fallback = etree.SubElement(etree.SubElement(alternate, "{%s}Fallback" % MC),
+                                "{%s}formatCode" % cs.C)
+    fallback.text = r"[$]d\ mmm\ yyyy"
+    code.addprevious(alternate)
+    cache.remove(code)
+    assert chart.category_format == read
+    assert chart.category_dates == ["2026-03-02", "2026-03-09", "2026-03-16"]
 
 
 @pytest.mark.parametrize("kind, categories, message", [

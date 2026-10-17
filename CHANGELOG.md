@@ -2,6 +2,32 @@
 
 Versions are those in `pyproject.toml`; none is published to PyPI yet.
 
+## 0.44.0 -- unreleased
+- Month and day names for a region of a measured language (round 7, L5). A date pattern's
+  name tokens (`mmmm`, `ddd` ...) were refused for any locale not among the eight measured
+  (`{{d:x/#1/day:d mmmm yyyy}}` in en-BE: "no month or day names are measured for
+  en-BE"). Measured in Excel for Mac, 2026-10-17, Office names a region's dates in its
+  language: en-BE and en-IE as en-US, fr-BE and fr-CH as fr-FR, de-BE and de-CH as de-DE.
+  So a locale whose tag `dates.NAMES` does not list now takes its language's names (new
+  `dates.LANGUAGES`: en, nl, de, fr, es, it; new `dates.names_tag`), in text facts, tables'
+  and charts' `date_format` alike; its separators and day order stay its own, and no
+  warning is added (it is what Office shows). Another language still refuses a name token,
+  now naming the languages that have names. A chart's code takes the region's own id where
+  Excel was seen storing it (`dates.LCIDS` gains en-IE 1809, fr-BE 80C, fr-CH 100C and the
+  language-only en 9, nl 13, de 7, fr C), else the id of the tag whose names it shows
+  (en-BE `[$-409]`, de-BE `[$-407]`, it-SM `[$-410]`). Tool definitions unchanged.
+- Spanish is not one set of names (measured on Office for Mac's charts, 2026-10-17): es-MX
+  (`[$-80A]`) abbreviates days `lun. mar. mié.`, the language-only `es` (`[$-A]`) months
+  `ene feb mar ... set` and days `lun mar mié`, es-ES `lu. ma. mi.`; full names alike. So
+  `dates.NAMES` lists es-MX and es, `LANGUAGES` has no es, and another Spanish region
+  (es-AR) refuses name tokens, the message naming es-ES, es-MX and es. it-CH (`[$-810]`)
+  and it (`[$-10]`) showed it-IT's names, as the rule says; `LCIDS` gains 80A, A, 810, 10.
+- A chart Office re-saved reads its date code back (`Chart.category_format`,
+  `category_dates`): measured, a code with a language tag (`[$-en-BE]...`) is re-saved as an
+  `mc:AlternateContent` in the cache -- a `c16r2` Choice's `formatcode2` holding the tag,
+  a Fallback `c:formatCode` of `[$]...` -- which read as no code; now the Choice's, else
+  the Fallback's.
+
 ## 0.43.0 -- unreleased
 - `batch` runs the application's own tools (round 7, L6). It always ran any batchable tool
   in the toolbox, so a tool the application registers there with the libraries'
