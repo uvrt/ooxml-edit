@@ -56,7 +56,13 @@ the summary names the failed ops to fix and resend. A `$ref` a failed op would h
 fails naming that op (`details.op`). Only when no op applied is the result an error, whose
 `details` hold the same outcomes (`field` and `valid_options` are the first failure's).
 `atomic: true` makes it all or none instead: every op is validated before any runs, and the
-first failing op rolls the batch back and is named, with its valid options. The rollback of
+first failing op rolls the batch back and is named, with its valid options. An op may name
+any tool the toolbox has that is not marked `batchable=False` -- the application's own too,
+when it is registered with the libraries' (`Toolbox(TOOLS + [add_note])`, made with `tool`):
+its schema is checked, its `refs` resolved, its result and errors reported like any op's.
+A tool the application keeps outside the toolbox, dispatching it itself, cannot run inside a
+batch; with no tool name near it, the op's error says to call it on its own. An atomic
+batch rolls back documents only: what an application's tool did elsewhere stays done. The rollback of
 one op is `DocumentEntry.savepoint()` -- the document's `savepoint()`, else its history's
 (`History.savepoint`) -- after which the format's `restored` hook is called; a document
 with neither keeps what a failing op did. Its ops' arguments are free-form objects, so

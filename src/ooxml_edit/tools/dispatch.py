@@ -1190,8 +1190,15 @@ class Toolbox:
         path in them."""
         name = self.tool_named(op.get("tool", "") if isinstance(op, Mapping) else "", notes)
         if name not in self.tools:
-            raise ToolError("invalid_arguments", f"no tool {name!r}", field="tool",
-                            valid_options=difflib.get_close_matches(name, self.tools, 5, 0.5)
+            near = difflib.get_close_matches(str(name), self.tools, 5, 0.5)
+            # No name this close is a slip: likely a tool the application runs itself,
+            # outside the toolbox, which a batch cannot reach.
+            slip = difflib.get_close_matches(str(name), self.tools, 1, 0.8)
+            raise ToolError("invalid_arguments", f"no tool {name!r}" + ("" if slip else (
+                            f" that batch can run: it runs only the tools in valid_options; "
+                            f"call {name} on its own")),
+                            field="tool",
+                            valid_options=near
                             or sorted(t.name for t in self.tools.values() if t.batchable))
         tool = self.tools[name]
         if not tool.batchable or tool.composite:

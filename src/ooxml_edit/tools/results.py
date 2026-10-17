@@ -110,6 +110,15 @@ class Result:
     def failure(cls, error: ToolError, **fields: Any) -> "Result":
         return cls(ok=False, error=error, summary=error.message, **fields)
 
+    @classmethod
+    def nothing_given(cls, done: str, field: str = "items") -> "Result":
+        """The result of a call whose list of work (``items``) is empty: nothing changes,
+        and a warning says so -- a model sends one after trimming a batch, and refusing it
+        would cost a round trip for nothing.  ``done`` says what was not done
+        (``"added"``)."""
+        return cls(summary=f"Nothing {done}: {field} is empty",
+                   warnings=[f"{field} is empty: nothing was {done}"])
+
     @property
     def is_error(self) -> bool:
         return not self.ok

@@ -2,6 +2,23 @@
 
 Versions are those in `pyproject.toml`; none is published to PyPI yet.
 
+## 0.43.0 -- unreleased
+- `batch` runs the application's own tools (round 7, L6). It always ran any batchable tool
+  in the toolbox, so a tool the application registers there with the libraries'
+  (`Toolbox(TOOLS + [add_note])`) runs inside a batch like theirs: validated against its
+  schema, its `$refs` resolved, its summary and data (or its error, failing alone) in the
+  op's outcome; `batchable=False` keeps one out, saying to call it on its own, as for
+  `batch` itself. New tests hold that with made-up application tools. What changes is the
+  refusal of a tool the toolbox does not have -- one the application dispatches itself:
+  unless a name is close to it (a slip, which keeps its near names), the op's error now
+  says `no tool 'x' that batch can run: it runs only the tools in valid_options; call x on
+  its own`. docs/TOOLS.md says how to register such a tool, and that an atomic batch's
+  rollback leaves what an application's tool did outside documents.
+- `Result.nothing_given(done, field="items")` (round 7, L7): the result of a call given an
+  empty list of work -- nothing changes, no undo step, and a warning `items is empty:
+  nothing was added`. The format libraries return it for an empty `items` instead of
+  refusing it. Tool definitions unchanged.
+
 ## 0.42.0 -- unreleased
 - `add_series` on a scatter chart keeps a marker-only scatter line-less (round 6, item
   12): a template series whose line is off (`c:spPr/a:ln/a:noFill`, as `add_chart`'s
