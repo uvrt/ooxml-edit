@@ -2,6 +2,21 @@
 
 Versions are those in `pyproject.toml`; none is published to PyPI yet.
 
+## 0.44.0 -- unreleased
+- Month and day names for a region of a measured language (round 7, L5). A date pattern's
+  name tokens (`mmmm`, `ddd` ...) were refused for any locale not among the eight measured
+  (`{{d:x/#1/day:d mmmm yyyy}}` in en-BE: "no month or day names are measured for
+  en-BE"). Measured in Excel for Mac, 2026-10-17, Office names a region's dates in its
+  language: en-BE and en-IE as en-US, fr-BE and fr-CH as fr-FR, de-BE and de-CH as de-DE.
+  So a locale whose tag `dates.NAMES` does not list now takes its language's names (new
+  `dates.LANGUAGES`: en, nl, de, fr, es, it; new `dates.names_tag`), in text facts, tables'
+  and charts' `date_format` alike; its separators and day order stay its own, and no
+  warning is added (it is what Office shows). Another language still refuses a name token,
+  now naming the languages that have names. A chart's code takes the region's own id where
+  Excel was seen storing it (`dates.LCIDS` gains en-IE 1809, fr-BE 80C, fr-CH 100C and the
+  language-only en 9, nl 13, de 7, fr C), else the id of the tag whose names it shows
+  (en-BE `[$-409]`, de-BE `[$-407]`, es-MX `[$-C0A]`). Tool definitions unchanged.
+
 ## 0.43.0 -- unreleased
 - `batch` runs the application's own tools (round 7, L6). It always ran any batchable tool
   in the toolbox, so a tool the application registers there with the libraries'

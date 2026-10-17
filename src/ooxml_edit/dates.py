@@ -22,18 +22,27 @@ written into a kept code by accident.
 each locale, measured on Office for Mac, 2026-10-16 (the application and the method:
 ``docs/TOOLS.md``, "Date patterns"), with an explicit locale code in the number format
 (``[$-413]mmmm``, one locale at a time; ``mmmmm`` is the full name's first letter there
-too).  en-US and en-GB show the same names, and nl-NL and nl-BE.  A locale without
+too).  en-US and en-GB show the same names, and nl-NL and nl-BE.
+
+**A region shows its language's names.**  Measured in Office for Mac, 2026-10-17: en-BE
+and en-IE show en-US's names, fr-BE and fr-CH fr-FR's, de-BE and de-CH de-DE's -- Office
+names a date in the region's language.  So a locale whose tag is not in :data:`NAMES`
+takes its language's (:data:`LANGUAGES`: en, nl, de, fr, es, it), in every region; its
+other conventions (separators, day order) stay its own.  A locale whose language has no
 measured names refuses a name token (``ddd``, ``dddd``, ``mmm``, ``mmmm``, ``mmmmm``)
-rather than guessing them from another region or language; the numeric tokens work in
-any locale.  The locale is the session's: anything with a ``language`` (an
-:class:`ooxml_common.locales.Locale`), or a language tag.
+rather than guessing them; the numeric tokens work in any locale.  The locale is the
+session's: anything with a ``language`` (an :class:`ooxml_common.locales.Locale`), or a
+language tag.
 
 **Text and kept codes.**  :func:`format_date` writes fixed text: its separators are the
 pattern's, exactly.  :func:`format_code` turns a pattern into a number format code, as
 Office stores one -- spaces and commas escaped, the locale's id in front:
 ``[$-413]d\\ mmmm\\ yyyy`` (measured: Office takes ``[$-nl-NL]`` too and stores it as
 ``[$-413]``; ``/``, ``-`` and ``.`` stay unescaped) -- for a chart to keep with its dates
-(:class:`DateCategory`).  Office shows a kept code differently per viewer (measured on
+(:class:`DateCategory`).  The id is the locale's own where Office was seen storing it
+(:data:`LCIDS`: ``[$-fr-BE]`` is stored ``[$-80C]``), else its language's in
+:data:`LANGUAGES` (en-BE writes ``[$-409]``): the prefix fixes the names only, and those
+are the language's either way.  Office shows a kept code differently per viewer (measured on
 Office for Mac, 2026-10-16, switching the macOS region): a ``/`` in the code is the
 viewer's date separator (``dd/mm/yyyy`` shows ``02-03-2026`` in a Dutch (Netherlands)
 region and ``02.03.2026`` in a German one; a ``-`` stays ``-``), and the ``[$-LCID]``
@@ -42,9 +51,9 @@ the names and the order of a date, not its separators.
 
 **Reading a kept code back.**  :func:`is_date_code` tells a date code from a number one,
 so a chart's categories kept as serials read back as dates (``Chart.category_dates``).
-ooxml-common keeps a copy of :data:`NAMES` and :data:`LCIDS` to draw such categories
-(``ooxml_common.dates``, which may not import this package); a test there checks the two
-agree.
+ooxml-common keeps a copy of :data:`NAMES`, :data:`LANGUAGES` and :data:`LCIDS` to draw
+such categories (``ooxml_common.dates``, which may not import this package); a test there
+checks the two agree.
 
 Standard library only; nothing here reads the operating system's locale.
 """
@@ -56,9 +65,9 @@ import re
 from types import MappingProxyType
 from typing import Any, Mapping, NamedTuple
 
-__all__ = ["LCIDS", "NAMES", "NAME_TOKENS", "TOKENS", "TOKENS_TEXT", "DateCategory", "DateNames",
-           "PatternError", "date_of", "format_code", "format_date", "from_serial", "is_date_code",
-           "lcid_for", "names_for", "parse", "serial", "uses_names"]
+__all__ = ["LANGUAGES", "LCIDS", "NAMES", "NAME_TOKENS", "TOKENS", "TOKENS_TEXT", "DateCategory",
+           "DateNames", "PatternError", "date_of", "format_code", "format_date", "from_serial",
+           "is_date_code", "lcid_for", "names_for", "names_tag", "parse", "serial", "uses_names"]
 
 #: The tokens a pattern takes, as an error lists them.
 TOKENS = ("d", "dd", "ddd", "dddd", "m", "mm", "mmm", "mmmm", "mmmmm", "yy", "yyyy")
@@ -122,11 +131,23 @@ NAMES: Mapping[str, DateNames] = MappingProxyType({
     "de-DE": _GERMAN, "fr-FR": _FRENCH, "es-ES": _SPANISH, "it-IT": _ITALIAN,
 })
 
+#: The tag in :data:`NAMES` whose names every region of a language shows, by language
+#: subtag.  Measured in Office for Mac, 2026-10-17: en-BE and en-IE named a date as en-US,
+#: fr-BE and fr-CH as fr-FR, de-BE and de-CH as de-DE (and nl-BE as nl-NL, 2026-10-16);
+#: es and it follow the same rule, no other region of theirs measured.
+LANGUAGES: Mapping[str, str] = MappingProxyType({
+    "en": "en-US", "nl": "nl-NL", "de": "de-DE", "fr": "fr-FR", "es": "es-ES", "it": "it-IT",
+})
+
 #: The locale id Office stores in a code's ``[$-LCID]`` prefix, per language tag: each
-#: accepted and honoured (names in that language) on Office for Mac, 2026-10-16.
+#: accepted and honoured (names in that language) on Office for Mac, 2026-10-16; the
+#: regional and language-only ones are what Office for Mac stored for a ``[$-fr-BE]``,
+#: ``[$-en]`` ... prefix, 2026-10-17, each showing its language's names.
 LCIDS: Mapping[str, int] = MappingProxyType({
     "en-US": 0x409, "en-GB": 0x809, "nl-NL": 0x413, "nl-BE": 0x813,
     "de-DE": 0x407, "fr-FR": 0x40C, "es-ES": 0xC0A, "it-IT": 0x410,
+    "en-IE": 0x1809, "fr-BE": 0x80C, "fr-CH": 0x100C,
+    "en": 0x9, "nl": 0x13, "de": 0x7, "fr": 0xC,
 })
 
 
@@ -149,14 +170,29 @@ def _language(locale: Any) -> str:
                                           for part in parts[1:]])
 
 
+def names_tag(locale: Any) -> str | None:
+    """The tag in :data:`NAMES` whose names ``locale`` shows: its own tag when listed, else
+    its language's (:data:`LANGUAGES`: fr-BE shows fr-FR's); ``None`` for a language with
+    no measured names."""
+    tag = _language(locale)
+    return tag if tag in NAMES else LANGUAGES.get(tag.split("-", 1)[0])
+
+
 def names_for(locale: Any) -> DateNames | None:
-    """The measured names of ``locale``'s language tag (:data:`NAMES`); ``None`` without."""
-    return NAMES.get(_language(locale))
+    """The measured names ``locale`` shows (:func:`names_tag`); ``None`` without."""
+    tag = names_tag(locale)
+    return None if tag is None else NAMES[tag]
 
 
 def lcid_for(locale: Any) -> int | None:
-    """The ``[$-LCID]`` id of ``locale``'s language tag (:data:`LCIDS`); ``None`` without."""
-    return LCIDS.get(_language(locale))
+    """The ``[$-LCID]`` id of ``locale``: its tag's (:data:`LCIDS`), else that of the tag
+    whose names it shows (:func:`names_tag`: en-BE takes en-US's ``409``); ``None`` for a
+    language with no measured names."""
+    tag = _language(locale)
+    if tag in LCIDS:
+        return LCIDS[tag]
+    shown = names_tag(tag)
+    return None if shown is None else LCIDS[shown]
 
 
 def parse(pattern: str) -> list[tuple[str, str]]:
@@ -215,11 +251,12 @@ def _check_names(pattern: str, parts: list[tuple[str, str]], locale: Any) -> Dat
     if names is None:
         used = [text for kind, text in parts if kind == "token" and text in NAME_TOKENS]
         if used:
-            measured = ", ".join(NAMES)
+            known = list(LANGUAGES)
             raise PatternError(
                 f"{pattern!r}: {used[0]} writes a name, and no month or day names are "
-                f"measured for {_language(locale)} (they are for {measured}); write the "
-                "date with numbers (dd/mm/yyyy, d-m-yyyy, yyyy-mm-dd)")
+                f"measured for {_language(locale)} (they are for the languages "
+                f"{', '.join(known[:-1])} and {known[-1]}, in any region); write the date "
+                "with numbers (dd/mm/yyyy, d-m-yyyy, yyyy-mm-dd)")
     return names
 
 
@@ -266,7 +303,7 @@ _PLAIN = frozenset("/-.")
 
 def format_code(pattern: str, locale: Any = None) -> str:
     """``pattern`` as a number format code, as Office stores one: the locale's
-    ``[$-LCID]`` first when it has one (:data:`LCIDS`), the tokens as they are, ``/``,
+    ``[$-LCID]`` first when it has one (:func:`lcid_for`), the tokens as they are, ``/``,
     ``-`` and ``.`` unescaped, every other literal character after a backslash
     (``[$-413]d\\ mmmm\\ yyyy``), quoted text in quotes.  Raises :class:`PatternError` as
     :func:`format_date` does."""

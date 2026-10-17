@@ -431,9 +431,14 @@ in Excel for Mac, 2026-10-16, with an explicit locale code in the format (`[$-41
 for en-US, en-GB, nl-NL, nl-BE, de-DE, fr-FR, es-ES and it-IT (`dates.NAMES`): en-US and
 en-GB alike (`Mar`, `Mon`), nl `mrt`/`ma`, de `Mär`/`Mo`, fr `mars`/`janv.`/`lun.`, es
 `mar.`/`lu.`, it `mar`/`lun`; `mmmmm` is the full name's first letter (lower case in nl,
-fr, es and it). A session in another locale refuses a name token ("no month or day names
-are measured for en-AU ...; write the date with numbers"), never guessing; the numeric
-tokens work in every locale.
+fr, es and it). **A region shows its language's names** (0.44.0, round 7, L5; measured in
+Excel for Mac, 2026-10-17: en-BE and en-IE named a date as en-US, fr-BE and fr-CH as
+fr-FR, de-BE and de-CH as de-DE): a session whose tag is not listed takes its language's
+names (`dates.LANGUAGES`: en, nl, de, fr, es, it -> en-US, nl-NL, de-DE, fr-FR, es-ES,
+it-IT), any region; the locale's separators and day order stay its own. A session in
+another language refuses a name token ("no month or day names are measured for pt-BR
+(they are for the languages en, nl, de, fr, es and it, in any region); write the date with
+numbers"), never guessing; the numeric tokens work in every locale.
 
 - **Text** (`dates.format_date`): fixed text, its separators exactly the pattern's in every
   locale -- `dd/mm/yyyy` is `02/03/2026` in de-DE too.
@@ -441,7 +446,12 @@ tokens work in every locale.
   -- serials of the 1900 date system in a `c:numRef` -- in a number format code as Excel
   stores it, the locale's id first and spaces and commas escaped:
   `[$-413]d\ mmmm\ yyyy` (`dates.LCIDS`, each measured accepted and honoured: 409, 809,
-  413, 813, 407, 40C, C0A, 410). The workbook's category cells hold the same serials in
+  413, 813, 407, 40C, C0A, 410; and what Excel stored for `[$-fr-BE]` 80C, `[$-en-IE]`
+  1809, `[$-fr-CH]` 100C, `[$-en]` 9, `[$-nl]` 13, `[$-de]` 7, `[$-fr]` C). A region with
+  no measured id takes that of the tag whose names it shows: en-BE `[$-409]`, de-BE and
+  de-CH `[$-407]` (Excel itself stores `[$-en-BE]` as `[$]` plus an `x16r2:formatCode16`
+  `[$-en-BE]`, which a chart's cache has no place for; the prefix changes the names only,
+  and those are the same). The workbook's category cells hold the same serials in
   that format; the category axis shows them source-linked and stays a text axis (`c:auto`
   0), one band per date. **Measured caveat** (Excel for Mac, 2026-10-16, switching the
   macOS region): Office shows a `/` in a kept code as the viewer's date separator

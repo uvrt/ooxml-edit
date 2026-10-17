@@ -92,12 +92,34 @@ def test_a_locale_is_read_by_its_language_tag():
     assert dates.format_date(MONDAY, "mmmm") == "March"                 # en-US, the default
 
 
-@pytest.mark.parametrize("language", ["en-AU", "nl", "pt-BR", "ja-JP"])
-def test_a_locale_without_measured_names_refuses_name_tokens_only(language):
+@pytest.mark.parametrize("language", ["pt-BR", "ja-JP", "sv", "zh-Hant-TW"])
+def test_a_language_without_measured_names_refuses_name_tokens_only(language):
     with pytest.raises(PatternError, match=f"no month or day names are measured for "
-                                           f"{language}"):
+                                           f"{language} \\(they are for the languages en, nl, "
+                                           "de, fr, es and it, in any region\\)"):
         dates.format_date(MONDAY, "d mmm yyyy", language)
     assert dates.format_date(MONDAY, "dd/mm/yyyy", language) == "02/03/2026"
+
+
+@pytest.mark.parametrize("language, written", [
+    # Measured on Office for Mac, 2026-10-17: these regions show their language's names.
+    ("en-BE", "Monday 2 Mar 2026"), ("en-IE", "Monday 2 Mar 2026"),
+    ("fr-BE", "lundi 2 mars 2026"), ("fr-CH", "lundi 2 mars 2026"),
+    ("de-BE", "Montag 2 Mär 2026"), ("de-CH", "Montag 2 Mär 2026"),
+    # By the same rule: any region, or none, of a language with measured names.
+    ("en-AU", "Monday 2 Mar 2026"), ("nl", "maandag 2 mrt 2026"),
+    ("es-MX", "lunes 2 mar. 2026"), ("it-CH", "lunedì 2 mar 2026"),
+])
+def test_a_region_shows_its_languages_names(language, written):
+    assert dates.format_date(MONDAY, "dddd d mmm yyyy", language) == written
+    assert dates.names_for(language) == dates.NAMES[dates.LANGUAGES[language[:2]]]
+
+
+def test_names_tag():
+    assert dates.names_tag("nl-BE") == "nl-BE" and dates.names_tag("en-GB") == "en-GB"
+    assert dates.names_tag("fr_be") == "fr-FR" and dates.names_tag("en") == "en-US"
+    assert dates.names_tag("pt-BR") is None and dates.names_for("pt-BR") is None
+    assert all(tag in dates.NAMES for tag in dates.LANGUAGES.values())
 
 
 @pytest.mark.parametrize("pattern, message", [
@@ -136,10 +158,25 @@ def test_the_codes_escapes():
     assert dates.format_code("mmmm d, yyyy", "en-US") == r"[$-409]mmmm\ d\,\ yyyy"
     assert dates.format_code('d "de" mmmm', "es-ES") == r'[$-C0A]d\ "de"\ mmmm'
     assert dates.format_code("DD/MM/YYYY", "en-GB") == "[$-809]dd/mm/yyyy"
-    # No measured locale id: no prefix, and a name token is refused as in text.
-    assert dates.format_code("dd/mm/yyyy", "en-AU") == "dd/mm/yyyy"
-    with pytest.raises(PatternError, match="en-AU"):
-        dates.format_code("mmmm", "en-AU")
+    # No measured names for the language: no prefix, and a name token is refused as in text.
+    assert dates.format_code("dd/mm/yyyy", "pt-BR") == "dd/mm/yyyy"
+    with pytest.raises(PatternError, match="pt-BR"):
+        dates.format_code("mmmm", "pt-BR")
+
+
+@pytest.mark.parametrize("language, code", [
+    # The ids Office for Mac stored for these prefixes, 2026-10-17 ([$-fr-BE] -> [$-80C]).
+    ("fr-BE", r"[$-80C]d\ mmmm\ yyyy"), ("en-IE", r"[$-1809]d\ mmmm\ yyyy"),
+    ("fr-CH", r"[$-100C]d\ mmmm\ yyyy"), ("en", r"[$-9]d\ mmmm\ yyyy"),
+    ("fr", r"[$-C]d\ mmmm\ yyyy"), ("de", r"[$-7]d\ mmmm\ yyyy"),
+    ("nl", r"[$-13]d\ mmmm\ yyyy"),
+    # No id measured for the region: the id of the tag whose names it shows.
+    ("en-BE", r"[$-409]d\ mmmm\ yyyy"), ("de-BE", r"[$-407]d\ mmmm\ yyyy"),
+    ("de-CH", r"[$-407]d\ mmmm\ yyyy"), ("es-MX", r"[$-C0A]d\ mmmm\ yyyy"),
+    ("it-CH", r"[$-410]d\ mmmm\ yyyy"), ("en-AU", r"[$-409]d\ mmmm\ yyyy"),
+])
+def test_a_regions_code_takes_its_own_measured_id_else_its_languages(language, code):
+    assert dates.format_code("d mmmm yyyy", language) == code
 
 
 def test_serials_are_the_1900_systems():

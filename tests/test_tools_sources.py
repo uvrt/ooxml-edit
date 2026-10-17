@@ -805,6 +805,8 @@ def test_label_writes_a_date_in_a_date_format_and_leaves_the_rest():
 @pytest.mark.parametrize("language, code", [
     ("en-US", r"[$-409]d\ mmmm\ yyyy"), ("nl-NL", r"[$-413]d\ mmmm\ yyyy"),
     ("de-DE", r"[$-407]d\ mmmm\ yyyy"), ("it-IT", r"[$-410]d\ mmmm\ yyyy"),
+    # A region: its own measured id, else that of the tag whose names it shows.
+    ("fr-BE", r"[$-80C]d\ mmmm\ yyyy"), ("en-BE", r"[$-409]d\ mmmm\ yyyy"),
 ])
 def test_add_from_with_a_date_format_passes_dates_in_the_locales_code(toolbox, language, code):
     session = _session(toolbox, locale=_in(language))
