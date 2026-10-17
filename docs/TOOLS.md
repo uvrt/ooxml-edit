@@ -8,7 +8,7 @@ standard library only, and no provider SDK. The plan it implements is
 
 | Module | What it is |
 | --- | --- |
-| `tools.registry` | `Tool`, `ToolGroup`, the `@tool` decorator, and the parameter helpers (`string`, `integer`, `number`, `boolean`, `array`, `obj`) that build each tool's schema; a definition outside the common strict subset fails when the tool is made |
+| `tools.registry` | `Tool`, `ToolGroup`, the `@tool` decorator, and the parameter helpers (`string`, `integer`, `number`, `boolean`, `array`, `obj`) that build each tool's schema; a definition outside the common strict subset fails when the tool is made; the roles (`ROLES`: `review`, `resolve`, `edit`) a tool and each of its calls belong to |
 | `tools.schema` | the common strict subset both providers accept, its checker, and the call validator, which also enforces what the subset cannot say (numeric bounds, lengths, "exactly one of") |
 | `tools.adapters` | definitions for the Anthropic Messages API (strict on as many tools as the per-request limits allow, writing tools first; optional deferred loading and caching), the OpenAI Responses API (all required, optional ones nullable; optional namespaces and tool search) and Chat Completions; results as `tool_result` blocks, `function_call_output` items (images inside them, or in a user message after them), or tool messages plus a user message with the images; checkers for each provider's documented rules. Plain dicts |
 | `tools.results` | the result envelope, error codes with `valid_options`, image token estimates, truncation and paging |
@@ -17,7 +17,7 @@ standard library only, and no provider SDK. The plan it implements is
 | `tools.sources` | `Rows` (a source's `Dataset`, where it came from, `stale`) and the helpers that qualify, resolve and report sources: rows a tool takes from a dataset or another open document's table (below) |
 | `tools.limits` | size limits, magic-byte checks, image sizes read from headers, and a zip-bomb guard |
 | `tools.worker` | worker processes for rendering and layout whose deadlines are kept: a worker past its deadline is killed and the call reports `timeout`; multiprocessing workers by default, subprocess workers where multiprocessing may not start children, in-process on request (below) |
-| `tools.logs`, `tools.prompts` | call records with argument digests, not content; the shared system-prompt fragment (mechanics only, no house style) |
+| `tools.logs`, `tools.prompts` | call records with argument digests, not content; the shared system-prompt fragment (mechanics only, no house style) and a reviewer's role line |
 | `tools.shared` | the one definition of each tool every format shares (open, new, save, close, undo, find, replace, render, check, charts, SmartArt, properties, reading an input's text) and the generic `batch`; a library adds its handler with `@shared.handler("render", kind=...)`, and lists `shared.SESSION_TOOLS`, whose handlers serve every kind. The one module that names formats, in its descriptions only |
 
 ```python
@@ -492,6 +492,67 @@ writing tools before reading ones. `toolbox.system_prompt(extra=...)` gives the 
 fragment (`tools.prompts.SYSTEM`: planning, addresses and refs, batching, results and
 checks, rendering, saving, units), each format's fragment, then the application's own
 guidance: house style and design rules belong there, never in the shipped fragments.
+
+**Roles: who may change what** (0.45.0, round 7). A toolbox or a session loads *roles*,
+additive toolsets, in any combination; the default, all three, is the toolbox as it was
+without roles -- the same definitions byte for byte, the same strict set, the same prompt.
+
+| Role | Its calls |
+| --- | --- |
+| `review` | everything that does not change a document: describe, read, find, render, check, compare, inspect, a chart's `read`, a mixed tool's `list`; adding comments and replying to them |
+| `resolve` | resolving, reopening and deleting comments (a reply with `resolve: true` too) |
+| `edit` | every other change, editing a comment's text and accepting tracked changes among them |
+
+Every role set has the session's documents -- `open_document`, `save_document`,
+`close_document`, `read_blob` -- and `batch`: a reviewer saves the copy it commented.
+`new_document` and `undo` are `edit`'s (undo steps back through any role's changes).
+
+```python
+reviewer = Toolbox(TOOLS, formats=[FORMAT], groups=GROUPS, roles=["review"])
+tools = reviewer.definitions("anthropic")             # the review tools only
+system = reviewer.system_prompt(extra=HOUSE_RULES)    # with the reviewer's role line
+session = reviewer.session()                          # a call outside review is refused
+
+# or one toolbox (one worker pool) for every agent, roles per session:
+session = toolbox.session(roles=["review", "resolve"])
+tools = toolbox.definitions("anthropic", roles=["review", "resolve"])
+```
+
+Three typical setups:
+- **Builder** -- `roles=None` (all) or `["review", "edit"]`: reads and changes the document;
+  without `resolve` it leaves the reviewers' threads as they are.
+- **First-pass reviewer** -- `["review"]`: reads, checks, compares and renders; reports each
+  finding with the call that would fix it (tool and arguments) for a builder to apply in one
+  `batch`, and may add comments and replies; saves the commented copy.
+- **Second-pass reviewer** -- `["review", "resolve"]`: checks the builder's fixes, resolves
+  the threads they settle, reopens the others.
+
+*Enforced by the dispatcher.* A call outside the session's roles (`Session.roles`) is refused
+with `refused`, saying which role it needs and what to do instead (`ppt_set_text needs the
+edit role; this session has review. Do not make the change: report it with the call that would
+make it (tool and arguments).`), `details: {"role", "roles"}`; a tool in none of the roles'
+toolsets is refused before its arguments are checked. The role is per call, not per tool:
+`Tool.action_roles` gives a mixed tool's actions their role (`edit_chart`'s `read` is
+`review`'s, the rest `edit`'s), `Tool.call_role` a call whose arguments decide it, and for an
+action of the wrong role `valid_options` lists the actions the session may call. Inside
+`batch` each op is held to the roles: a refused op fails alone, as any failing op does, and
+an `atomic` batch with one runs nothing; `batch` itself is in every role set.
+
+*What is sent.* `definitions(roles=...)` sends only the roles' tools, and a mixed tool's
+`action` enum only their actions (a reviewer's `edit_chart` offers `read` alone, its
+comments tool `list`, `add`, `reply`): definitions differ per role set, each stable for the
+cache. The core is the roles' core tools; a role set without `edit` also loads its
+reviewing tools there (`Tool.review_core`: the comments tool, a deck's slide comparison),
+which would otherwise wait in their groups. `allowed_tools(roles=...)` and
+`system_prompt(roles=...)` follow: a role set without `edit` gets one role line after the
+formats' fragments (`Role: review. Do not change the document; ... Report each finding with
+the call that would fix it (tool and arguments). You may add comments and reply to them.`),
+one with `edit` none. The libraries list each format's role sets' token counts.
+
+A tool's role by default: `edit` if it changes the document (`mutates`), `review` if not --
+an application's own tools included; `role=` overrides it (`ANY_ROLE` for every role set).
+A changing tool's reading mode that is not an action (`ppt_add_shape`'s `measure`) stays
+with its tool, `edit`.
 
 **Where the work runs: three runners.** Rendering and layout run in worker processes so
 that a deadline can be kept by killing one, and so that work holding the GIL -- resvg-py's

@@ -79,7 +79,7 @@ from .datasets import (DATASET_PREFIX, Dataset, DatasetEntry, check_dataset_id,
                        dataset_id, row_range, rows_text)
 from .limits import LimitError, Limits
 from .logs import CallRecord, digest, log_call, logger, shape
-from .registry import CORE, Tool, ToolGroup, merge_tools
+from .registry import ANY_ROLE, CORE, EDIT, RESOLVE, Tool, ToolGroup, merge_tools, role_set
 from .results import Image, Result, ToolError
 from .schema import CallError, validate_call
 from .session import (Clock, DocumentEntry, DocumentFormat, Output, Session, doc_order,
@@ -615,7 +615,8 @@ class Toolbox:
                  start_method: str = "spawn", log_arguments: bool = False,
                  error_map: Mapping[type[BaseException], Any] | None = None,
                  strict_first: Sequence[str] | None = None,
-                 runner: Any = None, font_dirs: Any = None, locale: Any = None) -> None:
+                 runner: Any = None, font_dirs: Any = None, locale: Any = None,
+                 roles: str | Iterable[str] | None = None) -> None:
         """``workers`` worker processes render and lay out (:class:`~.worker.WorkerPool`).
         In a daemonic process, which may not start multiprocessing children, the pool uses
         ``workers`` subprocess workers instead (:class:`~.worker.SubprocessPool`), by
@@ -636,7 +637,15 @@ class Toolbox:
         language, list separator) -- is likewise the default of the sessions this toolbox
         makes, forwarded to every format and to the work run in worker processes.  ``None``
         is en-US (:data:`~.session.DEFAULT_LOCALE`, :data:`ooxml_common.locales.EN_US`'s
-        values), always: never the operating system's.  Not a tool argument either."""
+        values), always: never the operating system's.  Not a tool argument either.
+
+        ``roles`` -- what the model may do: any of ``review`` (read, find, render, check,
+        compare; add and reply to comments), ``resolve`` (resolve, reopen and delete
+        comments) and ``edit`` (every other change) -- is the default of the sessions this
+        toolbox makes and of :meth:`definitions`, :meth:`allowed_tools` and
+        :meth:`system_prompt`; each takes ``roles=`` to override it.  ``None``, the
+        default, is all three: every tool, the definitions and prompt as without roles.  A
+        call outside the session's roles is refused, inside ``batch`` too."""
         self.formats: dict[str, DocumentFormat] = {fmt.kind: fmt for fmt in formats}
         self.tools: dict[str, Tool] = _with_format_tools(merge_tools(tools),
                                                          self.formats.values())
@@ -653,6 +662,8 @@ class Toolbox:
         self.font_dirs: tuple[str, ...] | None = font_dirs_of(font_dirs)
         #: The default :attr:`Session.locale` of the sessions this toolbox makes.
         self.locale: Any = locale_of(locale)
+        #: The default roles of the sessions, definitions and prompt (:data:`~.registry.ROLES`).
+        self.roles: tuple[str, ...] = role_set(roles)
         self._workers = workers
         self._start_method = start_method
         self._pool: Any = runner
@@ -672,15 +683,18 @@ class Toolbox:
 
     def session(self, *, clock: Clock | None = None, limits: Limits | None = None,
                 on_output: Callable[[Output], None] | None = None,
-                font_dirs: Any = _TOOLBOX_DEFAULT, locale: Any = _TOOLBOX_DEFAULT) -> Session:
+                font_dirs: Any = _TOOLBOX_DEFAULT, locale: Any = _TOOLBOX_DEFAULT,
+                roles: Any = _TOOLBOX_DEFAULT) -> Session:
         """A new session.  ``font_dirs`` replaces the toolbox's :attr:`font_dirs` for this
         session (``None``: the renderers' default; ``[]``: no folders of the
         application's, ``OOXML_FONT_DIRS`` not read either); ``locale`` the toolbox's
-        :attr:`locale` (``None``: en-US) -- one user's or client's own."""
+        :attr:`locale` (``None``: en-US) -- one user's or client's own; ``roles`` the
+        toolbox's :attr:`roles` (``None``: all), to match the definitions sent for it."""
         return Session(self.formats.values(), clock=clock, limits=limits or self.limits,
                        on_output=on_output,
                        font_dirs=self.font_dirs if font_dirs is _TOOLBOX_DEFAULT else font_dirs,
-                       locale=self.locale if locale is _TOOLBOX_DEFAULT else locale)
+                       locale=self.locale if locale is _TOOLBOX_DEFAULT else locale,
+                       roles=self.roles if roles is _TOOLBOX_DEFAULT else roles)
 
     def tool_named(self, name: Any, notes: list[str] | None = None) -> Any:
         """The tool name ``name`` stands for: itself, or the name after the last dot when a
@@ -705,18 +719,26 @@ class Toolbox:
                             or sorted(self.tools))
         return self.tools[name]
 
-    def select(self, groups: str | Iterable[str] | None = None) -> list[Tool]:
-        """The tools to send: all (``None`` or ``"all"``), or core plus the named groups."""
+    def select(self, groups: str | Iterable[str] | None = None, *,
+               roles: str | Iterable[str] | None = _TOOLBOX_DEFAULT) -> list[Tool]:
+        """The tools to send: all (``None`` or ``"all"``), or core plus the named groups;
+        of those, the ones in the toolsets of ``roles`` (default the toolbox's), each
+        offering only the roles' actions, a reviewer's main tools in the core of a role set
+        without ``edit`` (:meth:`Tool.for_roles`)."""
+        roles = self.roles if roles is _TOOLBOX_DEFAULT else role_set(roles)
+        sent = [tool for tool in (tool.for_roles(roles) for tool in self.tools.values())
+                if tool is not None]
         if groups is None or groups == "all":
-            return list(self.tools.values())
+            return sent
         wanted = {CORE} | ({groups} if isinstance(groups, str) else set(groups))
         unknown = wanted - {tool.group for tool in self.tools.values()} - {CORE}
         if unknown:
             raise ValueError(f"unknown group(s) {sorted(unknown)}")
-        return [tool for tool in self.tools.values() if tool.group in wanted]
+        return [tool for tool in sent if tool.group in wanted]
 
     def definitions(self, provider: str = "anthropic", *,
                     groups: str | Iterable[str] | None = None, defer: bool | None = None,
+                    roles: str | Iterable[str] | None = _TOOLBOX_DEFAULT,
                     **options: Any) -> list[dict[str, Any]]:
         """Provider-ready tool definitions: ``anthropic``, ``openai-responses`` or
         ``openai-chat``.
@@ -729,8 +751,14 @@ class Toolbox:
         every tool is sent to a provider that has tool search, and off when the application
         picked groups.  Chat Completions has no tool search: pick groups there.  Other
         options go to the adapter (``cache``, ``strict``, ``namespaces``).
+
+        ``roles`` (default the toolbox's :attr:`roles`) sends only the tools of those
+        roles, a mixed tool with only their actions in its ``action`` enum: the core is
+        the core tools of the roles, and for a role set without ``edit`` its reviewing
+        tools too (:attr:`Tool.review_core`: comments).  All roles is every tool, as
+        without roles.
         """
-        tools = self.select(groups)
+        tools = self.select(groups, roles=roles)
         everything = groups is None or groups == "all"
         if defer is None:
             defer = everything and provider in ("anthropic", "openai-responses")
@@ -746,16 +774,22 @@ class Toolbox:
         return adapters.definitions_for(provider, tools, **options)
 
     def allowed_tools(self, groups: str | Iterable[str] | None = None, *,
-                      provider: str = "openai-responses") -> dict[str, Any]:
-        """An OpenAI ``tool_choice`` limiting calls to the core and ``groups``, while the
-        ``tools`` sent (and so the cache) stay the same: for an application that sends
-        every definition without tool search and narrows by turn."""
-        names = [tool.name for tool in self.select(groups)]
+                      provider: str = "openai-responses",
+                      roles: str | Iterable[str] | None = _TOOLBOX_DEFAULT) -> dict[str, Any]:
+        """An OpenAI ``tool_choice`` limiting calls to the core and ``groups`` (of the
+        ``roles``' tools), while the ``tools`` sent (and so the cache) stay the same: for an
+        application that sends every definition without tool search and narrows by turn."""
+        names = [tool.name for tool in self.select(groups, roles=roles)]
         return adapters.openai_allowed_tools(names, chat=provider == "openai-chat")
 
-    def system_prompt(self, *, extra: str | None = None) -> str:
-        """The shared fragment, each format's fragment, then the application's ``extra``."""
-        return prompts.system_prompt(*(fmt.prompt for fmt in self.formats.values()), extra=extra)
+    def system_prompt(self, *, extra: str | None = None,
+                      roles: str | Iterable[str] | None = _TOOLBOX_DEFAULT) -> str:
+        """The shared fragment, each format's fragment, the role line of ``roles`` (default
+        the toolbox's; a role set without ``edit`` is told it reviews, :func:`.prompts.role_line`;
+        one with ``edit`` gets no line), then the application's ``extra``."""
+        roles = self.roles if roles is _TOOLBOX_DEFAULT else role_set(roles)
+        return prompts.system_prompt(*(fmt.prompt for fmt in self.formats.values()), extra=extra,
+                                     roles=roles)
 
     def render_result(self, provider: str, result: Result, call_id: str, *,
                       images: str | None = None, detail: str | None = None) -> Any:
@@ -814,7 +848,9 @@ class Toolbox:
         try:
             tool = self.tool(name, notes)
             name = tool.name
+            _check_role(tool, None, session.roles)
             clean = self._arguments(tool, arguments, notes)
+            _check_role(tool, clean, session.roles)
             if tool.composite:
                 doc_ids = self._batch_documents(clean)
                 if not clean.get("atomic"):
@@ -1184,10 +1220,11 @@ class Toolbox:
 
     # -- batch -------------------------------------------------------------------------------
 
-    def _prepare(self, op: Any, notes: list[str] | None = None) -> tuple[Tool, dict[str, Any]]:
-        """One op's tool and its validated arguments (the aliases read added to ``notes``).
-        A :class:`ToolError`'s ``field`` is the op's own: ``tool``, or ``arguments`` and the
-        path in them."""
+    def _prepare(self, op: Any, notes: list[str] | None = None,
+                 roles: Sequence[str] | None = None) -> tuple[Tool, dict[str, Any]]:
+        """One op's tool and its validated arguments (the aliases read added to ``notes``),
+        refused when the call is outside ``roles``.  A :class:`ToolError`'s ``field`` is the
+        op's own: ``tool``, or ``arguments`` and the path in them."""
         name = self.tool_named(op.get("tool", "") if isinstance(op, Mapping) else "", notes)
         if name not in self.tools:
             near = difflib.get_close_matches(str(name), self.tools, 5, 0.5)
@@ -1204,16 +1241,20 @@ class Toolbox:
         if not tool.batchable or tool.composite:
             raise ToolError("invalid_arguments", f"{name} cannot run inside a batch; call it "
                             "on its own", field="tool")
+        if roles is not None:
+            _check_role(tool, None, roles, field="tool")
         try:
             clean = self._arguments(tool, op.get("arguments") or {}, notes)
+            if roles is not None:
+                _check_role(tool, clean, roles)
         except ToolError as error:
             raise ToolError(error.code, error.message, field="arguments" + (
                 f".{error.field}" if error.field else ""),
-                valid_options=error.valid_options) from None
+                valid_options=error.valid_options, details=error.details) from None
         return tool, clean
 
-    def _ops(self, arguments: Mapping[str, Any],
-             notes: list[str]) -> list[tuple[int, Tool, dict[str, Any]]]:
+    def _ops(self, arguments: Mapping[str, Any], notes: list[str],
+             roles: Sequence[str] | None = None) -> list[tuple[int, Tool, dict[str, Any]]]:
         """An atomic batch's ops, each validated against its own tool: before anything runs.
         The aliases read go to ``notes``, each naming its op."""
         prepared = []
@@ -1221,13 +1262,14 @@ class Toolbox:
             where = f"ops[{index}]"
             try:
                 read: list[str] = []
-                tool, clean = self._prepare(op, read)
+                tool, clean = self._prepare(op, read, roles)
                 notes += [f"{where}: {note}" for note in read]
             except ToolError as error:
                 said = where if error.field == "tool" else f"{where} ({op.get('tool', '')})"
                 raise ToolError(error.code, f"{said}: {error.message}",
                                 field=f"{where}.{error.field}",
-                                valid_options=error.valid_options) from None
+                                valid_options=error.valid_options,
+                                details=error.details) from None
             prepared.append((index, tool, clean))
         return prepared
 
@@ -1258,7 +1300,7 @@ class Toolbox:
         if not arguments.get("atomic"):
             return self._run_partial(session, ops, entries, reading or {})
         notes: list[str] = []
-        prepared = self._ops(arguments, notes)
+        prepared = self._ops(arguments, notes, session.roles)
         context = CallContext()
         context.batch = True
         started = time.perf_counter()
@@ -1329,7 +1371,7 @@ class Toolbox:
                             raise ToolError("timeout", "not run: the batch passed its "
                                             f"{limits.batch_timeout:g} s deadline")
                         read: list[str] = []
-                        tool, clean = self._prepare(op, read)
+                        tool, clean = self._prepare(op, read, session.roles)
                         combined.warnings += [f"ops[{index}]: {note}" for note in read]
                         outcome = self._run_alone(session, index, tool, clean, entries,
                                                   context, combined, reading)
@@ -1508,6 +1550,40 @@ def _renamed(node: Any, alias: str, name: Any, where: str, notes: list[str]) -> 
     node[meant] = node.pop(alias)
     notes.append(f"{field} read as {meant}")
     return node
+
+
+def _check_role(tool: Tool, arguments: Mapping[str, Any] | None, roles: Sequence[str], *,
+                field: str | None = None) -> None:
+    """Refuse a call outside ``roles``: with ``arguments`` ``None``, a tool in none of the
+    roles' toolsets; else the call's own role (:meth:`Tool.role_of`)."""
+    if arguments is None:
+        if tool.roles & set(roles):
+            return
+        needed = sorted(tool.roles, key=lambda role: (role != EDIT, role))[0]
+        action = None
+    else:
+        needed = tool.role_of(arguments)
+        if needed == ANY_ROLE or needed in roles:
+            return
+        action = arguments.get("action") if isinstance(arguments.get("action"), str) else None
+    if arguments is not None and tool.call_role is not None and tool.call_role(arguments):
+        what = f"this {tool.name} call"     # its action's role is loaded, not this one's
+    elif action and tool.actions:
+        what = f"{tool.name} {action}"
+    else:
+        what = tool.name
+    message = (f"{what} needs the {needed} role; this session has "
+               f"{', '.join(roles)}. ")
+    if needed == EDIT:
+        message += ("Do not make the change: report it with the call that would make it "
+                    "(tool and arguments).")
+    elif needed == RESOLVE:
+        message += "Leave the thread as it is and say it should be resolved."
+    else:
+        message += "Reading needs the review role."
+    allowed = tool.actions_for(roles) if action else []
+    raise ToolError("refused", message, field=field or ("action" if action else None),
+                    valid_options=allowed, details={"role": needed, "roles": list(roles)})
 
 
 def ref_rule(name: str) -> str:

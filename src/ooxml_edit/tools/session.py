@@ -50,6 +50,7 @@ from typing import Any, Callable, Hashable, Iterable, Iterator, Mapping, Sequenc
 from .datasets import DATASET_PREFIX, DatasetEntry, dataset_id
 from .limits import LimitError, Limits, check_declared_type, check_image, check_package
 from .logs import CallRecord
+from .registry import role_set
 from .results import ToolError
 
 Clock = Callable[[], _dt.datetime]
@@ -425,14 +426,18 @@ class Session:
     of the session's documents (see the module's notes); ``None`` leaves the renderers'
     default -- ``OOXML_FONT_DIRS``, then the operating system's folders.  ``locale`` is
     the regional settings of every render and measurement (an
-    :class:`ooxml_common.locales.Locale`); ``None``, the default, is en-US.
+    :class:`ooxml_common.locales.Locale`); ``None``, the default, is en-US.  ``roles`` is
+    what the session's calls may do (:data:`~.registry.ROLES`, any of ``review``,
+    ``resolve`` and ``edit``); ``None``, the default, is all three: every tool.
     """
 
     def __init__(self, formats: Iterable[DocumentFormat] = (), *, clock: Clock | None = None,
                  limits: Limits | None = None, on_output: Callable[[Output], None] | None = None,
                  session_id: str | None = None, font_dirs: Any = None,
-                 locale: Any = None) -> None:
+                 locale: Any = None, roles: Any = None) -> None:
         self.id = session_id or uuid.uuid4().hex[:12]
+        #: The roles whose calls the toolbox runs here; a call outside them is refused.
+        self.roles: tuple[str, ...] = role_set(roles)
         #: The application's own font folders, as path strings; ``None``: the default.
         self.font_dirs: tuple[str, ...] | None = font_dirs_of(font_dirs)
         #: The regional settings of the session's documents; en-US unless given.
