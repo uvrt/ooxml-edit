@@ -740,8 +740,8 @@ These pairs stay format-specific, because their parameters differ too much:
 
 - The deck core grew by 46 tokens: `describe`'s one description says what both kinds return. `word_format` leaving the Word core took 711 off every Word request.
 - **The budget policy (T5b):**
-  - **What binds is what a request loads:** the core, at most **6,000 tokens per format as count-tokens counts them** (raised from 5,500 by the user on 2026-10-11). Each library's `tests/test_tools_online.py` (marked `provider`, run with a key) counts it and sends one request with the definitions as the adapter sends them. Today: decks 5,097, Word 3,539.
-  - **An offline proxy in CI:** the core's compact JSON ÷ 3.5, times the measured ratio **1.48**, at most 6,000 (an offline core of at most 4,054).
+  - **What binds is what a request loads:** the core, at most **6,500 tokens per format as count-tokens counts them** (raised from 5,500 by the user on 2026-10-11, to 6,500 on 2026-10-17). Each library's `tests/test_tools_online.py` (marked `provider`, run with a key) counts it and sends one request with the definitions as the adapter sends them. Today: decks 5,097, Word 3,539.
+  - **An offline proxy in CI:** the core's compact JSON ÷ 3.5, times the measured ratio **1.48**, at most 6,500 (an offline core of at most 4,391).
   - **A regression guard on every definition, offline:** at most 13,000 for decks and 11,300 for Word, the T5b figures plus about 2%. It is a guard, not a budget: deferred definitions cost nothing until tool search loads them.
   - The earlier budgets (core 4,000 and all 12,000 offline; decks 14,000) are retired. 12,000 real tokens for every definition would be about 8,100 offline, out of reach for either format without dropping groups, and it measured what no request pays.
 
