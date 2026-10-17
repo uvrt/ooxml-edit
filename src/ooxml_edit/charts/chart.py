@@ -1404,9 +1404,28 @@ def _category_format(series: "list[_Series]") -> str | None:
     for ser in series:
         if ser.categories.ref is not None:
             cache = ser.categories.cache
-            node = None if cache is None or not ser.categories.numeric \
-                else cache.find(qn("c:formatCode"))
-            return None if node is None else (node.text or "")
+            return None if cache is None or not ser.categories.numeric \
+                else _cache_format_code(cache)
+    return None
+
+
+def _cache_format_code(cache: Element) -> str | None:
+    """A number cache's format code: its ``c:formatCode``; or, where Office wrote it in an
+    ``mc:AlternateContent`` (measured: a code with a language tag, ``[$-en-BE]``, re-saved
+    as a Choice's ``formatcode2`` and a Fallback ``c:formatCode`` of ``[$]...``), the
+    Choice's code, which says more; else the Fallback's.  ``None`` without one."""
+    node = cache.find(qn("c:formatCode"))
+    if node is not None:
+        return node.text or ""
+    for alternate in cache.findall(qn("mc:AlternateContent")):
+        for choice in alternate.findall(qn("mc:Choice")):
+            for item in choice:
+                if isinstance(item.tag, str) and local_name(item) == "formatcode2":
+                    return item.text or ""
+        fallback = alternate.find(qn("mc:Fallback"))
+        node = None if fallback is None else fallback.find(qn("c:formatCode"))
+        if node is not None:
+            return node.text or ""
     return None
 
 

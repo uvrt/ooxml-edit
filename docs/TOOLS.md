@@ -434,11 +434,15 @@ en-GB alike (`Mar`, `Mon`), nl `mrt`/`ma`, de `Mär`/`Mo`, fr `mars`/`janv.`/`lu
 fr, es and it). **A region shows its language's names** (0.44.0, round 7, L5; measured in
 Excel for Mac, 2026-10-17: en-BE and en-IE named a date as en-US, fr-BE and fr-CH as
 fr-FR, de-BE and de-CH as de-DE): a session whose tag is not listed takes its language's
-names (`dates.LANGUAGES`: en, nl, de, fr, es, it -> en-US, nl-NL, de-DE, fr-FR, es-ES,
-it-IT), any region; the locale's separators and day order stay its own. A session in
+names (`dates.LANGUAGES`: en, nl, de, fr, it -> en-US, nl-NL, de-DE, fr-FR, it-IT; it-CH
+measured too), any region; the locale's separators and day order stay its own. Spanish is
+not one set (measured on Office for Mac's charts, 2026-10-17): es-MX abbreviates days
+`lun. mar. mié.`, `es` months `ene ... set` and days `lun mar mié`, es-ES `lu. ma. mi.`, so
+es-ES, es-MX and es are listed each and another Spanish region is refused. A session in
 another language refuses a name token ("no month or day names are measured for pt-BR
-(they are for the languages en, nl, de, fr, es and it, in any region); write the date with
-numbers"), never guessing; the numeric tokens work in every locale.
+(they are for the languages en, nl, de, fr and it, in any region, and for es-ES, es-MX and
+es); write the date with numbers"), never guessing; the numeric tokens work in every
+locale.
 
 - **Text** (`dates.format_date`): fixed text, its separators exactly the pattern's in every
   locale -- `dd/mm/yyyy` is `02/03/2026` in de-DE too.
@@ -447,11 +451,14 @@ numbers"), never guessing; the numeric tokens work in every locale.
   stores it, the locale's id first and spaces and commas escaped:
   `[$-413]d\ mmmm\ yyyy` (`dates.LCIDS`, each measured accepted and honoured: 409, 809,
   413, 813, 407, 40C, C0A, 410; and what Excel stored for `[$-fr-BE]` 80C, `[$-en-IE]`
-  1809, `[$-fr-CH]` 100C, `[$-en]` 9, `[$-nl]` 13, `[$-de]` 7, `[$-fr]` C). A region with
+  1809, `[$-fr-CH]` 100C, `[$-en]` 9, `[$-nl]` 13, `[$-de]` 7, `[$-fr]` C; on re-saving a
+  chart `[$-es-MX]` 80A, `[$-it-CH]` 810; `[$-A]` and `[$-10]` honoured). A region with
   no measured id takes that of the tag whose names it shows: en-BE `[$-409]`, de-BE and
   de-CH `[$-407]` (Excel itself stores `[$-en-BE]` as `[$]` plus an `x16r2:formatCode16`
-  `[$-en-BE]`, which a chart's cache has no place for; the prefix changes the names only,
-  and those are the same). The workbook's category cells hold the same serials in
+  `[$-en-BE]`, and a chart re-saved by Office as an `mc:AlternateContent` whose `c16r2`
+  Choice's `formatcode2` holds the tag and whose Fallback is `[$]`; an id avoids both, and
+  the prefix changes the names only, which are the same). A chart read back takes such a
+  Choice's code, else the Fallback's. The workbook's category cells hold the same serials in
   that format; the category axis shows them source-linked and stays a text axis (`c:auto`
   0), one band per date. **Measured caveat** (Excel for Mac, 2026-10-16, switching the
   macOS region): Office shows a `/` in a kept code as the viewer's date separator
