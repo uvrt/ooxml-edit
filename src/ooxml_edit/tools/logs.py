@@ -39,6 +39,11 @@ class CallRecord:
     #: The application's context of the call (a view's, a dispatch's ``context``), so a
     #: shared session's log tells its agents apart; ``None`` when there is none.
     context: dict[str, Any] | None = None
+    #: A batch's ops' ``comment`` and ``note`` -- the model's words about each op, which
+    #: run nothing: ``[{"op": 3, "comment": "fix title"}]``; ``None`` when there are none.
+    #: Kept whatever ``log_arguments`` says: the model's notes on its calls, which a
+    #: transcript wants, not their arguments.  The logger's line never has them.
+    comments: list[dict[str, Any]] | None = None
 
     def to_json(self) -> dict[str, Any]:
         data = {"tool": self.tool, "docs": self.docs, "digest": self.digest,
@@ -51,6 +56,8 @@ class CallRecord:
             data["roles"] = self.roles
         if self.context is not None:
             data["context"] = self.context
+        if self.comments is not None:
+            data["comments"] = self.comments
         return data
 
 

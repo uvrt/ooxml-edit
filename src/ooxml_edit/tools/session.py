@@ -174,6 +174,12 @@ class DocumentFormat:
     #: replaces it (the same tool with what the configuration adds: an ``asset`` argument),
     #: which must then serve this format's kind alone.
     tools: tuple[Any, ...] = ()
+    #: Tool names a model writes for one of this format's tools, or an action of one, that
+    #: the toolbox's own reading of names misses (:mod:`.hints`): ``{name: "tool"}`` or
+    #: ``{name: "tool action"}``.  A key also stands for its spellings with another verb,
+    #: a plural or another prefix.  Only wording: the call still fails, its message naming
+    #: the tool to use.  An entry naming a tool or action the toolbox lacks is ignored.
+    tool_hints: dict[str, str] = field(default_factory=dict)
 
 
 class LRU:
