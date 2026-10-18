@@ -2,6 +2,34 @@
 
 Versions are those in `pyproject.toml`; none is published to PyPI yet.
 
+## 0.50.0 -- unreleased
+- Undo by caller (round 9): an `undo` whose call has a context -- through a view
+  (`Session.view(context=...)`) or `dispatch(..., context=...)` -- takes back that
+  caller's own latest change to the document, never another's. When it is the document's
+  latest change, a plain undo, exact; else, in a format with undo scopes (decks), it is
+  taken out from under the later changes as a scoped undo is, when none of them touched a
+  part it touched and it changed no part every page shares; otherwise -- and always in a
+  format without scopes (Word documents: one body every change shares) -- it is refused
+  as `entangled`, nothing changed, the message naming the later change, its version and
+  who made it ("t_add by agent=builder-2"), and saying to change it back with an edit or
+  have that caller undo first; `details.later` lists them (`version`, `tool`,
+  `context`). `scope` narrows it to the caller's changes there; `steps` stop at the first
+  refusal, with a warning. Redo follows the caller too: its own latest undo, refused while
+  another caller's undo is the next to redo. Two callers are the same when their contexts
+  are equal; a call with no context (the session itself, or a view made without one)
+  undoes as before, the latest change whoever made it. The result's `data` has
+  `own: true`, and "nothing of yours to undo" says undo takes back the caller's own
+  changes only. Undo is per document already (`doc` is required), so naming a document
+  needs nothing new. Definitions are unchanged (no token cost).
+- `DocumentEntry.owners` keeps who made each step (`StepOwner`: the call's context and
+  tool, by the version it made; a batch is `batch`; a change made through the library's
+  API directly has none), renumbered with a scoped undo; `DocumentEntry.batch(owner)`
+  records it. `Session.undo` and `redo` take `caller=`; `SessionView.undo` and `redo` pass
+  the view's context.
+- `History.steps()` (each step's versions and parts), `History.undo_step(after)` and
+  `redo_step(after)` (one step by the version it made, under `undo_in`'s rule), and
+  `History.next_redo`; `Entangled.later` names the versions of the later steps in the way.
+
 ## 0.49.0 -- unreleased
 - A contact sheet (round 9, N1): `render` takes `sheet` (`{"columns", "width"}`, `{}` for
   the defaults): up to 30 slides or pages as one image, tiled in order, each labelled.
