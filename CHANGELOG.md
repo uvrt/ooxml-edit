@@ -2,6 +2,18 @@
 
 Versions are those in `pyproject.toml`; none is published to PyPI yet.
 
+## 0.49.0 -- unreleased
+- A contact sheet (round 9, N1): `render` takes `sheet` (`{"columns", "width"}`, `{}` for
+  the defaults): up to 30 slides or pages as one image, tiled in order, each labelled.
+  `sheet.width` is each tile's (160-1280 px, default 360; the call's `width` stands in when
+  it is left out), `columns` 1-8, default 4 -- 1,480 px wide, under the standard tier's
+  1,568. `tools.tiles` is the format-neutral half: `tiling_of` checks the options and
+  refuses, naming the bound and what to do, more than `MAX_TILES` or an image over
+  `Limits.max_image_edge` wide; `check_size` refuses one too tall, naming how many fit;
+  `tiled_svg` places each tile's PNG at its own size with its label, for the format to
+  rasterise once. +64 estimated tokens to every format's core (`render` is core); render is
+  sent strict to OpenAI only, as before, `sheet` one more object there.
+
 ## 0.48.0 -- unreleased
 - `edit_chart`'s scale without an axis (round 9, N2): `set_axis_scale` (and a format's
   `add` with `scale`) takes the value axis when it is the one axis of the chart that takes
