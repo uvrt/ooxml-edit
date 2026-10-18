@@ -2,6 +2,26 @@
 
 Versions are those in `pyproject.toml`; none is published to PyPI yet.
 
+## 0.47.0 -- unreleased
+- A batch op's `comment` and `note` (round 9, N4): the model's words about an op, accepted
+  beside `tool` and `arguments` and never run (a non-string as its JSON). Not in the
+  definition -- the dispatcher takes them out before the schema check -- so no token cost;
+  not echoed in the op's result. Kept in the call log: `CallRecord.comments`
+  (`[{"op": 3, "comment": "..."}]`, 500 characters each at most; in `to_json` when there
+  are any), whatever `log_arguments` says; never in the logger's line.
+- What a name that is no tool means (round 9, N5): the error names the tool and action that
+  do what the name says -- "no tool 'x_add_chart': use edit_chart with action add" -- with
+  the best few in `valid_options` instead of every tool, at the top level and in a batch's
+  op. `hints.tool_hints` reads the name's words against the tools' names and `action`
+  enums (verbs read as the tool's, plurals, a format's prefix); a format adds the cases it
+  misses as data, `DocumentFormat.tool_hints` (`{name: "tool"}` or `{name: "tool
+  action"}`; `Toolbox.tool_hints` merges them). A hint outside the session's roles is named
+  with the role it needs and kept out of `valid_options`; a tool batch cannot run is to be
+  called on its own. An `action` a tool lacks: the tool's own action with the verb read
+  ("did you mean 'insert_row'?"), else the other tool that has it
+  (`hints.action_hints`). Definitions, the strict set and results of correct calls are
+  unchanged.
+
 ## 0.46.0 -- unreleased
 - Several agents on one shared session (round 8, M1). `Session.view(roles=...,
   context=...)` gives an agent a `SessionView`: the same session -- documents, undo

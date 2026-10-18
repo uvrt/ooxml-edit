@@ -44,6 +44,7 @@ What is here:
 * :mod:`.worker` -- worker processes whose deadlines are kept by killing the worker
   (subprocess workers in a process that may not start multiprocessing children);
 * :mod:`.logs` -- call records with argument digests, not content;
+* :mod:`.hints` -- what a name that is no tool means: a tool, and an action of it;
 * :mod:`.prompts` -- the shared system-prompt fragment: mechanics, no house style;
 * :mod:`.assets` -- an application's asset catalogue (brand icons...) that a format's
   configured tools search and place by id: the :class:`AssetCatalogue` protocol and
@@ -58,7 +59,7 @@ out as bytes to the application, and no tool may take a path.  Like :mod:`ooxml_
 this subpackage is optional, and the core never imports it.
 """
 
-from . import assets, shared, textfacts
+from . import assets, hints, shared, textfacts
 from .assets import Asset, AssetCatalogue, FolderCatalogue
 from .adapters import StrictProblem, strict_problems
 from .datasets import (DATASET_ID, DATASET_PREFIX, TYPE_LABELS, Dataset, DatasetEntry,
@@ -90,6 +91,6 @@ __all__ = [
     "collect_warnings", "dataset_id", "doc_order", "free_object", "integer", "locale_of",
     "row_range",
     "names_as", "number", "obj", "openai_image_tokens",
-    "page_list", "page_text", "shared", "textfacts", "strict_problems", "string", "system_prompt", "tool", "truncate", "validate_call",
+    "page_list", "page_text", "hints", "shared", "textfacts", "strict_problems", "string", "system_prompt", "tool", "truncate", "validate_call",
     "worker_task",
 ]

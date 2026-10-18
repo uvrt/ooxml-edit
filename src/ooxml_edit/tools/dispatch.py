@@ -75,6 +75,7 @@ from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 
 from .. import provenance
 from . import adapters, prompts, textfacts
+from .hints import action_hints, tool_hints
 from .datasets import (DATASET_PREFIX, Dataset, DatasetEntry, check_dataset_id,
                        dataset_id, row_range, rows_text)
 from .limits import LimitError, Limits
@@ -675,6 +676,10 @@ class Toolbox:
             strict_first if strict_first is not None
             else [name for fmt in self.formats.values() for name in fmt.strict_first]))
         self.groups: dict[str, ToolGroup] = {group.name: group for group in groups}
+        #: The formats' :attr:`~.session.DocumentFormat.tool_hints`, for a name that is
+        #: no tool.
+        self.tool_hints: dict[str, str] = {name: target for fmt in self.formats.values()
+                                           for name, target in fmt.tool_hints.items()}
         self.limits = limits or Limits()
         #: The validate gate's override: the application's to set, never the model's.
         self.allow_new_problems = allow_new_problems
@@ -731,14 +736,60 @@ class Toolbox:
             notes.append(f"tool {name!r} read as {bare!r}")
         return bare
 
-    def tool(self, name: str, notes: list[str] | None = None) -> Tool:
-        """The tool ``name`` names (:meth:`tool_named`); ``invalid_arguments`` otherwise."""
+    def tool(self, name: str, notes: list[str] | None = None,
+             roles: Sequence[str] | None = None) -> Tool:
+        """The tool ``name`` names (:meth:`tool_named`); ``invalid_arguments`` otherwise,
+        naming the tool (and action) it most likely means (:meth:`_no_tool`)."""
         name = self.tool_named(name, notes)
         if name not in self.tools:
-            raise ToolError("invalid_arguments", f"no tool {name!r}",
-                            valid_options=difflib.get_close_matches(name, self.tools, 5, 0.5)
-                            or sorted(self.tools))
+            raise self._no_tool(name, roles)
         return self.tools[name]
+
+    def _no_tool(self, name: Any, roles: Sequence[str] | None, *,
+                 batch: bool = False) -> ToolError:
+        """``invalid_arguments`` for a name that is no tool: the tools, and their actions,
+        it most likely means (:func:`.hints.tool_hints`: ``x_add_chart``, ``edit_chart``
+        with action ``add``), else the names close to it -- of ``roles``' tools (all
+        without).  A hint outside the roles is named with the role it needs, never in
+        ``valid_options``; inside ``batch``, one batch cannot run is to be called alone."""
+        roles = tuple(ROLES if roles is None else roles)
+        within = [tool for tool in self.tools.values() if tool.roles & set(roles)]
+        found = tool_hints(name, self.tools, self.tool_hints)
+        usable = [hint for hint in found if self._hint_role(hint, roles) is None]
+        near = difflib.get_close_matches(str(name), [tool.name for tool in within], 5, 0.5)
+        message = f"no tool {name!r}"
+        if usable:
+            message += ": use " + ", or ".join(
+                f"{hint} on its own (batch cannot run it)"
+                if batch and (not self.tools[hint.tool].batchable
+                              or self.tools[hint.tool].composite) else str(hint)
+                for hint in usable)
+        elif found:
+            message += (f": {found[0]} does that, and needs the "
+                        f"{self._hint_role(found[0], roles)} role; this session has "
+                        f"{', '.join(roles)}")
+        elif batch and not difflib.get_close_matches(str(name), self.tools, 1, 0.8):
+            # No name this close is a slip: likely a tool the application runs itself,
+            # outside the toolbox, which a batch cannot reach.
+            message += (" that batch can run: it runs only the tools in valid_options; "
+                        f"call {name} on its own")
+        barred = {hint.tool for hint in found} - {hint.tool for hint in usable}
+        options = list(dict.fromkeys([hint.tool for hint in usable]
+                                     + [name for name in near if name not in barred]))[:5]
+        if not options and not found:
+            options = sorted(tool.name for tool in within if tool.batchable or not batch)
+        return ToolError("invalid_arguments", message, field="tool" if batch else None,
+                         valid_options=options)
+
+    def _hint_role(self, hint: Any, roles: Sequence[str]) -> str | None:
+        """The role a hint's call needs that ``roles`` lack; ``None`` when they have it."""
+        tool = self.tools[hint.tool]
+        if hint.action is None:
+            if tool.roles & set(roles):
+                return None
+            return sorted(tool.roles, key=lambda role: (role != EDIT, role))[0]
+        needed = tool._action_role(hint.action)
+        return None if needed == ANY_ROLE or needed in roles else needed
 
     def select(self, groups: str | Iterable[str] | None = None, *,
                roles: str | Iterable[str] | None = _TOOLBOX_DEFAULT) -> list[Tool]:
@@ -929,11 +980,12 @@ class Toolbox:
         entries: dict[str, DocumentEntry] = {}
         clean: Any = arguments
         notes: list[str] = []       # aliases read: warnings first
+        comments: list[dict[str, Any]] = []   # a batch's ops' comments, for the log
         try:
-            tool = self.tool(name, notes)
+            tool = self.tool(name, notes, roles)
             name = tool.name
             _check_role(tool, None, roles)
-            clean = self._arguments(tool, arguments, notes)
+            clean = self._arguments(tool, arguments, notes, comments, roles)
             _check_role(tool, clean, roles)
             if tool.composite:
                 doc_ids = self._batch_documents(clean)
@@ -963,7 +1015,7 @@ class Toolbox:
                 result.version = primary.version
         result.tool = name
         result.duration = time.perf_counter() - started
-        self._record(session, name, doc_ids, clean, result, entries, roles, caller)
+        self._record(session, name, doc_ids, clean, result, entries, roles, caller, comments)
         return result
 
     def dispatch_many(self, session: Session | SessionView, calls: Sequence[tuple[str, Any]],
@@ -1010,10 +1062,12 @@ class Toolbox:
         except Exception:  # noqa: BLE001 -- the call will fail on its own, in order
             return frozenset()
 
-    def _arguments(self, tool: Tool, arguments: Any,
-                   notes: list[str] | None = None) -> dict[str, Any]:
+    def _arguments(self, tool: Tool, arguments: Any, notes: list[str] | None = None,
+                   comments: list[dict[str, Any]] | None = None,
+                   roles: Sequence[str] | None = None) -> dict[str, Any]:
         """The call's arguments, parsed, aliases read (``notes`` gets a line for each) and
-        validated: ``invalid_arguments`` otherwise."""
+        validated: ``invalid_arguments`` otherwise.  A batch's ops' ``comment`` and
+        ``note`` are taken out first, to ``comments`` (:func:`_op_comments`)."""
         notes = notes if notes is not None else []
         if isinstance(arguments, (str, bytes)):
             try:
@@ -1022,12 +1076,16 @@ class Toolbox:
                 raise ToolError("invalid_arguments", f"the arguments are not JSON: {exc}") from None
         if arguments is None:
             arguments = {}
+        if tool.composite:
+            arguments = _op_comments(arguments, comments if comments is not None else [])
         arguments = _aliased(tool, arguments, notes)
         arguments = _json_strings(tool.schema, arguments)
         try:
             clean = validate_call(tool.schema, arguments, notes)
         except CallError as exc:
             message = exc.message
+            if exc.field == "action" and isinstance(arguments, Mapping):
+                message = self._action_message(tool, arguments.get("action"), message, roles)
             if exc.field == "key" and tool.mutates:
                 message = (f"{tool.name} takes no key: a retry key is for the tools that "
                            "create something, so a repeat makes nothing twice; this one is "
@@ -1043,6 +1101,21 @@ class Toolbox:
                                 field=given[1] if len(given) > 1 else group[0],
                                 valid_options=list(group))
         return clean
+
+    def _action_message(self, tool: Tool, value: Any, message: str,
+                        roles: Sequence[str] | None) -> str:
+        """The message for an ``action`` ``tool`` lacks: the action of its own it means with
+        a verb read (``add_row``: ``insert_row``), else the other tools that have it, of
+        ``roles`` (:func:`.hints.action_hints`); the validator's message otherwise."""
+        own, found = action_hints(tool, value, self.tools, self.tool_hints)
+        base = message.split("; did you mean", 1)[0]
+        if own is not None:
+            return f"{base}; did you mean {own!r}?"
+        usable = [hint for hint in found
+                  if self._hint_role(hint, tuple(ROLES if roles is None else roles)) is None]
+        if not usable:
+            return message
+        return f"{base}; use " + ", or ".join(map(str, usable))
 
     def _run(self, session: Session, tool: Tool, arguments: dict[str, Any],
              entries: dict[str, DocumentEntry], primary: DocumentEntry | None,
@@ -1318,16 +1391,7 @@ class Toolbox:
         op's own: ``tool``, or ``arguments`` and the path in them."""
         name = self.tool_named(op.get("tool", "") if isinstance(op, Mapping) else "", notes)
         if name not in self.tools:
-            near = difflib.get_close_matches(str(name), self.tools, 5, 0.5)
-            # No name this close is a slip: likely a tool the application runs itself,
-            # outside the toolbox, which a batch cannot reach.
-            slip = difflib.get_close_matches(str(name), self.tools, 1, 0.8)
-            raise ToolError("invalid_arguments", f"no tool {name!r}" + ("" if slip else (
-                            f" that batch can run: it runs only the tools in valid_options; "
-                            f"call {name} on its own")),
-                            field="tool",
-                            valid_options=near
-                            or sorted(t.name for t in self.tools.values() if t.batchable))
+            raise self._no_tool(name, roles, batch=True)
         tool = self.tools[name]
         if not tool.batchable or tool.composite:
             raise ToolError("invalid_arguments", f"{name} cannot run inside a batch; call it "
@@ -1335,7 +1399,7 @@ class Toolbox:
         if roles is not None:
             _check_role(tool, None, roles, field="tool")
         try:
-            clean = self._arguments(tool, op.get("arguments") or {}, notes)
+            clean = self._arguments(tool, op.get("arguments") or {}, notes, roles=roles)
             if roles is not None:
                 _check_role(tool, clean, roles)
         except ToolError as error:
@@ -1599,7 +1663,8 @@ class Toolbox:
 
     def _record(self, session: Session, name: str, doc_ids: list[str], arguments: Any,
                 result: Result, entries: dict[str, DocumentEntry],
-                roles: Sequence[str] = ROLES, caller: Mapping[str, Any] = NO_CONTEXT) -> None:
+                roles: Sequence[str] = ROLES, caller: Mapping[str, Any] = NO_CONTEXT,
+                comments: Sequence[Mapping[str, Any]] = ()) -> None:
         loggable = arguments if isinstance(arguments, Mapping) else {"raw": str(arguments)}
         record = CallRecord(
             tool=name, docs=list(doc_ids), digest=digest(loggable), shape=shape(loggable),
@@ -1607,12 +1672,46 @@ class Toolbox:
             summary=result.summary, duration=result.duration, version=result.version,
             arguments=dict(loggable) if self.log_arguments else None,
             roles=list(roles) if tuple(roles) != tuple(session.roles) else None,
-            context=dict(caller) if caller else None)
+            context=dict(caller) if caller else None,
+            comments=[dict(comment) for comment in comments] or None)
         session.log.append(record)
         for entry in entries.values():
             entry.log.append(record)
         if logger.isEnabledFor(logging.INFO):
             log_call(record)
+
+
+#: The keys of a batch op a model writes about the op, never run (round 9, N4).
+OP_COMMENTS = ("comment", "note")
+
+#: The longest comment the call log keeps, in characters.
+MAX_COMMENT = 500
+
+
+def _op_comments(arguments: Any, comments: list[dict[str, Any]]) -> Any:
+    """A batch's arguments with each op's ``comment`` and ``note`` taken out, unsent: a
+    model's words about its op (``"fix title"``), which change nothing.  Each op's go to
+    ``comments`` (``{"op": 3, "comment": "fix title"}``), for the call log -- a value that
+    is not a string as its JSON, at most :data:`MAX_COMMENT` characters each."""
+    ops = arguments.get("ops") if isinstance(arguments, Mapping) else None
+    if not isinstance(ops, list):
+        return arguments
+    kept = []
+    for index, op in enumerate(ops):
+        if isinstance(op, Mapping) and any(key in op for key in OP_COMMENTS):
+            said = {key: _comment_text(op[key]) for key in OP_COMMENTS
+                    if op.get(key) is not None}
+            if said:
+                comments.append({"op": index, **said})
+            op = {key: value for key, value in op.items() if key not in OP_COMMENTS}
+        kept.append(op)
+    return {**arguments, "ops": kept}
+
+
+def _comment_text(value: Any) -> str:
+    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False,
+                                                           default=str)
+    return text if len(text) <= MAX_COMMENT else text[:MAX_COMMENT - 1] + "\u2026"
 
 
 def _aliased(tool: Tool, arguments: Any, notes: list[str]) -> Any:

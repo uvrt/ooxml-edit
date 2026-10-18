@@ -96,6 +96,36 @@ refused rather than moved. A tool name with a namespace before it
 (`functions.ppt_set_text`, `charts.edit_chart`: no tool name has a dot) is read as the
 tool's, in a call and in a batch's `ops[i].tool` alike (`Toolbox.tool_named`).
 
+Round 9 (0.47.0). *A batch op's comment* (N4): an op may carry `comment` or `note` beside
+`tool` and `arguments` (`{"tool": "...", "arguments": {...}, "comment": "fix title"}`) --
+the model's words about the op. Neither runs nor reaches the tool; a value that is not a
+string is kept as its JSON. They are not in the definition (the dispatcher takes them out
+before the batch's schema is checked), so they cost no tokens, and the op's result does not
+echo them. The call's `CallRecord.comments` keeps them, `[{"op": 3, "comment": "fix
+title"}]` (at most 500 characters each), whatever `log_arguments` says; the logger's line
+never has them. Outside an op, `comment` is still an unknown argument.
+
+*What a name that is no tool means* (N5): instead of every tool's name, the error names the
+tool, and the action of it, that does what the name says -- "no tool 'x_add_chart': use
+edit_chart with action add" -- with those tools first in `valid_options` (at most five:
+then the names close to it), in a call and in a batch's op alike (`hints.tool_hints`). The
+name's words are read against each tool's name and the values of its `action` enum: a verb
+for another (`insert`, `create`, `remove`, `update`, `get`, `copy`...) as the one the tool
+uses, a plural as its singular, a format's prefix (the first word of three tools or more,
+or another before the rest) as no word of the thing. The best of: the formats' own table, a
+tool whose name says the same (`x_insert_picture`: `x_add_picture`), an action whose words
+are in the name with a word of the tool's left over (`x_remove_pages`: `x_pages` `delete`),
+an action of two words that is the whole name (`x_add_row`: `insert_row`), a tool whose name
+starts the name (`x_read_cells`: `x_read`), an action only one tool has. A format adds what
+that rule misses as data, `DocumentFormat.tool_hints` (`{"x_delete_box": "x_arrange
+delete"}`), a key standing for its other spellings too. A hint outside the session's roles
+is named with the role it needs ("... does that, and needs the accept role; this session has
+review") and is not in `valid_options`; inside a batch, a tool batch cannot run is to be
+called on its own. An `action` a tool lacks gets the same reading: the tool's own action
+with the verb read (`add_row`: "did you mean 'insert_row'?"), else the other tool whose
+action it is ("use x_changes with action accept"). Wording only: the call still fails, and
+no definition changes.
+
 **Datasets.** A call that derives figures from a document -- counts, sums, groups -- may
 keep them for the session as a `Dataset`: columns, rows, and beside every value its
 sources, opaque strings (cell addresses, say) that the tool layer stores and hands on but
