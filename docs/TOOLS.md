@@ -559,6 +559,62 @@ delete them.` with `resolve`, `You may also accept and reject tracked changes.` 
 `accept` where a tool settles them; a set without `review` is told only what it may do),
 one with `edit` none. The libraries list each format's role sets' token counts.
 
+*The prompt follows the tools sent* (0.46.0, round 8, M2). Whether the role line says a
+reviewer may comment, and may accept and reject tracked changes, is decided over the
+tools the application sends: `system_prompt(roles=..., tools=[...])` takes them as names,
+`Tool` objects or the definitions themselves (any provider's, tool search and namespaces
+included; a name the toolbox does not have says nothing), or `groups=` -- the same as the
+`definitions(groups=...)` call's, with the same `roles` (one or the other). Without either
+it is decided over the whole toolbox, as before.
+
+```python
+sent = toolbox.definitions("anthropic", groups="core", roles=["review"])
+system = toolbox.system_prompt(roles=["review"], tools=sent)    # or groups="core"
+```
+
+*Several agents on one session* (0.46.0, round 8, M1). Agents working on the same
+documents at once share one `Session` -- documents, undo history, refs, datasets,
+outputs -- and each gets a *view* of it with roles of its own:
+
+```python
+session = toolbox.session()                          # every role: the most any agent gets
+reviewer = session.view(roles=["review"], context={"agent": "reviewer-1"})
+builder = session.view(roles=["review", "edit"], context={"agent": "builder-1"})
+
+toolbox.dispatch(reviewer, "ppt_set_text", args)     # refused: needs the edit role
+toolbox.dispatch(builder, "ppt_set_text", args)      # runs, on the same deck
+toolbox.dispatch(session, "ppt_set_text", args, roles=["review"],
+                 context={"agent": "reviewer-1"})    # the same, per call
+```
+
+- A `SessionView` is the session: every attribute and method but `roles` and `context` is
+  the session's own, read through, so it goes wherever a session goes (`dispatch`,
+  `dispatch_many`, `session.open`, `take_outputs`); nothing is set on it. Views of views
+  narrow further.
+- *A view narrows, never widens*: its roles are some of its session's, else `ValueError`
+  -- as are `dispatch(..., roles=...)` outside the view's or session's roles. The session's
+  roles are the most the application allows in the conversation; whoever holds a view (an
+  agent's loop, a component it is handed to) can only take roles away, never give itself
+  one. Make the session with every role its agents need (all four, the default) and narrow
+  per agent. A view's roles are fixed when it is made; a session narrowed later refuses
+  the view's call (`ValueError`).
+- *Context* is the application's, never the model's: a read-only mapping, empty by
+  default, that a view carries and `dispatch(..., context=...)` adds to (its keys win).
+  Every handler of the call sees it as `call.caller` -- an application's own tool in the
+  toolbox (one that keeps a note needs to know which agent called), every op of a `batch`
+  alike -- and `call.roles` is what the call was checked against. The library's own tools
+  read neither; results, warnings and the definitions are as without views. The call
+  log names the agent: a `CallRecord` has `roles` (when narrower than the session's) and
+  `context` (when there is one), in `to_json()` only then.
+- *Concurrency*: a view holds no lock and no state of its own, so threads (or an async
+  application's executor) may use views of one session at once exactly as they use the
+  session: a call locks its documents, in a fixed order, whichever view it came through;
+  calls on one document wait for each other, calls on different ones do not.
+- *Batch*: each op is held to the view's roles, as to a session's.
+- *Undo* is `edit`'s and takes back the latest change to the document, whoever made it --
+  in a shared session another agent's too (unchanged). Two builders on one document
+  should undo by `scope` (a page each), or not at all; a reviewer has no undo.
+
 A tool's role by default: `edit` if it changes the document (`mutates`), `review` if not --
 an application's own tools included; `role=` overrides it (`ANY_ROLE` for every role set,
 in `action_roles` too: a comment's text edit).
