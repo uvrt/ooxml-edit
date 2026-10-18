@@ -211,12 +211,12 @@ def action_hints(tool: Any, value: Any, tools: Mapping[str, Any],
     given = tuple(verb(word) for word in words(value))
     own = next((action for action in tool.actions
                 if tuple(verb(word) for word in words(action)) == given), None)
-    prefix = prefixes(tools)
-    found: list[Hint] = []
     if own is not None:
         return own, []
+    prefix = prefixes(tools)
+    found: list[Hint] = []
     for name in [value] + [f"{value}_{noun}" for noun in _nouns(_core(tool.name, prefix))]:
         for hint in tool_hints(name, tools, table, exclude=(tool.name,)):
             if hint not in found:
                 found.append(hint)
-    return own, found[:MAX_HINTS]
+    return None, found[:MAX_HINTS]
