@@ -551,7 +551,10 @@ def _from_rows(handler: Callable[..., Any], call: Any, source: str, columns: Any
     if action == "add":
         if len(at) < 2:
             raise ToolError("invalid_arguments", "add from rows needs the category column "
-                            "and at least one series column", field="columns")
+                            "and at least one series column, in columns; "
+                            f"{rows.address} has " + ", ".join(map(str, names[:12]))
+                            + (f" and {len(names) - 12} more" if len(names) > 12 else ""),
+                            field="columns", valid_options=[str(n) for n in names[:50]])
         if chart_type == "bubble":
             raise ToolError("invalid_arguments", "a bubble chart's sizes are not taken from "
                             "a source: give categories and data", field="from")
