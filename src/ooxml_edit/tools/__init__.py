@@ -45,6 +45,8 @@ What is here:
   (subprocess workers in a process that may not start multiprocessing children);
 * :mod:`.logs` -- call records with argument digests, not content;
 * :mod:`.hints` -- what a name that is no tool means: a tool, and an action of it;
+* :mod:`.tiles` -- contact images: many rendered views tiled into one labelled image
+  (``render``'s option), the options, layout and SVG; a format rasterises it;
 * :mod:`.prompts` -- the shared system-prompt fragment: mechanics, no house style;
 * :mod:`.assets` -- an application's asset catalogue (brand icons...) that a format's
   configured tools search and place by id: the :class:`AssetCatalogue` protocol and
@@ -59,7 +61,7 @@ out as bytes to the application, and no tool may take a path.  Like :mod:`ooxml_
 this subpackage is optional, and the core never imports it.
 """
 
-from . import assets, hints, shared, textfacts
+from . import assets, hints, shared, textfacts, tiles
 from .assets import Asset, AssetCatalogue, FolderCatalogue
 from .adapters import StrictProblem, strict_problems
 from .datasets import (DATASET_ID, DATASET_PREFIX, TYPE_LABELS, Dataset, DatasetEntry,

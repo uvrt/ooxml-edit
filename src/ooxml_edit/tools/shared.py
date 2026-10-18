@@ -273,7 +273,13 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
           "slides": _slide_addresses("; layouts L2, masters M0"),
           "pages": _pages(""),
           "width": integer("Pixels, 200-2576. Default 1280 (slides), 1000 (pages).",
-                           minimum=200, maximum=2576, optional=True)},
+                           minimum=200, maximum=2576, optional=True),
+          # N1: a contact sheet (tiles.tiling_of): columns 1-8, default 4; each tile's
+          # width 160-1280 px, default 360; at most tiles.MAX_TILES.
+          "sheet": obj({"columns": integer(minimum=1, maximum=8, optional=True),
+                        "width": integer("Each tile's px.", minimum=160, maximum=1280,
+                                         optional=True)},
+                       "Up to 30 in one labelled image; {} for defaults.", optional=True)},
          batchable=False, refs=("slides[]",)),
     # S9
     Spec("check",
