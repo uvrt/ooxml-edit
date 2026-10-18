@@ -31,7 +31,8 @@ What is here:
 * :mod:`.results` -- the result envelope, error codes with ``valid_options``, image token
   estimates, truncation and paging;
 * :mod:`.session` -- documents, blobs and outputs, all in memory and under handles; locks,
-  versions and caches;
+  versions and caches; :class:`SessionView`, one agent's roles and context on a shared
+  session;
 * :mod:`.datasets` -- :class:`Dataset`, a table of values with the sources of each, kept in
   the session under ``d:<id>`` and named by later calls on any document;
 * :mod:`.sources` -- :class:`Rows`: what a tool takes rows from, a dataset or another open
@@ -74,7 +75,7 @@ from .results import (ERROR_CODES, Image, Result, ToolError, anthropic_image_tok
 from .schema import CallError, SubsetError, canonical, check_subset, validate_call
 from .sources import Rows
 from .session import (DEFAULT_LOCALE, LOCALE_FIELDS, Blob, DefaultLocale, DocumentEntry,
-                      DocumentFormat, Output, Session, doc_order, locale_of)
+                      DocumentFormat, Output, Session, SessionView, doc_order, locale_of)
 from .worker import InProcess, SubprocessPool, WorkerPool, worker_task
 
 __all__ = [
@@ -83,7 +84,7 @@ __all__ = [
     "DATASET_PREFIX", "DEFAULT_LOCALE", "Dataset", "DatasetEntry", "DefaultLocale", "DocumentEntry", "DocumentFormat",
     "ERROR_CODES", "LOCALE_FIELDS", "REF", "Image", "LimitError", "Limits", "Output", "Param",
     "Result", "Rows", "SYSTEM", "TYPE_LABELS",
-    "InProcess", "Session", "StrictProblem", "SubprocessPool", "SubsetError", "Tool", "ToolError", "ToolGroup", "Toolbox",
+    "InProcess", "Session", "SessionView", "StrictProblem", "SubprocessPool", "SubsetError", "Tool", "ToolError", "ToolGroup", "Toolbox",
     "WorkerPool",
     "anthropic_image_tokens", "array", "boolean", "build_schema", "canonical", "check_subset",
     "collect_warnings", "dataset_id", "doc_order", "free_object", "integer", "locale_of",

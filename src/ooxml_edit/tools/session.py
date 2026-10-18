@@ -31,6 +31,15 @@ operating system.  The session keeps the object it was given -- an
 it has a locale's attributes (:func:`locale_of`): this package imports nothing of
 ooxml-common, so it stays lxml-only.  Not given, it is :data:`DEFAULT_LOCALE`, en-US with
 :data:`ooxml_common.locales.EN_US`'s values.
+
+Views.  Several agents may work in one session at once -- the same documents, undo
+history, refs, datasets and outputs -- each with roles of its own: :meth:`Session.view`
+gives one a :class:`SessionView`, the session with narrower roles and the application's
+``context`` for its calls (``{"agent": "reviewer-1"}``), which a handler reads as
+:attr:`~.dispatch.Call.caller`.  A view holds no state of its own beyond those two: every
+other attribute and method is the session's, so its locks and maps are shared, and a view
+goes wherever a session goes (``Toolbox.dispatch``, ``dispatch_many``).  A view narrows,
+never widens: its roles are some of its session's.
 """
 
 from __future__ import annotations
@@ -45,6 +54,7 @@ from collections import OrderedDict
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
 from os import PathLike, fspath
+from types import MappingProxyType
 from typing import Any, Callable, Hashable, Iterable, Iterator, Mapping, Sequence
 
 from .datasets import DATASET_PREFIX, DatasetEntry, dataset_id
@@ -429,7 +439,12 @@ class Session:
     :class:`ooxml_common.locales.Locale`); ``None``, the default, is en-US.  ``roles`` is
     what the session's calls may do (:data:`~.registry.ROLES`, any of ``review``,
     ``resolve``, ``accept`` and ``edit``); ``None``, the default, is all four: every tool.
+    :meth:`view` gives an agent the same session with fewer roles.
     """
+
+    #: The application's context of the calls made here: none (a :class:`SessionView`
+    #: carries one).
+    context: Mapping[str, Any] = MappingProxyType({})
 
     def __init__(self, formats: Iterable[DocumentFormat] = (), *, clock: Clock | None = None,
                  limits: Limits | None = None, on_output: Callable[[Output], None] | None = None,
@@ -460,6 +475,17 @@ class Session:
         self._lock = threading.RLock()
         self._doc_numbers = itertools.count(1)
         self._blob_numbers = itertools.count(1)
+
+    def view(self, *, roles: Any = None, context: Mapping[str, Any] | None = None,
+             ) -> "SessionView":
+        """This session for one agent: the same documents, history, refs, datasets, outputs
+        and locks, with ``roles`` -- some of :attr:`roles` (``None``: all of them) -- and
+        ``context``, the application's own words about the caller (``{"agent":
+        "reviewer-1"}``), which reach every handler of its calls as
+        :attr:`~.dispatch.Call.caller`.  Pass the view to :meth:`.Toolbox.dispatch` as the
+        session.  Roles outside the session's are a ``ValueError``: a view narrows, never
+        widens (see :class:`SessionView`)."""
+        return SessionView(self, roles=roles, context=context)
 
     # -- documents ---------------------------------------------------------------------------
 
@@ -810,6 +836,83 @@ class Session:
             if used + size > self.limits.max_total_document_bytes:
                 raise LimitError(f"open documents would total {used + size} bytes; at most "
                                  f"{self.limits.max_total_document_bytes}")
+
+
+class SessionView:
+    """A session as one agent uses it: :meth:`Session.view`.
+
+    It is the session -- every attribute and method but :attr:`roles` and :attr:`context`
+    is the session's own, read through, so documents, undo history, refs, datasets,
+    outputs, the call log and every lock are shared with the session and its other views
+    -- with roles and a context of its own, both fixed when it is made.  So threads may use
+    views of one session at once exactly as they may use the session: a call locks its
+    documents, whichever view it came through.  Nothing is set on a view (set it on
+    :attr:`session`).
+
+    Its roles are some of its session's: a view narrows, never widens.  The session's
+    roles are the most the application allows anything in the conversation; a view handed
+    to an agent -- and any view made of that view -- can only take away from them, so no
+    holder of a view can give itself a role it was not given.  ``context`` adds to the
+    context of the view it is made from (its keys win).  The view's roles are taken when it
+    is made: a session whose :attr:`Session.roles` is narrowed later refuses, at its next
+    call, a view's role it no longer has (``ValueError``).
+    """
+
+    __slots__ = ("session", "roles", "context")
+
+    def __init__(self, session: "Session | SessionView", *, roles: Any = None,
+                 context: Mapping[str, Any] | None = None) -> None:
+        base = session.session if isinstance(session, SessionView) else session
+        if not isinstance(base, Session):
+            raise TypeError(f"a view is of a Session, not {type(session).__name__}")
+        given_roles, given_context = narrowed(session.roles, session.context, roles, context)
+        object.__setattr__(self, "session", base)
+        object.__setattr__(self, "roles", given_roles)
+        object.__setattr__(self, "context", given_context)
+
+    def view(self, *, roles: Any = None, context: Mapping[str, Any] | None = None,
+             ) -> "SessionView":
+        """A narrower view: ``roles`` some of this view's, ``context`` added to its."""
+        return SessionView(self, roles=roles, context=context)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(object.__getattribute__(self, "session"), name)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        raise AttributeError(f"a session view sets nothing: set {name} on its session "
+                             "(view.session), or make another view")
+
+    def __repr__(self) -> str:
+        return (f"<SessionView of {self.session.id} roles={list(self.roles)} "
+                f"context={dict(self.context)}>")
+
+
+def narrowed(roles: Sequence[str], context: Mapping[str, Any], wanted: Any = None,
+             more: Mapping[str, Any] | None = None) -> tuple[tuple[str, ...],
+                                                              Mapping[str, Any]]:
+    """``roles`` and ``context`` narrowed by ``wanted`` -- a role set (``None``: as they
+    are), which must be some of ``roles`` -- and added to by ``more``: a ``ValueError``
+    for a role ``roles`` does not have, a ``TypeError`` for a context that is no mapping."""
+    if wanted is None:
+        found = tuple(roles)
+    else:
+        found = role_set(wanted)
+        extra = [role for role in found if role not in roles]
+        if extra:
+            raise ValueError(f"{', '.join(extra)} is not among this session's roles "
+                             f"({', '.join(roles)}): a view or a call narrows the session's "
+                             "roles, never widens them -- make the session with every role "
+                             "its agents need (toolbox.session(roles=...)) and give each "
+                             "agent a view of some of them")
+    if more is None:
+        return found, context
+    if not isinstance(more, Mapping):
+        raise TypeError(f"context takes a mapping (a dict), not {type(more).__name__}")
+    return found, MappingProxyType({**context, **more})
+
+
+#: No context: what a call made on a session itself sees.
+NO_CONTEXT: Mapping[str, Any] = Session.context
 
 
 def _is_text(blob: Blob) -> bool:

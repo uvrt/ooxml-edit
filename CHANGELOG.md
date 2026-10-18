@@ -2,6 +2,27 @@
 
 Versions are those in `pyproject.toml`; none is published to PyPI yet.
 
+## 0.46.0 -- unreleased
+- Several agents on one shared session (round 8, M1). `Session.view(roles=...,
+  context=...)` gives an agent a `SessionView`: the same session -- documents, undo
+  history, refs, datasets, outputs, log and locks, read through -- with roles of its own
+  and the application's context for its calls (`{"agent": "reviewer-1"}`).
+  `Toolbox.dispatch` and `dispatch_many` take a view wherever they take a session, and
+  `roles=` and `context=` per call. A view narrows, never widens: roles outside the
+  session's (or the view's, for a view of a view or a call) are a `ValueError`, so whoever
+  holds a view cannot give itself a role. Handlers read the context as `Call.caller` (a
+  read-only mapping, empty by default; `call.context` stays the dispatch's internal
+  `CallContext`) and the roles as `Call.roles`; every op of a batch sees both, and is
+  held to the view's roles. `CallRecord` gains `roles` and `context`, set (and in
+  `to_json`) only for a narrower or a described call. Undo still takes back the latest
+  change whoever made it (documented). Definitions, the prompt, results and a session's
+  own calls are unchanged.
+- The role line follows the tools sent (round 8, M2): `Toolbox.system_prompt(tools=...)`
+  -- names, `Tool` objects or provider definitions -- or `groups=` (as `definitions`')
+  decides whether a reviewer is told it may comment, and accept tracked changes, over
+  those tools rather than the whole toolbox; a reviewer sent no comments tool is no longer
+  told it may comment. Without either, as before.
+
 ## 0.45.0 -- unreleased
 - Roles (round 7, item 9; proposal P1, decided by the user 2026-10-17): additive toolsets
   a toolbox or session loads in any combination -- `review` (everything that does not

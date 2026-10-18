@@ -33,6 +33,12 @@ class CallRecord:
     duration: float
     version: int | None = None
     arguments: dict[str, Any] | None = field(default=None, repr=False)
+    #: The roles the call ran with, when narrower than its session's (a view's, a
+    #: dispatch's ``roles``); ``None`` otherwise.
+    roles: list[str] | None = None
+    #: The application's context of the call (a view's, a dispatch's ``context``), so a
+    #: shared session's log tells its agents apart; ``None`` when there is none.
+    context: dict[str, Any] | None = None
 
     def to_json(self) -> dict[str, Any]:
         data = {"tool": self.tool, "docs": self.docs, "digest": self.digest,
@@ -41,6 +47,10 @@ class CallRecord:
                 "version": self.version}
         if self.arguments is not None:
             data["arguments"] = self.arguments
+        if self.roles is not None:
+            data["roles"] = self.roles
+        if self.context is not None:
+            data["context"] = self.context
         return data
 
 
