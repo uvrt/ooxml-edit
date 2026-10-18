@@ -17,7 +17,8 @@ from lxml import etree
 import charts_synthetic as cs
 from ooxml_edit.charts import ChartDataError
 from ooxml_edit.charts.actions import (add_style_actions, apply_add_style, apply_style_action,
-                                       chart_style_json, gridline_arguments, scale_arguments)
+                                       chart_style_json, choices, gridline_arguments,
+                                       scale_arguments, scale_axis)
 from ooxml_edit.charts.format import FormatError, color_element
 from test_chart import chart_order_violations
 from test_chart_create import QUARTERS, new
@@ -571,14 +572,65 @@ def test_the_style_actions_and_what_read_adds():
     apply_style_action(chart, "set_gridlines", axis="value", gridlines="none")
     with pytest.raises(ChartDataError, match="not for set_text_style"):
         apply_style_action(chart, "set_text_style", style={"fill": "tx2"})
-    with pytest.raises(ChartDataError, match="needs axis"):
-        apply_style_action(chart, "set_axis_scale", scale={"min": 0})
+    with pytest.raises(ChartDataError, match="needs axis: category or value; reverse"):
+        apply_style_action(chart, "set_axis_scale", scale={"reverse": True})
     seen = chart_style_json(chart)
     assert seen["types"] == ["bar", "line"]
     assert seen["scales"]["value"]["maximum"] == 5
     assert seen["series_format"]["Target"]["marker"] == "diamond"
     assert seen["series_format"]["Current"]["points"] == {4: {"fill": "accent2", "line": None}}
     gates(document, chart)
+
+
+def test_a_scale_without_an_axis_is_the_one_value_axis_s():
+    for kind in ("column", "stacked_bar", "line", "radar", "dot"):
+        document, chart = new(kind)
+        apply_style_action(chart, "set_axis_scale", scale={"max": 50, "major_unit": 10})
+        assert chart.axis_scale("value")["maximum"] == 50
+        assert scale_axis(chart, {"auto": ["min"]}) == "value"
+        gates(document, chart)
+
+
+@pytest.mark.parametrize("make, scale, words", [
+    (lambda: xy_chart()[1], {"max": 5}, "needs axis: x or y; both take"),
+    (lambda: new("column")[1], {"reverse": True}, "category or value; reverse and"),
+    (lambda: new("column")[1], {"number_format": "0%"}, "category or value; reverse and"),
+    (lambda: new("pie")[1], {"max": 5}, "a pie chart has no axes to scale")])
+def test_a_scale_more_than_one_axis_takes_names_the_axes(make, scale, words):
+    with pytest.raises(ChartDataError, match=words):
+        apply_style_action(make(), "set_axis_scale", scale=scale)
+
+
+def test_a_secondary_value_axis_keeps_the_axis_asked_for():
+    document, chart = new("column")
+    chart.set_series_type(chart.series[-1].name, "line", secondary_axis=True)
+    with pytest.raises(ChartDataError, match="^add with scale needs axis: .* secondary value "
+                                             "axis too.*give value"):
+        scale_axis(chart, {"min": 0}, action="add with scale")
+
+
+def test_what_a_missing_argument_could_be_is_named():
+    document, chart = new("column")
+    names = [s.name for s in chart.series]
+    with pytest.raises(ChartDataError, match=f"format_series needs series: '{names[0]}'"):
+        apply_style_action(chart, "format_series", style={"fill": "tx2"})
+    with pytest.raises(ChartDataError, match=r"format_point needs category: 'Q1', 'Q2', 'Q3' "
+                                             r"or 'Q4' \(or a number from 0 to 3\)"):
+        apply_style_action(chart, "format_point", series=0, style={"fill": "tx2"})
+    with pytest.raises(ChartDataError, match="set_gridlines needs axis: category or value"):
+        apply_style_action(chart, "set_gridlines", gridlines="major")
+    with pytest.raises(ChartDataError, match="needs gridlines: none, major, minor or both"):
+        apply_style_action(chart, "set_gridlines", axis="value")
+    with pytest.raises(ChartDataError, match="needs scale: min, max"):
+        apply_style_action(chart, "set_axis_scale", axis="value")
+
+
+def test_choices_shortens_a_long_list_and_gives_the_positions():
+    assert choices(["A"]) == "'A' (or 0)"
+    assert choices(["A", "B"]) == "'A' or 'B' (or a number from 0 to 1)"
+    many = choices([f"c{k}" for k in range(30)], limit=3)
+    assert many == "'c0', 'c1', 'c2' and 27 more (or a number from 0 to 29)"
+    assert choices([]) == "the chart has none"
 
 
 TWO = [{"name": "Now", "values": [1, 2]}, {"name": "Goal", "values": [2, 2], "type": "line"}]

@@ -53,6 +53,76 @@ def scale_arguments(scale: Mapping[str, Any]) -> dict[str, Any]:
     return out
 
 
+def category_labels(chart) -> list[str]:
+    """The categories as a model reads and names them: ISO dates for dates kept as serials
+    (``chart.category_dates``), else each label as text."""
+    dates = chart.category_dates
+    if dates is None:
+        return [str(c) for c in chart.categories]
+    return [str(c) if day is None else day for day, c in zip(dates, chart.categories)]
+
+
+def choices(names: list, *, limit: int = 12) -> str:
+    """What a refusal offers for a series or category: the names, a long list's first
+    ``limit`` and how many more, and the positions the tool takes too::
+
+        choices(["North", "South"])     # "'North' or 'South' (or a number from 0 to 1)"
+    """
+    names = [str(name) for name in names]
+    if not names:
+        return "the chart has none"
+    shown = [repr(name) for name in names[:limit]]
+    if len(names) > limit:
+        listed = ", ".join(shown) + f" and {len(names) - limit} more"
+    else:
+        listed = shown[0] if len(shown) == 1 else ", ".join(shown[:-1]) + " or " + shown[-1]
+    return listed + (" (or 0)" if len(names) == 1 else f" (or a number from 0 to {len(names) - 1})")
+
+
+def _either(names: list[str]) -> str:
+    return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " or " + names[-1]
+
+
+#: ``scale`` keys only an axis of numbers (or dates) takes; the rest suit a category axis too.
+_NUMERIC_SCALE = ("min", "max", "major_unit", "minor_unit")
+
+
+def scale_axis(chart, scale: Mapping[str, Any] | None, *, action: str = "set_axis_scale") -> str:
+    """The axis a ``scale`` given without ``axis`` is for: the value axis, when it is the
+    one axis of the chart that takes the scale's bounds or units (a bar, column, line or
+    area chart's).  Refused (:class:`~.errors.ChartDataError`), naming the axes it could
+    be, where more than one could take it -- a scatter's x and y, a date axis, a secondary
+    value axis -- or the scale holds only ``reverse`` or ``number_format``, which any
+    axis takes::
+
+        scale_axis(chart, {"max": 5})       # 'value'
+    """
+    from ..xml import find, local_name
+
+    names = chart.axis_names()
+    if not names:
+        raise ChartDataError(f"{chart.address}: a {chart.chart_type} chart has no axes to scale")
+    given = dict(scale or {})
+    numeric = any(k in given for k in _NUMERIC_SCALE) or any(
+        k in _NUMERIC_SCALE for k in given.get("auto") or [])
+    if not numeric:
+        raise ChartDataError(f"{action} needs axis: {_either(names)}; reverse and "
+                             f"number_format suit either")
+    plot_area = find(chart._root(), "c:chart/c:plotArea")
+    kinds = [local_name(child) for child in plot_area] if plot_area is not None else []
+    if names == ["category", "value"] and kinds.count("valAx") == 1 \
+            and "dateAx" not in kinds:
+        return "value"
+    if "dateAx" in kinds:
+        raise ChartDataError(f"{action} needs axis: category (its dates take bounds and units "
+                             f"too) or value")
+    if names == ["category", "value"]:
+        raise ChartDataError(f"{action} needs axis: {chart.address} has a secondary value "
+                             f"axis too, which edit_chart does not scale; give value for the "
+                             f"primary one")
+    raise ChartDataError(f"{action} needs axis: {_either(names)}; both take bounds and units")
+
+
 def gridline_arguments(gridlines: str) -> dict[str, bool]:
     if gridlines not in _GRIDLINES:
         raise ChartDataError(f"gridlines {gridlines!r}; one of {', '.join(_GRIDLINES)}")
@@ -69,12 +139,13 @@ def apply_style_action(chart, action: str, *, series=None, category=None, axis: 
     resolved (a series object or position, a category position)."""
     def need(name: str, value: Any) -> Any:
         if value is None:
-            raise ChartDataError(f"{action} needs {name}")
+            raise ChartDataError(f"{action} needs {name}: {_expected(chart, name)}")
         return value
 
     style = dict(style or {})
     if action == "set_axis_scale":
-        chart.set_axis_scale(need("axis", axis), **scale_arguments(need("scale", scale)))
+        scale = need("scale", scale)
+        chart.set_axis_scale(axis or scale_axis(chart, scale), **scale_arguments(scale))
     elif action == "set_gridlines":
         chart.set_gridlines(need("axis", axis), **gridline_arguments(need("gridlines", gridlines)))
     elif action in ("format_series", "format_point"):
@@ -108,6 +179,20 @@ def apply_style_action(chart, action: str, *, series=None, category=None, axis: 
                                cells=bool(cells))
     else:  # pragma: no cover -- the schema's enum
         raise ChartDataError(f"unknown action {action!r}")
+
+
+def _expected(chart, name: str) -> str:
+    """What a missing argument of :func:`apply_style_action` could be, on this chart."""
+    if name == "axis":
+        names = chart.axis_names()
+        return _either(names) if names else f"a {chart.chart_type} chart has no axes"
+    if name == "series":
+        return choices([series.name for series in chart.series])
+    if name == "category":
+        return choices(category_labels(chart))
+    if name == "scale":
+        return "min, max, major_unit, minor_unit, number_format, reverse or auto"
+    return _either(list(_GRIDLINES))
 
 
 #: How ``add``'s ``colors`` colour a series of each kind of chart: what Office's "series

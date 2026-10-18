@@ -2,6 +2,20 @@
 
 Versions are those in `pyproject.toml`; none is published to PyPI yet.
 
+## 0.48.0 -- unreleased
+- `edit_chart`'s scale without an axis (round 9, N2): `set_axis_scale` (and a format's
+  `add` with `scale`) takes the value axis when it is the one axis of the chart that takes
+  bounds and units -- a column, bar, line, radar or dot chart's
+  (`charts.actions.scale_axis`). Where more than one could -- a scatter's x and y, a date
+  axis, a secondary value axis -- or the scale holds only `reverse` or `number_format`,
+  which any axis takes, it is still refused, now naming the axes it could be.
+- Every "needs" refusal of the formatting actions names what to give: the series or
+  categories (`charts.actions.choices`: the first 12 names, how many more, and the
+  positions from 0 the tool takes too), the chart's axes, the gridlines or scale keys;
+  `add` from rows without a series column names the source's columns.
+  `charts.actions.category_labels` is the categories as a model names them (ISO dates for
+  dates), for both formats' handlers. Definitions are unchanged.
+
 ## 0.47.0 -- unreleased
 - A batch op's `comment` and `note` (round 9, N4): the model's words about an op, accepted
   beside `tool` and `arguments` and never run (a non-string as its JSON). Not in the
