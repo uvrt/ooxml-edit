@@ -362,3 +362,55 @@ def test_a_scoped_undo_puts_back_an_added_part_and_its_relationship():
 def test_scoped_undo_needs_a_package_that_compares_parts():
     with pytest.raises(TypeError):
         History(Counter()).undo_in(["x"])
+
+
+# -- one step by its version (round 9: undo by caller) ---------------------------------------
+
+
+def test_steps_list_what_undo_can_reach_with_their_versions_and_parts():
+    package = OpcPackage.open(outer_package())
+    history = History(package)
+    assert history.steps() == [] and history.next_redo is None
+    _title(package, PAGE1, "A", history)        # v1
+    _title(package, PAGE2, "B", history)        # v2
+    steps = history.steps()
+    assert [(step.before, step.after) for step in steps] == [(0, 1), (1, 2)]
+    assert [step.parts for step in steps] == [{PAGE1}, {PAGE2}]
+    assert history.undo() and history.next_redo == 2 and len(history.steps()) == 1
+    # A package that cannot compare parts still lists the versions.
+    counter = Counter()
+    plain = History(counter)
+    _step(plain, counter, 1)
+    assert [(step.before, step.after, step.parts) for step in plain.steps()] == [(0, 1, None)]
+
+
+def test_undo_step_takes_out_the_step_that_made_a_version_and_redo_step_brings_it_back():
+    package = OpcPackage.open(outer_package())
+    history = History(package)
+    _title(package, PAGE1, "A", history)        # v1
+    _title(package, PAGE2, "B", history)        # v2
+    _title(package, PAGE2, "C", history)        # v3
+    step = history.undo_step(1)
+    assert step.parts == {PAGE1} and (step.before, step.after) == (0, 1)
+    assert _titles(package) == (None, "C") and step.renumbered[1] == 0
+    assert history.redo_step(2) is None                         # not taken out
+    back = history.redo_step(1)
+    assert back.parts == {PAGE1} and _titles(package) == ("A", "C")
+    with pytest.raises(LookupError):
+        history.undo_step(99)
+
+
+def test_undo_step_names_the_later_steps_that_touched_its_parts():
+    package = OpcPackage.open(outer_package())
+    history = History(package)
+    _title(package, PAGE1, "A", history)        # v1
+    _title(package, PAGE2, "B", history)        # v2: elsewhere
+    _title(package, PAGE1, "C", history)        # v3: the same page
+    before = package.to_bytes(), history.version
+    with pytest.raises(Entangled) as caught:
+        history.undo_step(1)
+    assert caught.value.later == [3] and caught.value.shared == [PAGE1]
+    assert (package.to_bytes(), history.version) == before
+    with pytest.raises(Entangled) as shared:
+        history.undo_step(2, shared=[PAGE2])
+    assert shared.value.later == [] and shared.value.shared == [PAGE2]

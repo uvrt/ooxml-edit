@@ -85,7 +85,7 @@ from .registry import (ACCEPT, ANY_ROLE, CORE, EDIT, RESOLVE, ROLES, Tool, ToolG
 from .results import Image, Result, ToolError
 from .schema import CallError, validate_call
 from .session import (NO_CONTEXT, Clock, DocumentEntry, DocumentFormat, Output, Session,
-                      SessionView, doc_order, font_dirs_of, locale_of, narrowed)
+                      SessionView, StepOwner, doc_order, font_dirs_of, locale_of, narrowed)
 from .sources import Rows, qualify, resolve as resolve_rows
 from .worker import WorkerPool
 
@@ -1144,7 +1144,7 @@ class Toolbox:
             arguments = self._with_facts(tool, arguments, call)
             call.held = list(entries.values())   # dispatch() holds each once
             if changing and primary is not None:
-                with primary.batch():
+                with primary.batch(StepOwner(dict(caller), tool.name)):
                     returned = handler(call, **arguments)
                 primary.bump()
             else:
@@ -1461,6 +1461,7 @@ class Toolbox:
         prepared = self._ops(arguments, notes, roles)
         context = _context(roles, caller)
         context.batch = True
+        owner = StepOwner(dict(caller), "batch")
         started = time.perf_counter()
         done: list[dict[str, Any]] = []
         combined = Result()
@@ -1468,7 +1469,7 @@ class Toolbox:
             try:
                 with ExitStack() as stack:
                     for doc in sorted(entries, key=doc_order):
-                        stack.enter_context(entries[doc].batch())
+                        stack.enter_context(entries[doc].batch(owner))
                     for index, tool, clean in prepared:
                         context.op = index
                         if time.perf_counter() - started > limits.batch_timeout:
@@ -1513,6 +1514,7 @@ class Toolbox:
         limits = session.limits
         context = _context(roles, caller)
         context.batch = True
+        owner = StepOwner(dict(caller), "batch")
         started = time.perf_counter()
         outcomes: list[dict[str, Any]] = []
         errors: dict[int, ToolError] = {}
@@ -1521,7 +1523,7 @@ class Toolbox:
         with collect_warnings() as caught:
             with ExitStack() as stack:
                 for doc in sorted(entries, key=doc_order):
-                    stack.enter_context(entries[doc].batch())
+                    stack.enter_context(entries[doc].batch(owner))
                 for index, op in enumerate(ops):
                     context.op = index
                     name = op.get("tool", "") if isinstance(op, Mapping) else ""

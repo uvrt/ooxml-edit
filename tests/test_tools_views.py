@@ -9,7 +9,8 @@ from types import MappingProxyType
 
 import pytest
 
-from ooxml_edit.tools import ROLES, Result, Session, SessionView, Toolbox, string, tool
+from ooxml_edit.tools import (ROLES, Result, Session, SessionView, Toolbox, ToolError, string,
+                              tool)
 from ooxml_edit.tools.prompts import REVIEW_ACCEPT, REVIEW_COMMENTS, role_line
 
 import synthetic
@@ -257,16 +258,267 @@ def test_views_in_threads_at_once_share_the_session_s_locks(toolbox, shared):
             record.tool == "t_add" and record.ok} == {f"builder-{n}" for n in range(4)}
 
 
-def test_undo_in_a_shared_session_takes_back_the_latest_change_whoever_made_it(toolbox,
-                                                                               shared):
+def test_undo_without_a_caller_takes_back_the_latest_change_whoever_made_it(toolbox, shared):
     first = shared.view(roles=["review", "edit"], context={"agent": "builder-1"})
-    second = shared.view(roles=["review", "edit"], context={"agent": "builder-2"})
     before = _items(shared)
     assert toolbox.dispatch(first, "t_add", {"doc": "d1", "items": [{"text": "one"}]}).ok
-    assert toolbox.dispatch(second, "undo", {"doc": "d1"}).ok
+    # The session itself, and a view with no context, undo as before: whoever made it.
+    assert toolbox.dispatch(shared.view(roles=["review", "edit"]), "undo", {"doc": "d1"}).ok
     assert _items(shared) == before
+    assert toolbox.dispatch(shared, "undo", {"doc": "d1", "redo": True}).ok
+    assert toolbox.dispatch(shared, "undo", {"doc": "d1"}).ok and _items(shared) == before
     assert toolbox.dispatch(shared.view(roles=["review"]), "undo",
                             {"doc": "d1"}).error.code == "refused"
+
+
+# -- undo by caller (round 9) --------------------------------------------------------------------
+
+
+def _builders(shared, count=2):
+    return [shared.view(roles=["review", "edit"], context={"agent": f"builder-{n}"})
+            for n in range(1, count + 1)]
+
+
+def _add(toolbox, view, text, doc="d1"):
+    result = toolbox.dispatch(view, "t_add", {"doc": doc, "items": [{"text": text}]})
+    assert result.ok, result.error
+    return result
+
+
+def test_a_view_s_undo_takes_back_its_own_latest_change(toolbox, shared):
+    first, second = _builders(shared)
+    entry = shared.entry("d1")
+    before = _items(shared)
+    made = _add(toolbox, first, "one")
+    _add(toolbox, second, "two")
+    assert entry.owners[made.version].caller == {"agent": "builder-1"}
+    assert entry.owners[made.version].tool == "t_add"
+    undone = toolbox.dispatch(second, "undo", {"doc": "d1"})
+    assert undone.ok and undone.data["own"] and undone.summary == "Undid 1 of your own step(s) of d1"
+    assert _items(shared) == before + ["one"]
+    # builder-1's change is the latest again: its undo takes it back.
+    assert toolbox.dispatch(first, "undo", {"doc": "d1"}).ok and _items(shared) == before
+    nothing = toolbox.dispatch(first, "undo", {"doc": "d1"})
+    assert nothing.error.code == "refused" and "nothing of yours" in nothing.error.message
+    assert "your own changes only" in nothing.error.message
+    # Redo is its own too: each brings back its own.
+    assert toolbox.dispatch(first, "undo", {"doc": "d1", "redo": True}).ok
+    assert toolbox.dispatch(second, "undo", {"doc": "d1", "redo": True}).ok
+    assert _items(shared) == before + ["one", "two"]
+
+
+def test_a_view_s_undo_is_refused_when_another_s_later_change_depends_on_it(toolbox, shared):
+    first, second = _builders(shared)
+    _add(toolbox, first, "one")
+    later = _add(toolbox, second, "two")
+    before = shared.entry("d1").document.to_bytes()
+    refused = toolbox.dispatch(first, "undo", {"doc": "d1"})
+    assert refused.error.code == "entangled"
+    message = refused.error.message
+    assert "your latest change to d1 (t_add" in message and "is not the latest" in message
+    assert "t_add by agent=builder-2" in message and f"version {later.version}" in message
+    assert "Change it back with an edit" in message
+    assert refused.error.details["later"] == [{"version": later.version, "tool": "t_add",
+                                               "context": {"agent": "builder-2"}}]
+    assert shared.entry("d1").document.to_bytes() == before       # nothing changed
+    # Once builder-2 took its change back, builder-1's is the latest and can go.
+    assert toolbox.dispatch(second, "undo", {"doc": "d1"}).ok
+    assert toolbox.dispatch(first, "undo", {"doc": "d1"}).ok
+
+
+def test_a_per_call_context_undoes_its_own_and_steps_stop_at_the_first_refusal(toolbox, shared):
+    first, second = _builders(shared)
+    before = _items(shared)
+    _add(toolbox, first, "a")
+    _add(toolbox, second, "b")
+    _add(toolbox, first, "c")
+    mine = {"agent": "builder-1"}
+    undone = toolbox.dispatch(shared, "undo", {"doc": "d1", "steps": 3}, context=mine)
+    assert undone.ok and undone.data["steps"] == 1 and _items(shared) == before + ["a", "b"]
+    assert undone.warnings == ["1 of 3 step(s): no more of yours, or the next depends on a "
+                               "later change by another caller"]
+    with pytest.raises(ToolError) as python:                    # the view's own undo, in Python
+        shared.view(context=mine).undo("d1")
+    assert python.value.code == "entangled"
+    assert toolbox.dispatch(shared, "undo", {"doc": "d1"},
+                            context=mine).error.code == "entangled"
+    # A batch is one step of its caller's, made by "batch".
+    made = toolbox.dispatch(second, "batch", {"ops": [
+        {"tool": "t_add", "arguments": {"doc": "d1", "items": [{"text": "x"}]}},
+        {"tool": "t_add", "arguments": {"doc": "d1", "items": [{"text": "y"}]}}]})
+    assert made.ok and shared.entry("d1").owners[made.version].tool == "batch"
+    assert toolbox.dispatch(second, "undo", {"doc": "d1", "steps": 2}).data["steps"] == 2
+    assert _items(shared) == before + ["a"]
+
+
+def test_a_view_s_redo_is_refused_while_another_s_undo_comes_first(toolbox, shared):
+    first, second = _builders(shared)
+    before = _items(shared)
+    _add(toolbox, first, "one")
+    _add(toolbox, second, "two")
+    assert toolbox.dispatch(second, "undo", {"doc": "d1"}).ok
+    assert toolbox.dispatch(first, "undo", {"doc": "d1"}).ok and _items(shared) == before
+    refused = toolbox.dispatch(second, "undo", {"doc": "d1", "redo": True})
+    assert refused.error.code == "entangled" and "not the next to redo" in refused.error.message
+    assert toolbox.dispatch(first, "undo", {"doc": "d1", "redo": True}).ok
+    assert toolbox.dispatch(second, "undo", {"doc": "d1", "redo": True}).ok
+    # A new change drops what was undone, as for the session.
+    assert toolbox.dispatch(second, "undo", {"doc": "d1"}).ok
+    _add(toolbox, first, "three")
+    nothing = toolbox.dispatch(second, "undo", {"doc": "d1", "redo": True})
+    assert nothing.error.code == "refused" and "nothing of yours to redo" in nothing.error.message
+
+
+@pytest.fixture
+def deck(shared):
+    shared.open(synthetic.outer_package(), "deck.pptx")      # d2
+    return shared
+
+
+def _titles(session, doc="d2"):
+    document = session.entry(doc).document
+    return [document.title(n) for n in (1, 2)]
+
+
+def _title(toolbox, view, page, text, **more):
+    result = toolbox.dispatch(view, "t_title", {"doc": "d2", "page": page, "text": text,
+                                                **more})
+    assert result.ok, result.error
+    return result
+
+
+def test_in_a_format_with_scopes_a_view_takes_out_its_own_change_under_others(toolbox, deck):
+    import tools_toys
+
+    tools_toys.RESTORED.clear()
+    first, second = _builders(deck)
+    entry = deck.entry("d2")
+    _title(toolbox, first, "1", "A", ref="mine")
+    _title(toolbox, second, "2", "B", ref="theirs")
+    undone = toolbox.dispatch(first, "undo", {"doc": "d2"})
+    assert undone.ok and _titles(deck) == [None, "B"]
+    assert tools_toys.RESTORED == [id(entry.document)] and entry.refs == {"theirs": "page:2"}
+    # builder-2's step kept its owner under its new version.
+    assert entry.owners[entry.version].caller == {"agent": "builder-2"}
+    assert toolbox.dispatch(first, "undo", {"doc": "d2", "redo": True}).ok
+    assert _titles(deck) == ["A", "B"] and entry.refs == {"mine": "page:1", "theirs": "page:2"}
+    assert toolbox.dispatch(second, "undo", {"doc": "d2"}).ok and _titles(deck) == ["A", None]
+    assert toolbox.dispatch(first, "undo", {"doc": "d2"}).ok and _titles(deck) == [None, None]
+    # The same page changed later by another: refused, naming them.
+    _title(toolbox, first, "1", "C")
+    later = _title(toolbox, second, "1", "D")
+    refused = toolbox.dispatch(first, "undo", {"doc": "d2"})
+    assert refused.error.code == "entangled" and _titles(deck) == ["D", None]
+    assert "t_title by agent=builder-2" in refused.error.message
+    assert refused.error.details["later"][0]["version"] == later.version
+    assert refused.error.details["shared"] == [synthetic.PAGE1]
+    # A scope narrows it to its own changes there.
+    _title(toolbox, first, "2", "E")
+    assert toolbox.dispatch(first, "undo", {"doc": "d2", "scope": "1"}).error.code == "entangled"
+    assert toolbox.dispatch(first, "undo", {"doc": "d2", "scope": "2"}).ok
+    assert _titles(deck) == ["D", None]
+
+
+def test_a_view_s_change_to_what_every_page_shares_is_its_own_only_while_latest(toolbox):
+    import dataclasses
+
+    from test_tools_shared import DECK as TOY_DECK
+
+    deck_format = dataclasses.replace(TOY_DECK, undo_shared=lambda document: [synthetic.MAIN])
+    with Toolbox(DECK_TOOLS, formats=[deck_format], groups=GROUPS) as box:
+        session = box.session(clock=CLOCK)
+        session.open(synthetic.outer_package(), "deck.pptx")      # d1
+        first, second = _builders(session)
+        entry = session.entry("d1")
+
+        def shared_change():
+            with entry.batch(owner=_owner(first)):
+                entry.document.insert("x", "end")      # the part every page shows
+
+        shared_change()
+        assert box.dispatch(first, "undo", {"doc": "d1"}).ok     # the latest: plain undo
+        shared_change()
+        assert box.dispatch(second, "t_title", {"doc": "d1", "page": "2", "text": "B"}).ok
+        refused = box.dispatch(first, "undo", {"doc": "d1"})
+        assert refused.error.code == "entangled" and "other pages show" in refused.error.message
+
+
+def _owner(view):
+    from ooxml_edit.tools import StepOwner
+
+    return StepOwner(dict(view.context), "app")
+
+
+def test_a_change_made_outside_the_tools_is_no_caller_s(toolbox, shared):
+    first, = _builders(shared, 1)
+    _add(toolbox, first, "one")
+    shared.entry("d1").document.insert("direct", "end")       # the library's API, no call
+    refused = toolbox.dispatch(first, "undo", {"doc": "d1"})
+    assert refused.error.code == "entangled"
+    assert "a change made outside the tools" in refused.error.message
+    assert refused.error.details["later"] == [{"version": shared.entry("d1").version}]
+    session_made = toolbox.dispatch(shared, "t_add", {"doc": "d1", "items": [{"text": "s"}]})
+    assert shared.entry("d1").owners[session_made.version].caller == {}
+    assert "(a call with no caller context)" in toolbox.dispatch(
+        first, "undo", {"doc": "d1"}).error.message
+
+
+def test_views_undo_their_own_in_threads_and_never_another_s(toolbox, shared):
+    """Builders on one document at once, each adding and undoing its own: an undo either
+    takes back that builder's item or is refused because another's came after -- never
+    another's item."""
+    views = _builders(shared, 4)
+    before = _items(shared)
+    kept: list[str] = []
+    undone: list[str] = []
+    errors = []
+    lock = threading.Lock()
+
+    def build(view, n):
+        for k in range(12):
+            text = f"{n}-{k}"
+            if not toolbox.dispatch(view, "t_add", {"doc": "d1", "items": [{"text": text}]}).ok:
+                errors.append("add failed")
+                continue
+            result = toolbox.dispatch(view, "undo", {"doc": "d1"})
+            with lock:
+                if result.ok:
+                    undone.append(text)
+                elif result.error.code == "entangled":
+                    kept.append(text)
+                else:
+                    errors.append(result.error)
+
+    threads = [threading.Thread(target=build, args=(view, n)) for n, view in enumerate(views)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=60)
+    assert not errors and len(kept) + len(undone) == 48
+    assert sorted(_items(shared)[len(before):]) == sorted(kept)
+    assert _items(shared)[:len(before)] == before
+
+
+def test_views_take_out_their_own_page_changes_in_threads(toolbox, deck):
+    first, second = _builders(deck)
+    errors = []
+
+    def build(view, page):
+        for k in range(15):
+            if not toolbox.dispatch(view, "t_title", {"doc": "d2", "page": page,
+                                                      "text": f"{page}-{k}"}).ok:
+                errors.append("title failed")
+            result = toolbox.dispatch(view, "undo", {"doc": "d2"})
+            if not result.ok:
+                errors.append(result.error)
+
+    threads = [threading.Thread(target=build, args=(first, "1")),
+               threading.Thread(target=build, args=(second, "2"))]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=60)
+    assert not errors and _titles(deck) == [None, None]
 
 
 # -- the role line follows the tools sent (M2) ---------------------------------------------------

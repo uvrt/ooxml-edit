@@ -33,6 +33,13 @@ changed one is entangled with every other scope by its nature:
 ``undo_in(scope, shared=...)`` refuses it whatever came after.  A scoped
 undo is not a step itself: :meth:`redo_in` with the same scope brings it back, as a new step,
 while its parts are still as the undo left them.
+
+**One step by its version.**  :meth:`History.steps` lists the steps undo can reach, each by
+the versions it went from and to (and the parts it touched), and :meth:`History.undo_step`
+takes out the one that made a given version -- under the same rule as :meth:`undo_in`, so an
+application that knows who made each step (the tool layer's views) can take back one
+writer's latest step and refuse when a later step depends on it.  :meth:`redo_step` brings
+it back; :attr:`History.next_redo` is the version a plain :meth:`redo` would restore.
 """
 
 from __future__ import annotations
@@ -50,12 +57,16 @@ class Snapshottable(Protocol):
 
 class Entangled(Exception):
     """The latest step in a scope touched parts a later step touched too, so it cannot be
-    taken out alone.  ``parts`` are the step's, ``shared`` the ones later steps also touched."""
+    taken out alone.  ``parts`` are the step's, ``shared`` the ones later steps also touched;
+    ``later`` the versions the later steps that touched them made, oldest first (empty when
+    the step is refused for a part every scope shares)."""
 
-    def __init__(self, message: str, parts: Collection[str], shared: Collection[str]) -> None:
+    def __init__(self, message: str, parts: Collection[str], shared: Collection[str],
+                 later: Collection[int] = ()) -> None:
         super().__init__(message)
         self.parts = sorted(parts)
         self.shared = sorted(shared)
+        self.later = list(later)
 
 
 @dataclass(frozen=True)
@@ -71,6 +82,16 @@ class ScopedStep:
     after: int
     version: int
     renumbered: dict[int, int] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class Step:
+    """A step undo can reach (:meth:`History.steps`): the versions it went from and to, and
+    the parts it touched -- ``None`` for a package that cannot compare snapshots."""
+
+    before: int
+    after: int
+    parts: frozenset[str] | None = None
 
 
 @dataclass(frozen=True)
@@ -181,6 +202,11 @@ class History:
     def can_redo(self) -> bool:
         return bool(self._redo)
 
+    @property
+    def next_redo(self) -> int | None:
+        """The version a plain :meth:`redo` would bring back; ``None`` when there is none."""
+        return self._redo[-1][1] if self._redo else None
+
     def undo(self) -> bool:
         if not self._undo:
             return False
@@ -215,6 +241,29 @@ class History:
             raise RuntimeError("no scoped undo inside a batch")
         return package
 
+    def _touched(self, package: Any) -> tuple[list[Any], list[frozenset[str]]]:
+        """Every state undo can reach, oldest first, the current one last, and the parts
+        each step changed (step ``k`` goes from state ``k`` to state ``k + 1``)."""
+        states = [snapshot for snapshot, _ in self._undo] + [package.snapshot()]
+        return states, [frozenset(package.changed_between(states[k], states[k + 1]))
+                        for k in range(len(self._undo))]
+
+    def _after_of(self, index: int) -> int:
+        """The version step ``index`` made."""
+        return self._undo[index + 1][1] if index + 1 < len(self._undo) else self._version
+
+    def steps(self) -> list[Step]:
+        """The steps :meth:`undo` can take back, oldest first: the version each went from
+        and to, and the parts it touched when the package compares snapshots part by part
+        (``None`` otherwise)."""
+        versions = [version for _, version in self._undo] + [self._version]
+        package = self._package
+        if (self._batch_depth or not hasattr(package, "changed_between")
+                or not hasattr(package, "snapshot_with")):
+            return [Step(versions[k], versions[k + 1]) for k in range(len(self._undo))]
+        _, touched = self._touched(package)
+        return [Step(versions[k], versions[k + 1], touched[k]) for k in range(len(touched))]
+
     def undo_in(self, scope: Collection[str], *, shared: Collection[str] = ()
                 ) -> ScopedStep | None:
         """Undo the latest step that touched a part in ``scope``; ``None`` if none did.
@@ -225,25 +274,41 @@ class History:
         global redo history is dropped, as after any change."""
         package = self._parts_api()
         scope = set(scope)
-        shared = set(shared)
-        current = package.snapshot()
-        states = [snapshot for snapshot, _ in self._undo] + [current]
-        touched = [package.changed_between(states[k], states[k + 1])
-                   for k in range(len(self._undo))]
+        states, touched = self._touched(package)
         index = next((k for k in reversed(range(len(touched))) if touched[k] & scope), None)
         if index is None:
             return None
+        return self._take_out(package, index, states, touched, set(shared))
+
+    def undo_step(self, after: int, *, shared: Collection[str] = ()) -> ScopedStep:
+        """Take out the step that made version ``after`` (one of :meth:`steps`), wherever it
+        is in the history, as :meth:`undo_in` takes out a scope's latest: the later steps
+        stay, without it.  Raises :class:`Entangled`, changing nothing, when a later step
+        touched a part it touched or it touched a part in ``shared``; ``LookupError`` when
+        no step undo can reach made ``after``."""
+        package = self._parts_api()
+        states, touched = self._touched(package)
+        index = next((k for k in range(len(touched)) if self._after_of(k) == after), None)
+        if index is None:
+            raise LookupError(f"no step in the history made version {after}")
+        return self._take_out(package, index, states, touched, set(shared))
+
+    def _take_out(self, package: Any, index: int, states: list[Any],
+                  touched: list[frozenset[str]], shared: set[str]) -> ScopedStep:
         parts = touched[index]
         common = parts & shared
         if common:
             raise Entangled(f"the latest step in scope changed {', '.join(sorted(common))}, "
                             "which every scope shares", parts, common)
-        shared = set().union(*touched[index + 1:]) & parts if index + 1 < len(touched) else set()
-        if shared:
-            raise Entangled(f"the latest step in scope also changed {', '.join(sorted(shared))}, "
-                            "which later steps changed too", parts, shared)
+        later = [k for k in range(index + 1, len(touched)) if touched[k] & parts]
+        overlap = set().union(*(touched[k] for k in later)) & parts
+        if overlap:
+            raise Entangled(f"the latest step in scope also changed "
+                            f"{', '.join(sorted(overlap))}, which later steps changed too",
+                            parts, overlap, [self._after_of(k) for k in later])
+        current = states[-1]
         before_snapshot, before = self._undo[index]
-        after = self._undo[index + 1][1] if index + 1 < len(self._undo) else self._version
+        after = self._after_of(index)
         renumbered: dict[int, int] = {}
         # Each later state without the step.  The first is the step's own "before" content,
         # so it keeps that version; the others are states that never existed: new versions.
@@ -276,6 +341,20 @@ class History:
                       if self._undone[k].parts & scope), None)
         if index is None:
             return None
+        return self._bring_back(package, index)
+
+    def redo_step(self, after: int) -> ScopedStep | None:
+        """Bring back the step that made version ``after``, taken out by :meth:`undo_step`
+        or :meth:`undo_in`, as a new step; ``None`` if no taken-out step made it.  Raises
+        :class:`Entangled`, changing nothing, when its parts changed since."""
+        package = self._parts_api()
+        index = next((k for k in reversed(range(len(self._undone)))
+                      if self._undone[k].after == after), None)
+        if index is None:
+            return None
+        return self._bring_back(package, index)
+
+    def _bring_back(self, package: Any, index: int) -> ScopedStep:
         undone = self._undone[index]
         current = package.snapshot()
         moved = package.changed_between(

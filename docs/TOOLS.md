@@ -657,9 +657,10 @@ toolbox.dispatch(session, "ppt_set_text", args, roles=["review"],
   session: a call locks its documents, in a fixed order, whichever view it came through;
   calls on one document wait for each other, calls on different ones do not.
 - *Batch*: each op is held to the view's roles, as to a session's.
-- *Undo* is `edit`'s and takes back the latest change to the document, whoever made it --
-  in a shared session another agent's too (unchanged). Two builders on one document
-  should undo by `scope` (a page each), or not at all; a reviewer has no undo.
+- *Undo* is `edit`'s. Through a view with a context (or a call's `context=`) it takes back
+  the caller's own latest change, never another agent's (round 9, 0.50.0; see "Undo with
+  several writers"); through the session itself, or a view with no context, the latest
+  change to the document, whoever made it, as before. A reviewer has no undo.
 
 A tool's role by default: `edit` if it changes the document (`mutates`), `review` if not --
 an application's own tools included; `role=` overrides it (`ANY_ROLE` for every role set,
@@ -872,9 +873,37 @@ rules are the documented ones, checked offline: a deployment may still refuse so
 they allow. `adapters.openai_problems(definitions, chat=...)` is the same check with
 plain-text results, which the tests hold every adapter's output to.
 
-**Undo with several writers.** `undo` steps back through one history per document: the
-latest change, whoever made it. An application that runs a loop per slide on one deck,
-in parallel, can have one loop's undo revert another's edit. Three ways out:
+**Undo with several writers.** `undo` steps back through one history per document: on the
+session itself, the latest change, whoever made it. An application that runs a loop per
+slide on one deck, in parallel, can have one loop's undo revert another's edit. Four ways
+out:
+
+- **Undo by caller** (0.50.0). Give each loop a view with a context of its own
+  (`session.view(roles=[...], context={"agent": "builder-3"})`). Its `undo` takes back its
+  own latest change to the document, never another's:
+  - the document's latest change, if it is that: a plain undo, exact;
+  - else, in a format with undo scopes (decks), the change is taken out from under the
+    later ones as a scoped undo is (below), when none of them touched a part it touched
+    and it changed no part every slide shares (a layout, master or theme);
+  - else -- and always in a Word document, whose one body every change shares, so a later
+    change may stand on any of it -- it is refused as `entangled`, nothing changed. The
+    message names the later change, its version and who made it ("t_add by
+    agent=builder-2", "a change made outside the tools" for one made through the
+    library's API), and says to change it back with an edit or have that caller undo
+    first; `details.later` lists each later change in the way (`version`, `tool`,
+    `context`).
+
+  `scope` narrows it to the caller's own changes there; `steps` stop at the first refusal,
+  with a warning; `redo` brings back the caller's own latest undo (refused while another
+  caller's undo is the next one to redo, or once its parts changed). Two callers are the
+  same when their contexts are equal, so keep per-call extras (a request id) out of the
+  context a loop undoes by: they would make every call a caller of its own, and its undo
+  refused. Who made each step is `DocumentEntry.owners` (`StepOwner`: context and tool, by
+  the version the step made). Why taking out only that much is sound: undo restores
+  snapshots of parts, not inverse operations, so a change can be taken out of the middle
+  only where no later change touched its parts; a deck's slide parts are each slide's own,
+  a Word document's body is everyone's. The definition is unchanged: the refusals say
+  what the model needs.
 
 - **One session per unit.** Give each loop its own session (and its own copy of the
   document), and merge the results; each undo is then its loop's own.

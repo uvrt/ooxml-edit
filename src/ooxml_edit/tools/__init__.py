@@ -78,7 +78,8 @@ from .results import (ERROR_CODES, Image, Result, ToolError, anthropic_image_tok
 from .schema import CallError, SubsetError, canonical, check_subset, validate_call
 from .sources import Rows
 from .session import (DEFAULT_LOCALE, LOCALE_FIELDS, Blob, DefaultLocale, DocumentEntry,
-                      DocumentFormat, Output, Session, SessionView, doc_order, locale_of)
+                      DocumentFormat, Output, Session, SessionView, StepOwner, doc_order,
+                      locale_of)
 from .worker import InProcess, SubprocessPool, WorkerPool, worker_task
 
 __all__ = [
@@ -87,7 +88,7 @@ __all__ = [
     "DATASET_PREFIX", "DEFAULT_LOCALE", "Dataset", "DatasetEntry", "DefaultLocale", "DocumentEntry", "DocumentFormat",
     "ERROR_CODES", "LOCALE_FIELDS", "REF", "Image", "LimitError", "Limits", "Output", "Param",
     "Result", "Rows", "SYSTEM", "TYPE_LABELS",
-    "InProcess", "Session", "SessionView", "StrictProblem", "SubprocessPool", "SubsetError", "Tool", "ToolError", "ToolGroup", "Toolbox",
+    "InProcess", "Session", "SessionView", "StepOwner", "StrictProblem", "SubprocessPool", "SubsetError", "Tool", "ToolError", "ToolGroup", "Toolbox",
     "WorkerPool",
     "anthropic_image_tokens", "array", "boolean", "build_schema", "canonical", "check_subset",
     "collect_warnings", "dataset_id", "doc_order", "free_object", "integer", "locale_of",

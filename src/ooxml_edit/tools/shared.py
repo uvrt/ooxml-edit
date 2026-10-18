@@ -917,23 +917,32 @@ def _close_document(call: Any, doc: str) -> Result:
 def _undo(call: Any, doc: str, steps: int = 1, redo: bool = False,
           scope: str | None = None) -> Result:
     session = call.session
-    done = (session.redo(doc, steps, scope=scope) if redo
-            else session.undo(doc, steps, scope=scope))
+    caller = call.caller
+    done = (session.redo(doc, steps, scope=scope, caller=caller) if redo
+            else session.undo(doc, steps, scope=scope, caller=caller))
     verb = "Redid" if redo else "Undid"
     where = f" of {scope}" if scope is not None else ""
+    yours = " of yours" if caller else ""
     if done == 0:
-        raise ToolError("refused", f"nothing{where} to {'redo' if redo else 'undo'} in {doc}")
+        raise ToolError("refused", f"nothing{yours}{where} to {'redo' if redo else 'undo'} in "
+                        f"{doc}" + (": undo here takes back your own changes only"
+                                    if caller else ""))
     entry = session.entry(doc)
     entry.check_cache.clear()
-    if scope is None:
+    if scope is None and not caller:
         entry.restore_refs()
     data = {"steps": done, "version": entry.version}
     if scope is not None:
         data["scope"] = scope
-    result = Result(summary=f"{verb} {done} step(s){where} of {doc}", changed=[doc], data=data)
-    if scope is not None and done < steps:
-        result.warnings.append(f"{done} of {steps} step(s): no more{where}, or the next is "
-                               "entangled with changes outside it")
+    if caller:
+        data["own"] = True
+    own = " of your own" if caller else ""
+    result = Result(summary=f"{verb} {done}{own} step(s){where} of {doc}", changed=[doc],
+                    data=data)
+    if (scope is not None or caller) and done < steps:
+        result.warnings.append(f"{done} of {steps} step(s): no more{yours}{where}, or the next "
+                               + ("depends on a later change by another caller" if caller
+                                  else "is entangled with changes outside it"))
     return result
 
 
