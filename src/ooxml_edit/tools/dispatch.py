@@ -79,12 +79,12 @@ from .datasets import (DATASET_PREFIX, Dataset, DatasetEntry, check_dataset_id,
                        dataset_id, row_range, rows_text)
 from .limits import LimitError, Limits
 from .logs import CallRecord, digest, log_call, logger, shape
-from .registry import (ACCEPT, ANY_ROLE, CORE, EDIT, RESOLVE, Tool, ToolGroup, merge_tools,
-                       role_set)
+from .registry import (ACCEPT, ANY_ROLE, CORE, EDIT, RESOLVE, ROLES, Tool, ToolGroup,
+                       merge_tools, role_set)
 from .results import Image, Result, ToolError
 from .schema import CallError, validate_call
-from .session import (Clock, DocumentEntry, DocumentFormat, Output, Session, doc_order,
-                      font_dirs_of, locale_of)
+from .session import (NO_CONTEXT, Clock, DocumentEntry, DocumentFormat, Output, Session,
+                      SessionView, doc_order, font_dirs_of, locale_of, narrowed)
 from .sources import Rows, qualify, resolve as resolve_rows
 from .worker import WorkerPool
 
@@ -118,6 +118,10 @@ class CallContext:
         self.op = 0
         #: ``ref name -> the op that would have made it``: the refs of a batch's failed ops.
         self.failed_refs: dict[str, int] = {}
+        #: The roles the calls run with: the session's, a view's, or the dispatch's own.
+        self.roles: tuple[str, ...] = ROLES
+        #: The application's context of the calls (:attr:`Call.caller`); none by default.
+        self.caller: Mapping[str, Any] = NO_CONTEXT
 
     def mark(self) -> tuple[Any, ...]:
         """What the ops so far defined and touched, for :meth:`reset` after a failed op."""
@@ -182,6 +186,21 @@ class Call:
     @property
     def in_batch(self) -> bool:
         return self.context.batch
+
+    @property
+    def caller(self) -> Mapping[str, Any]:
+        """The application's context of this call, read-only: what the session view it came
+        through carries (:meth:`Session.view`) and the dispatch added
+        (``Toolbox.dispatch(..., context=...)``) -- say ``{"agent": "reviewer-1"}``, for
+        an application's tool to know which of its agents called.  Empty for a call on a
+        session itself; the same for every op of a batch.  The model never sees it."""
+        return self.context.caller
+
+    @property
+    def roles(self) -> tuple[str, ...]:
+        """The roles this call runs with (the session's, or its view's): what it was
+        checked against."""
+        return self.context.roles
 
     @property
     def changing(self) -> bool:
@@ -785,18 +804,67 @@ class Toolbox:
         return adapters.openai_allowed_tools(names, chat=provider == "openai-chat")
 
     def system_prompt(self, *, extra: str | None = None,
-                      roles: str | Iterable[str] | None = _TOOLBOX_DEFAULT) -> str:
+                      roles: str | Iterable[str] | None = _TOOLBOX_DEFAULT,
+                      tools: Iterable[Any] | None = None,
+                      groups: str | Iterable[str] | None = None) -> str:
         """The shared fragment, each format's fragment, the role line of ``roles`` (default
         the toolbox's; a role set without ``edit`` is told it reviews, and that it may comment
         where a tool places comments, :func:`.prompts.role_line`; one with ``edit`` gets no
-        line), then the application's ``extra``."""
+        line), then the application's ``extra``.
+
+        Where a tool places comments, or settles tracked changes, is decided over the tools
+        sent: ``tools`` -- what the application sends, as names, :class:`Tool` objects or
+        the definitions themselves (any provider's; a name the toolbox does not have, an
+        application's own tool or a tool search, says nothing) -- or ``groups``, the
+        same as :meth:`definitions`' with the same ``roles`` (one or the other).  Neither:
+        over the whole toolbox, as before."""
         roles = self.roles if roles is _TOOLBOX_DEFAULT else role_set(roles)
-        # Comments are what a resolver acts on, tracked changes what accept settles: a toolbox
+        if tools is not None and groups is not None:
+            raise ValueError("system_prompt takes tools or groups, not both: groups for the "
+                             "definitions(groups=...) sent, tools for any other set")
+        if groups is not None:
+            sent = [self.tools[tool.name] for tool in self.select(groups, roles=roles)]
+        elif tools is not None:
+            sent = self._sent(tools)
+        else:
+            sent = list(self.tools.values())
+        # Comments are what a resolver acts on, tracked changes what accept settles: a tool
         # with a resolve (accept) action has them.
-        comments = any(_needs(tool, RESOLVE) for tool in self.tools.values())
-        tracked = any(_needs(tool, ACCEPT) for tool in self.tools.values())
+        comments = any(_needs(tool, RESOLVE) for tool in sent)
+        tracked = any(_needs(tool, ACCEPT) for tool in sent)
         return prompts.system_prompt(*(fmt.prompt for fmt in self.formats.values()), extra=extra,
                                      roles=roles, comments=comments, tracked=tracked)
+
+    def _sent(self, tools: Iterable[Any]) -> list[Tool]:
+        """The toolbox's tools among ``tools``: names, :class:`Tool` objects (an
+        application's own, not in the toolbox, as it is) or provider definitions -- an
+        Anthropic or Responses function, a Chat Completions ``function``, a Responses
+        ``namespace`` of them.  What names none of the toolbox's tools is left out."""
+        if isinstance(tools, (str, Mapping, Tool)):
+            tools = [tools]
+        found: dict[str, Tool] = {}
+        stack = list(tools)[::-1]
+        while stack:
+            item = stack.pop()
+            if isinstance(item, Tool):
+                found.setdefault(item.name, self.tools.get(item.name, item))
+                continue
+            if isinstance(item, Mapping):
+                if item.get("type") == "namespace":
+                    stack.extend(list(item.get("tools") or [])[::-1])
+                    continue
+                function = item.get("function")
+                item = function.get("name") if isinstance(function, Mapping) \
+                    else item.get("name")
+                if not isinstance(item, str):
+                    continue        # a definition of no tool of its own: a tool search
+            if not isinstance(item, str):
+                raise TypeError(f"system_prompt's tools are names, Tool objects or "
+                                f"definitions, not {type(item).__name__}")
+            name = self.tool_named(item)
+            if name in self.tools:
+                found.setdefault(name, self.tools[name])
+        return list(found.values())
 
     def render_result(self, provider: str, result: Result, call_id: str, *,
                       images: str | None = None, detail: str | None = None) -> Any:
@@ -843,8 +911,17 @@ class Toolbox:
     def __exit__(self, *exc: Any) -> None:
         self.close()
 
-    def dispatch(self, session: Session, name: str, arguments: Any) -> Result:
-        """Run one call and return its result; never raises for the model's mistakes."""
+    def dispatch(self, session: Session | SessionView, name: str, arguments: Any, *,
+                 roles: str | Iterable[str] | None = None,
+                 context: Mapping[str, Any] | None = None) -> Result:
+        """Run one call and return its result; never raises for the model's mistakes.
+
+        ``session`` is a session or a view of one (:meth:`Session.view`), whose roles the
+        call is held to and whose context its handlers see (:attr:`Call.caller`).
+        ``roles`` narrows them for this call alone, ``context`` adds to the context: what a
+        view does, per call.  Roles the session (view) does not have are a ``ValueError``
+        -- the application's mistake, not the model's."""
+        session, roles, caller = _caller(session, roles, context)
         started = time.perf_counter()
         tool: Tool | None = None
         doc_ids: list[str] = []
@@ -855,9 +932,9 @@ class Toolbox:
         try:
             tool = self.tool(name, notes)
             name = tool.name
-            _check_role(tool, None, session.roles)
+            _check_role(tool, None, roles)
             clean = self._arguments(tool, arguments, notes)
-            _check_role(tool, clean, session.roles)
+            _check_role(tool, clean, roles)
             if tool.composite:
                 doc_ids = self._batch_documents(clean)
                 if not clean.get("atomic"):
@@ -873,7 +950,8 @@ class Toolbox:
             with session.lock(doc_ids + reading) as locked:
                 entries = {entry.doc_id: entry for entry in locked}
                 primary = entries[doc_ids[0]] if doc_ids else None
-                result = self._run(session, tool, clean, entries, primary, reading)
+                result = self._run(session, tool, clean, entries, primary, reading,
+                                   roles=roles, caller=caller)
         except ToolError as error:
             result = Result.failure(error)
         except Exception as exc:  # noqa: BLE001 -- the model gets an error result
@@ -885,14 +963,17 @@ class Toolbox:
                 result.version = primary.version
         result.tool = name
         result.duration = time.perf_counter() - started
-        self._record(session, name, doc_ids, clean, result, entries)
+        self._record(session, name, doc_ids, clean, result, entries, roles, caller)
         return result
 
-    def dispatch_many(self, session: Session, calls: Sequence[tuple[str, Any]], *,
-                      max_workers: int = 8) -> list[Result]:
-        """Run one turn's calls: per document in the order given, documents concurrently."""
+    def dispatch_many(self, session: Session | SessionView, calls: Sequence[tuple[str, Any]],
+                      *, max_workers: int = 8, roles: str | Iterable[str] | None = None,
+                      context: Mapping[str, Any] | None = None) -> list[Result]:
+        """Run one turn's calls: per document in the order given, documents concurrently.
+        ``session``, ``roles`` and ``context`` as for :meth:`dispatch`, for every call."""
         if not calls:
             return []
+        session, roles, caller = _caller(session, roles, context)
         documents = [self._documents_named(session, name, arguments)
                      for name, arguments in calls]
         futures: list[Future[Result]] = []
@@ -900,14 +981,15 @@ class Toolbox:
             for index, (name, arguments) in enumerate(calls):
                 earlier = [futures[j] for j in range(index) if documents[j] & documents[index]
                            or not documents[j] or not documents[index]]
-                futures.append(executor.submit(self._after, earlier, session, name, arguments))
+                futures.append(executor.submit(self._after, earlier, session, name, arguments,
+                                               roles, caller))
             return [future.result() for future in futures]
 
     def _after(self, earlier: list[Future[Result]], session: Session, name: str,
-               arguments: Any) -> Result:
+               arguments: Any, roles: Sequence[str], caller: Mapping[str, Any]) -> Result:
         for future in earlier:
             future.exception()  # wait; its outcome is its own
-        return self.dispatch(session, name, arguments)
+        return self.dispatch(session, name, arguments, roles=roles, context=caller)
 
     def _documents_named(self, session: Session, name: str,
                          arguments: Any) -> frozenset[str]:
@@ -964,11 +1046,13 @@ class Toolbox:
 
     def _run(self, session: Session, tool: Tool, arguments: dict[str, Any],
              entries: dict[str, DocumentEntry], primary: DocumentEntry | None,
-             reading: Sequence[str] = ()) -> Result:
+             reading: Sequence[str] = (), *, roles: Sequence[str] = ROLES,
+             caller: Mapping[str, Any] = NO_CONTEXT) -> Result:
         if tool.composite:
             edited = {doc: entry for doc, entry in entries.items() if doc not in reading}
             return self._run_batch(session, arguments, edited, primary,
-                                   {doc: entries[doc] for doc in reading})
+                                   {doc: entries[doc] for doc in reading},
+                                   roles=roles, caller=caller)
         handler = self._handler(session, tool, arguments, primary)
         changing = tool.changes(arguments)
         key = arguments.get("key") if changing and isinstance(arguments.get("key"), str) else None
@@ -977,7 +1061,7 @@ class Toolbox:
             return Result(summary=f"already done with key {key!r}: nothing new was made",
                           created=list(replay.created), changed=list(replay.changed),
                           refs=dict(replay.refs), data=replay.data)
-        context = CallContext()
+        context = _context(roles, caller)
         with collect_warnings() as caught:
             read: list[str] = []
             arguments = self._with_refs(tool, arguments, entries, primary, context, read)
@@ -1296,7 +1380,9 @@ class Toolbox:
 
     def _run_batch(self, session: Session, arguments: dict[str, Any],
                    entries: dict[str, DocumentEntry], primary: DocumentEntry | None,
-                   reading: Mapping[str, DocumentEntry] | None = None) -> Result:
+                   reading: Mapping[str, DocumentEntry] | None = None, *,
+                   roles: Sequence[str] = ROLES,
+                   caller: Mapping[str, Any] = NO_CONTEXT) -> Result:
         """``entries``: the documents the ops change (one undo step each); ``reading``:
         the documents they only take rows from, locked but left alone."""
         ops = arguments.get("ops") or []
@@ -1305,10 +1391,11 @@ class Toolbox:
             raise ToolError("limit", f"{len(ops)} ops; at most {limits.max_batch_ops} per batch",
                             field="ops")
         if not arguments.get("atomic"):
-            return self._run_partial(session, ops, entries, reading or {})
+            return self._run_partial(session, ops, entries, reading or {}, roles=roles,
+                                     caller=caller)
         notes: list[str] = []
-        prepared = self._ops(arguments, notes, session.roles)
-        context = CallContext()
+        prepared = self._ops(arguments, notes, roles)
+        context = _context(roles, caller)
         context.batch = True
         started = time.perf_counter()
         done: list[dict[str, Any]] = []
@@ -1355,11 +1442,12 @@ class Toolbox:
 
     def _run_partial(self, session: Session, ops: Sequence[Any],
                      entries: dict[str, DocumentEntry],
-                     reading: Mapping[str, DocumentEntry]) -> Result:
+                     reading: Mapping[str, DocumentEntry], *, roles: Sequence[str] = ROLES,
+                     caller: Mapping[str, Any] = NO_CONTEXT) -> Result:
         """A batch whose ops apply one by one: a failing op is rolled back alone and
         reported, and the ops after it still run.  What applied is one undo step."""
         limits = session.limits
-        context = CallContext()
+        context = _context(roles, caller)
         context.batch = True
         started = time.perf_counter()
         outcomes: list[dict[str, Any]] = []
@@ -1378,7 +1466,7 @@ class Toolbox:
                             raise ToolError("timeout", "not run: the batch passed its "
                                             f"{limits.batch_timeout:g} s deadline")
                         read: list[str] = []
-                        tool, clean = self._prepare(op, read, session.roles)
+                        tool, clean = self._prepare(op, read, roles)
                         combined.warnings += [f"ops[{index}]: {note}" for note in read]
                         outcome = self._run_alone(session, index, tool, clean, entries,
                                                   context, combined, reading)
@@ -1510,13 +1598,16 @@ class Toolbox:
         return ToolError("internal", f"{type(exc).__name__}: {_message(exc)}")
 
     def _record(self, session: Session, name: str, doc_ids: list[str], arguments: Any,
-                result: Result, entries: dict[str, DocumentEntry]) -> None:
+                result: Result, entries: dict[str, DocumentEntry],
+                roles: Sequence[str] = ROLES, caller: Mapping[str, Any] = NO_CONTEXT) -> None:
         loggable = arguments if isinstance(arguments, Mapping) else {"raw": str(arguments)}
         record = CallRecord(
             tool=name, docs=list(doc_ids), digest=digest(loggable), shape=shape(loggable),
             ok=result.ok, code=result.error.code if result.error else None,
             summary=result.summary, duration=result.duration, version=result.version,
-            arguments=dict(loggable) if self.log_arguments else None)
+            arguments=dict(loggable) if self.log_arguments else None,
+            roles=list(roles) if tuple(roles) != tuple(session.roles) else None,
+            context=dict(caller) if caller else None)
         session.log.append(record)
         for entry in entries.values():
             entry.log.append(record)
@@ -1557,6 +1648,29 @@ def _renamed(node: Any, alias: str, name: Any, where: str, notes: list[str]) -> 
     node[meant] = node.pop(alias)
     notes.append(f"{field} read as {meant}")
     return node
+
+
+def _caller(session: Session | SessionView, roles: Any,
+            context: Mapping[str, Any] | None) -> tuple[Session, tuple[str, ...],
+                                                         Mapping[str, Any]]:
+    """The session a dispatch runs on (a view's own), and the roles and context of its
+    calls: the session's or view's, narrowed by ``roles`` and added to by ``context``.  A
+    view's roles are checked against its session's again (narrowed since it was made)."""
+    if isinstance(session, SessionView):
+        base = session.session
+        found, caller = narrowed(base.roles, NO_CONTEXT, session.roles, session.context)
+    else:
+        base, found, caller = session, tuple(session.roles), NO_CONTEXT
+    found, caller = narrowed(found, caller, roles, context)
+    return base, found, caller
+
+
+def _context(roles: Sequence[str], caller: Mapping[str, Any]) -> CallContext:
+    """A dispatch's :class:`CallContext`, with the roles and context of its calls."""
+    context = CallContext()
+    context.roles = tuple(roles)
+    context.caller = caller
+    return context
 
 
 def _needs(tool: Tool, role: str) -> bool:
