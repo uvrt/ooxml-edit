@@ -53,7 +53,9 @@ class Rows:
     ``address`` the source as resolved (``d:by_region``, ``d2/t:sales``); ``doc``, ``kind``
     and ``name`` the document the values came from (a dataset's source document; ``None``
     without one); ``version`` that document's version the values are of; ``stale`` whether
-    it has changed since (a dataset only: an address is read now).  ``merge`` writes a run
+    it has changed since (a dataset only: an address is read now), or the values came from
+    invalidated formula caches (:attr:`Dataset.invalidated <.datasets.Dataset.invalidated>`,
+    an address too).  ``merge`` writes a run
     of the format's source addresses compactly (:func:`merged`)."""
 
     address: str
@@ -66,11 +68,15 @@ class Rows:
     merge: Callable[[Sequence[str]], Sequence[str]] | None = None
 
     def describe(self) -> dict[str, Any]:
-        """Where the values came from, for a result: never the values."""
+        """Where the values came from, for a result: never the values.  ``cache``: the
+        formula caches they were read from, counted by status (:attr:`Dataset.cache
+        <.datasets.Dataset.cache>`), when any was."""
         data: dict[str, Any] = {"source": self.address, "doc": self.doc,
                                 "version": self.version}
         if self.stale:
             data["stale"] = True
+        if self.dataset.cache:
+            data["cache"] = dict(self.dataset.cache)
         return data
 
     def column(self, name: str, *, field: str | None = None) -> int:

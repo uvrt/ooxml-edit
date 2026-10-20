@@ -66,6 +66,8 @@ class Grid:
     def __init__(self, tables: dict) -> None:
         self.tables = tables
         self.reads = 0
+        #: Each table's formula caches, as a workbook counts them (Dataset.cache).
+        self.caches: dict = {}
 
 
 def _column_letter(index: int) -> str:
@@ -80,7 +82,7 @@ def _table(grid: Grid, address: str) -> Dataset:
     header, rows = grid.tables[name]
     sources = [[(f"G!{_column_letter(c)}{r + 2}",) for c in range(len(header))]
                for r in range(len(rows))]
-    return Dataset(header, rows, sources=sources, keys=1)
+    return Dataset(header, rows, sources=sources, keys=1, cache=grid.caches.get(name))
 
 
 def _merge(addresses):
@@ -213,6 +215,22 @@ def test_add_from_a_table_of_the_one_open_grid(toolbox, session):
     assert SEEN[-1][1]["categories"] == ["North", "South", "East"]
     log = session.entry("d2").log
     assert log and log[-1].tool == "edit_chart"          # the grid was held for the call
+
+
+def test_a_table_read_from_invalidated_formula_caches_is_placed_stale(toolbox, session):
+    """A format that reads formula values says which caches it read (Dataset.cache): the
+    placed values say so, and are stale when any was invalidated (an address is read now,
+    but the values are as last saved)."""
+    grid = session.entry("d2").document
+    grid.caches["sales"] = {"cached_unverified": 1, "external": 1}
+    placed = ok(add(toolbox, session, **{"from": "t:sales", "columns": ["region", "units"]})
+                ).data["from"]
+    assert placed["cache"] == {"cached_unverified": 1, "external": 1}
+    assert "stale" not in placed
+    grid.caches["sales"] = {"invalidated": 3}
+    placed = ok(add(toolbox, session, **{"from": "t:sales", "columns": ["region", "units"]})
+                ).data["from"]
+    assert placed["cache"] == {"invalidated": 3} and placed["stale"] is True
 
 
 def test_a_qualified_table_names_its_document(toolbox, session):

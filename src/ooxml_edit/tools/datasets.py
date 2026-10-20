@@ -41,6 +41,20 @@ version (:attr:`DocumentEntry.version`) after the call that defined it.  It outl
   start: the state it came from had no version of its own.
 * A dataset derived from another dataset (``source=`` an entry) inherits that dataset's
   source and version: it goes stale when its origin does.
+* A dataset whose values were computed from **invalidated formula caches** is stale from
+  the start, whatever the versions say (:attr:`Dataset.cache`): the cells it read hold
+  values an edit (or the file itself) has asked the application to recalculate, and no
+  library here calculates.  Undo cannot make it current: the state it was derived from
+  never had current values.
+
+**Formula caches** (:attr:`Dataset.cache`).  A producer whose values come from formula
+cells -- a document's cached results -- says how many of the cells it read had which
+:data:`CACHE_STATUSES`: ``cached_unverified`` (as last saved, nothing known to have
+changed them, never checked to be current), ``invalidated`` (an input changed since, or
+the file asks for a full recalculation) or ``absent`` (no cached value), and how many
+refer to another file (``external``: they can be stale without any local change).  The
+tool layer carries the counts where it says where values came from
+(:meth:`Rows.describe <.sources.Rows.describe>`) and reads only ``invalidated``.
 
 Datasets are session state, not document content: undo never removes one, defining one is
 not an undo step, and a reading call may define one.  A call that fails defines none; a
@@ -89,6 +103,15 @@ _ROW_RANGE = re.compile(r"^/#([1-9][0-9]{0,6})(?:(:)(?:#([1-9][0-9]{0,6}))?)?$")
 #: are read where a value alone does not say it (ISO text as a date, a number as a
 #: percent); a value the label cannot be keeps its own type.
 TYPE_LABELS = ("number", "percent", "date", "time", "datetime", "text", "bool", "error")
+
+#: A formula's cached value, as a producer reads it: ``cached_unverified`` (as last saved,
+#: no known invalidation -- never checked to be current), ``invalidated`` (an input changed
+#: since, or the file asks for a recalculation) or ``absent`` (no cached value at all).
+CACHE_STATUSES = ("cached_unverified", "invalidated", "absent")
+
+#: What :attr:`Dataset.cache` counts beside the statuses: formulas that refer to another
+#: file, whose cached values can be stale without any local change.
+CACHE_EXTERNAL = "external"
 
 
 def dataset_id(address: str) -> str | None:
@@ -151,8 +174,11 @@ class Dataset:
     tuple per column of opaque strings: where the value came from.  ``keys``: how many
     leading columns name a row.  ``types``: a label per column (``None`` for unlabelled;
     :data:`TYPE_LABELS` are the ones the format libraries read).  ``detail``: anything else
-    the producer keeps; not compared, not read here.  :meth:`from_records` makes one of
-    records, as Python code has them.
+    the producer keeps; not compared, not read here.  ``cache``: how many of the formula
+    cells the values were read from have each of :data:`CACHE_STATUSES`, and how many refer
+    to another file (:data:`CACHE_EXTERNAL`), ``None`` when none was a formula (see the
+    module's notes); not compared.  :meth:`from_records` makes one of records, as Python
+    code has them.
     """
 
     columns: tuple[str, ...]
@@ -161,6 +187,7 @@ class Dataset:
     keys: int = 0
     types: tuple[str | None, ...] | None = None
     detail: Any = field(default=None, compare=False, repr=False)
+    cache: Mapping[str, int] | None = field(default=None, compare=False)
 
     def __post_init__(self) -> None:
         columns = tuple(self.columns)
@@ -184,6 +211,12 @@ class Dataset:
             if len(types) != len(columns):
                 raise ValueError("a dataset has a type label per column")
             object.__setattr__(self, "types", types)
+        object.__setattr__(self, "cache", _cache(self.cache))
+
+    @property
+    def invalidated(self) -> bool:
+        """Whether any value was read from a formula whose cached value is invalidated."""
+        return bool(self.cache) and self.cache.get("invalidated", 0) > 0
 
     @classmethod
     def from_records(cls, rows: Iterable[Any], types: Any = None,
@@ -274,7 +307,29 @@ class Dataset:
             raise ValueError(f"the dataset has {count} rows; there is no row {end}")
         sources = None if self.sources is None else self.sources[first - 1:end]
         return Dataset(self.columns, self.rows[first - 1:end], sources=sources,
-                       keys=self.keys, types=self.types)
+                       keys=self.keys, types=self.types, cache=self.cache)
+
+
+def _cache(counts: Any) -> dict[str, int] | None:
+    """:attr:`Dataset.cache` checked: counts by status (and ``external``), zeros left out,
+    in :data:`CACHE_STATUSES` order; ``None`` for none."""
+    if counts is None:
+        return None
+    if not isinstance(counts, Mapping):
+        raise ValueError("a dataset's cache is a mapping of status to count")
+    known = (*CACHE_STATUSES, CACHE_EXTERNAL)
+    unknown = [key for key in counts if key not in known]
+    if unknown:
+        raise ValueError(f"a dataset's cache counts {', '.join(known)}; not "
+                         f"{', '.join(map(repr, unknown))}")
+    out: dict[str, int] = {}
+    for key in known:
+        count = counts.get(key, 0)
+        if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+            raise ValueError(f"a dataset's cache count is a whole number from 0, not {count!r}")
+        if count:
+            out[key] = count
+    return out or None
 
 
 def _labels(types: Any, columns: tuple[str, ...]) -> tuple[str | None, ...] | None:
@@ -386,8 +441,9 @@ class DatasetEntry:
 
     @property
     def stale(self) -> bool:
-        """Whether the source has changed since: now, not as of any earlier look."""
-        if self._stale:
+        """Whether the source has changed since -- now, not as of any earlier look -- or the
+        values came from invalidated formula caches (:attr:`Dataset.invalidated`)."""
+        if self._stale or self.dataset.invalidated:
             return True
         source = self._source
         return source is not None and source.version != self.version

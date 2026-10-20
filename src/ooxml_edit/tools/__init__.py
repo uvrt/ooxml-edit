@@ -68,8 +68,8 @@ this subpackage is optional, and the core never imports it.
 from . import assets, hints, rendercache, shared, textfacts, tiles
 from .assets import Asset, AssetCatalogue, FolderCatalogue
 from .adapters import StrictProblem, strict_problems
-from .datasets import (DATASET_ID, DATASET_PREFIX, TYPE_LABELS, Dataset, DatasetEntry,
-                       dataset_id, row_range)
+from .datasets import (CACHE_EXTERNAL, CACHE_STATUSES, DATASET_ID, DATASET_PREFIX,
+                       TYPE_LABELS, Dataset, DatasetEntry, dataset_id, row_range)
 from .dispatch import REF, Call, CallContext, Toolbox, collect_warnings
 from .limits import LimitError, Limits
 from .logs import CallRecord
@@ -90,7 +90,7 @@ from .worker import (InProcess, SubprocessPool, WorkerPool, available_cpus, defa
 
 __all__ = [
     "ACCEPT", "ANY_ROLE", "EDIT", "RESOLVE", "REVIEW", "ROLES", "role_set",
-    "Asset", "AssetCatalogue", "Blob", "FolderCatalogue", "assets", "CORE", "Call", "CallContext", "CallError", "CallRecord", "DATASET_ID",
+    "Asset", "AssetCatalogue", "Blob", "CACHE_EXTERNAL", "CACHE_STATUSES", "FolderCatalogue", "assets", "CORE", "Call", "CallContext", "CallError", "CallRecord", "DATASET_ID",
     "DATASET_PREFIX", "DEFAULT_LOCALE", "Dataset", "DatasetEntry", "DefaultLocale", "DocumentEntry", "DocumentFormat",
     "ERROR_CODES", "LOCALE_FIELDS", "REF", "Image", "LimitError", "Limits", "Output", "Param",
     "Result", "Rows", "SYSTEM", "TYPE_LABELS",
