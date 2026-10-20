@@ -26,8 +26,10 @@ it keeps in step, because Excel reports a repair otherwise:
   the lines inserted and deleted, a column added or removed inside one gets or loses its
   ``tableColumn``, and every column's name follows its header cell, unique as Excel insists.
 
-Values (:meth:`Worksheet.write`): text, numbers, booleans, dates (as the serial number of the
-workbook's date system), a :class:`Formula`, or ``None`` for a blank that keeps its style.
+Values (:meth:`Worksheet.write`): text, :class:`RichText` (runs of text, each with the cell's
+font and its own bold, italic and strikethrough: a string item of runs), numbers, booleans,
+dates (as the serial number of the workbook's date system), a :class:`Formula`, or ``None``
+for a blank that keeps its style.
 Text is always text: ``"=A1"`` is written as those three characters, and only a
 :class:`Formula` is a formula.  :class:`Styles` finds or adds the cell format a value needs
 (a date's number format), reusing an identical one.
@@ -40,6 +42,7 @@ holds the bookkeeping too.
 
 from __future__ import annotations
 
+import copy
 import datetime as _dt
 import math
 import re
@@ -47,6 +50,7 @@ from dataclasses import dataclass, replace
 from typing import Iterable, Iterator
 
 from lxml import etree
+from ..markdown import Run, merge
 from ..opc import OpcPackage, normalize_part_path
 from ..xml import Element, qn, remove
 
@@ -271,6 +275,49 @@ class Formula:
 
 
 @dataclass(frozen=True)
+class RichText:
+    """Text in runs, each bold, italic or struck through on its own
+    (:class:`ooxml_edit.markdown.Run`; ``code`` is shown as text): a cell's rich text, a
+    string item of runs (ECMA-376 Part 1, 18.4.4 ``r``).  Neighbouring runs alike are
+    joined, empty ones dropped; ``text`` is the characters.
+
+    Each run is written with the cell's font -- the format the cell has once written --
+    as its properties (``rPr``: the ``font`` of ``cellXfs``, ``name`` as ``rFont``), with
+    bold, italic and strikethrough added where the run asks: measured in Excel for Mac
+    16.106 (2026-10-20), a run whose ``rPr`` holds only ``<b/>`` is shown in Excel's
+    default font, not the cell's, and so is a run without ``rPr`` that follows one; a run
+    with the whole font keeps the cell's look, and Excel's re-save keeps it.  The
+    properties are written in the order Excel writes them (b, i, strike, ..., sz, color,
+    rFont, family, charset, scheme: CT_Font's sequence, 18.8.22, with ``rFont`` for
+    ``name``; CT_RPrElt, 18.4.7, is a choice in any order).  A workbook without cell
+    formats has no font to copy: a run is then given only its marks.
+    """
+
+    runs: tuple[Run, ...]
+
+    def __post_init__(self) -> None:
+        runs = tuple(self.runs)
+        if not all(isinstance(run, Run) for run in runs):
+            raise TypeError("rich text is a sequence of ooxml_edit.markdown.Run")
+        runs = merge(runs)
+        if not runs:
+            raise ValueError("rich text needs text; write None for a blank cell")
+        object.__setattr__(self, "runs", runs)
+
+    @property
+    def text(self) -> str:
+        return "".join(run.text for run in self.runs)
+
+
+@dataclass(frozen=True)
+class _Built:
+    """Rich text with the string item it is written as, for one cell format."""
+
+    value: RichText
+    item: Element
+
+
+@dataclass(frozen=True)
 class Content:
     """What a cell holds, as stored: what an edit compares with before it writes.
 
@@ -377,8 +424,11 @@ class Workbook:
         self.part = main
         self._sheets: dict[str, Worksheet] = {}
         #: The shared strings as read: the tree they were read from, its length then, each
-        #: item's text, and the first index of each plain (not rich) text.
-        self._strings: tuple[Element, int, list[str], dict[str, int]] | None = None
+        #: item's text, the first index of each plain (not rich) text, and the items.
+        self._strings: tuple[Element, int, list[str], dict[str, int], list[Element]] | None \
+            = None
+        #: The first index of each rich item, by its canonical form; built when first needed.
+        self._rich_index: dict[bytes, int] | None = None
         self._styles: Styles | None = None
         #: Cells counted ``t="s"`` per sheet, by the tree they were counted in.
         self._string_uses: dict[str, tuple[Element, int]] = {}
@@ -432,7 +482,8 @@ class Workbook:
         parts = self.package.related_parts_of_type(self.part, REL_SHARED_STRINGS)
         return parts[0] if parts and self.package.has_part(parts[0]) else None
 
-    def _string_table(self) -> tuple[Element, int, list[str], dict[str, int]] | None:
+    def _string_table(self) -> tuple[Element, int, list[str], dict[str, int],
+                                     list[Element]] | None:
         """The shared strings, indexed once -- again only when the tree was replaced (an
         undo) or changed under this index."""
         part = self._shared_strings_part()
@@ -443,12 +494,15 @@ class Workbook:
         if cached is None or cached[0] is not root or cached[1] != len(root):
             texts: list[str] = []
             plain: dict[str, int] = {}
+            items: list[Element] = []
             for item in root.iterchildren(_X + "si"):
                 text = _rich_text(item)
                 if item.find(_X + "r") is None:
                     plain.setdefault(text, len(texts))
                 texts.append(text)
-            cached = self._strings = (root, len(root), texts, plain)
+                items.append(item)
+            cached = self._strings = (root, len(root), texts, plain, items)
+            self._rich_index = None
         return cached
 
     def shared_string(self, index: int) -> str:
@@ -458,27 +512,60 @@ class Workbook:
             raise IndexError(f"shared string {index} does not exist")
         return texts[index]
 
+    def shared_item(self, index: int) -> Element:
+        """Shared string ``index``'s item (``si``), as stored: the live element."""
+        table = self._string_table()
+        items = [] if table is None else table[4]
+        if not 0 <= index < len(items):
+            raise IndexError(f"shared string {index} does not exist")
+        return items[index]
+
     def add_shared_string(self, text: str) -> int | None:
         """Index of ``text`` in the shared-string table, added if new; ``None`` when the
         workbook has no shared-string table (its strings are then written inline)."""
         table = self._string_table()
         if table is None:
             return None
-        root, _, texts, plain = table
+        plain = table[3]
         if text in plain:
             return plain[text]
         item = etree.Element(_X + "si")
         node = etree.SubElement(item, _X + "t")
         _set_text(node, text)
+        index = self._append_item(item, text)
+        plain[text] = index
+        return index
+
+    def add_rich_string(self, item: Element) -> int | None:
+        """Index of a rich string item (``si`` of runs) in the shared-string table: an
+        identical one's, or ``item`` appended; ``None`` when the workbook has no
+        shared-string table."""
+        table = self._string_table()
+        if table is None:
+            return None
+        if self._rich_index is None:
+            self._rich_index = {}
+            for index, existing in enumerate(table[4]):
+                if existing.find(_X + "r") is not None:
+                    self._rich_index.setdefault(_canonical(existing), index)
+        key = _canonical(item)
+        if key in self._rich_index:
+            return self._rich_index[key]
+        index = self._append_item(item, _rich_text(item))
+        self._rich_index[key] = index
+        return index
+
+    def _append_item(self, item: Element, text: str) -> int:
+        root, _, texts, plain, items = self._string_table()
         extensions = root.find(_X + "extLst")
         if extensions is not None:
             extensions.addprevious(item)
         else:
             root.append(item)
         self.package.mark_dirty(self._shared_strings_part())
-        plain[text] = len(texts)
         texts.append(text)
-        self._strings = (root, len(root), texts, plain)
+        items.append(item)
+        self._strings = (root, len(root), texts, plain, items)
         return len(texts) - 1
 
     # -- styles ------------------------------------------------------------------------------
@@ -644,6 +731,37 @@ class Worksheet:
                        None if formula is None else formula.get("t", "normal"),
                        _style_of(node))
 
+    def runs(self, cell: Cell) -> tuple[Run, ...] | None:
+        """The cell's text as runs with their marks (:func:`rich_runs`), when it is rich
+        text; ``None`` for any other cell, plain text included."""
+        node = self._find(cell)
+        item = None if node is None else self._item(node)
+        return None if item is None else rich_runs(item)
+
+    def _item(self, node: Element) -> Element | None:
+        """The string item a text cell holds: its shared string's, or its inline one."""
+        kind = node.get("t")
+        if kind == "inlineStr":
+            return node.find(_X + "is")
+        if kind == "s":
+            raw = node.find(_X + "v")
+            if raw is not None and raw.text and raw.text.strip().isdigit():
+                try:
+                    return self.workbook.shared_item(int(raw.text))
+                except IndexError:
+                    return None
+        return None
+
+    def custom_height(self, row: int) -> bool:
+        """Whether row ``row`` has a height of its own (``customHeight``), which the
+        application keeps instead of fitting the row to its text: measured in Excel for
+        Mac 16.106 (2026-10-20), a row without it grows to show every line of wrapped text
+        on open, an ``ht`` given without it too; a row with it keeps its height."""
+        self._root
+        node = self._row(row, create=False)
+        return node is not None and node.get("customHeight", "").strip().lower() in {"1",
+                                                                                     "true"}
+
     def shared_group(self, cell: Cell) -> SharedGroup | None:
         """The shared formula group the cell is a member of, or ``None`` (no formula, or not
         a shared one).  Found by walking the sheet's cells once; ``None`` too for a group
@@ -782,7 +900,8 @@ class Worksheet:
     def write(self, cell: Cell, value, *, style: int | None = None) -> bool:
         """Write one cell; whether anything changed.
 
-        ``value`` is text (always text, ``"=A1"`` included), a number, a boolean, a
+        ``value`` is text (always text, ``"=A1"`` included), :class:`RichText` (runs, each
+        with the cell's font and its own marks), a number, a boolean, a
         ``date``, ``datetime`` or ``time`` (its serial number in the workbook's date system:
         give ``style`` a date format, from :meth:`Styles.with_number_format`), a
         :class:`Formula`, or ``None`` -- a blank that keeps the cell's format.  ``style``
@@ -803,6 +922,10 @@ class Worksheet:
                                   or style < 0):
             raise ValueError(f"style {style!r} is not a cell format index")
         node = self._find(cell)
+        if isinstance(stored, RichText):
+            effective = style if style is not None else (0 if node is None
+                                                         else _style_of(node))
+            stored = _Built(stored, self._rich_item(stored, effective))
         if node is None:
             if stored is None and not style:
                 return False
@@ -842,9 +965,13 @@ class Worksheet:
         if isinstance(value, str):
             _check_text(value)
             return value
+        if isinstance(value, RichText):
+            _check_text(value.text)
+            return value
         if isinstance(value, (_dt.date, _dt.time)):
             return date_serial(value, date1904=self.workbook.date1904)
-        raise TypeError(f"a cell holds text, a number, a boolean, a date, a Formula or None, "
+        raise TypeError(f"a cell holds text, RichText, a number, a boolean, a date, a Formula "
+                        f"or None, "
                         f"not {type(value).__name__}")
 
     def _is(self, node: Element, value) -> bool:
@@ -874,6 +1001,19 @@ class Worksheet:
             if child.tag in {_X + "v", _X + "is"}:
                 node.remove(child)
         node.attrib.pop("t", None)
+        if isinstance(value, _Built):
+            index = self.workbook.add_rich_string(value.item)
+            if index is None:
+                inline = etree.Element(_X + "is")
+                inline.extend(value.item)
+                node.set("t", "inlineStr")
+                _before_extensions(node, inline)
+            else:
+                node.set("t", "s")
+                raw = etree.Element(_X + "v")
+                raw.text = str(index)
+                _before_extensions(node, raw)
+            return
         cached = value.value if isinstance(value, Formula) else value
         if isinstance(value, Formula):
             formula = etree.Element(_X + "f")
@@ -903,6 +1043,20 @@ class Worksheet:
         raw = etree.Element(_X + "v")
         raw.text = text
         _before_extensions(node, raw)
+
+    def _rich_item(self, value: RichText, style: int) -> Element:
+        """The string item ``value`` is written as in a cell of format ``style`` (see
+        :class:`RichText`)."""
+        styles = self.workbook.styles
+        font = None if styles is None else styles.font(style)
+        item = etree.Element(_X + "si")
+        for run in value.runs:
+            node = etree.SubElement(item, _X + "r")
+            properties = _run_properties(font, run)
+            if properties is not None:
+                node.append(properties)
+            _set_text(etree.SubElement(node, _X + "t"), run.text)
+        return item
 
     def set_value(self, cell: Cell, value: "str | float | int | None", *,
                   style_from: Cell | None = None) -> None:
@@ -955,8 +1109,16 @@ class Worksheet:
             return current is None
         if isinstance(value, bool):
             return node.get("t") == "b" and current is value
+        if isinstance(value, _Built):
+            item = self._item(node)
+            return item is not None and current == value.value.text \
+                and _canonical(item, tag=False) == _canonical(value.item, tag=False)
         if isinstance(value, str):
             kinds = {"str"} if cached else {"s", "inlineStr", "str"}
+            if node.get("t") in ("s", "inlineStr"):
+                item = self._item(node)
+                if item is not None and item.find(_X + "r") is not None:
+                    return False        # rich text is not the plain text it shows
             return node.get("t") in kinds and current == value
         return node.get("t", "n") == "n" and not isinstance(current, str) \
             and current is not None and float(current) == float(value)
@@ -1334,6 +1496,90 @@ def _rich_text(item: Element) -> str:
         return plain.text or ""
     return "".join(node.text or "" for node in item.iter(_X + "t")
                    if node.getparent().tag == _X + "r")
+
+
+#: The run properties in the order Excel writes them (measured, Excel for Mac 16.106: b, i,
+#: sz, color, rFont, family, scheme): CT_Font's sequence (ECMA-376 Part 1, 18.8.22) with
+#: ``rFont`` for ``name``.
+_RUN_ORDER = ("b", "i", "strike", "condense", "extend", "outline", "shadow", "u",
+              "vertAlign", "sz", "color", "rFont", "family", "charset", "scheme")
+_MARKS = {"b": "bold", "i": "italic", "strike": "strike"}
+
+
+def _true(node: Element) -> bool:
+    """A boolean property's value (ST_Boolean ``val``, true when left out)."""
+    return node.get("val", "true").strip().lower() in {"1", "true"}
+
+
+def _run_properties(font: Element | None, run: Run) -> Element | None:
+    """A run's ``rPr``: the cell's ``font`` with the run's marks added (see
+    :class:`RichText`); ``None`` for an unmarked run when there is no font."""
+    found: dict[str, Element] = {}
+    marks = {"b": run.bold, "i": run.italic, "strike": run.strike}
+    for child in () if font is None else font:
+        if not isinstance(child.tag, str) or not child.tag.startswith(_X):
+            continue
+        local = child.tag[len(_X):]
+        if local in marks:
+            marks[local] = marks[local] or _true(child)
+            continue
+        if local == "name":
+            local = "rFont"
+        if local in _RUN_ORDER and local not in found:
+            copied = copy.deepcopy(child)
+            copied.tag = _X + local
+            copied.tail = None
+            found[local] = copied
+    for local, on in marks.items():
+        if on:
+            found[local] = etree.Element(_X + local)
+    if not found:
+        return None
+    properties = etree.Element(_X + "rPr")
+    properties.extend(found[local] for local in _RUN_ORDER if local in found)
+    return properties
+
+
+def rich_runs(item: Element) -> tuple[Run, ...] | None:
+    """A string item's runs (``si`` or ``is``, CT_Rst, ECMA-376 Part 1, 18.4.8) with their
+    bold, italic and strikethrough (``rPr`` ``b``, ``i``, ``strike``; a run without them
+    unmarked), phonetic runs left out; ``None`` for a plain item (no ``r``).  Read by local
+    name, so a strict (purl.oclc.org) item is read too; text as stored (``_xHHHH_``
+    escapes are the reader's to decode)."""
+    runs: list[Run] = []
+    rich = False
+    for child in item:
+        if not isinstance(child.tag, str) or etree.QName(child).localname != "r":
+            continue
+        rich = True
+        marks = {"bold": False, "italic": False, "strike": False}
+        text = []
+        for grand in child:
+            if not isinstance(grand.tag, str):
+                continue
+            local = etree.QName(grand).localname
+            if local == "t":
+                text.append(grand.text or "")
+            elif local == "rPr":
+                for prop in grand:
+                    if isinstance(prop.tag, str):
+                        mark = _MARKS.get(etree.QName(prop).localname)
+                        if mark is not None:
+                            marks[mark] = _true(prop)
+        runs.append(Run("".join(text), **marks))
+    return merge(runs) if rich else None
+
+
+def _canonical(item: Element, *, tag: bool = True) -> tuple:
+    """A string item's identity, whatever its namespace prefixes and ``xml:space``: its
+    elements' names, attributes and text (``tag``: with its own name; without, an inline
+    ``is`` and a shared ``si`` of the same runs are alike)."""
+    def shape(node: Element) -> tuple:
+        attributes = tuple(sorted((k, v) for k, v in node.attrib.items() if k != _XML_SPACE))
+        return (node.tag, attributes, node.text or "" if len(node) == 0 else "",
+                tuple(shape(child) for child in node if isinstance(child.tag, str)))
+    whole = shape(item)
+    return whole if tag else whole[3]
 
 
 def _set_text(node: Element, text: str) -> None:

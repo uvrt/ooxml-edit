@@ -2,6 +2,33 @@
 
 Versions are those in `pyproject.toml`; none is published to PyPI yet.
 
+## 0.54.0 -- unreleased
+- `ooxml_edit.markdown` (core, lane X, X3b): a small Markdown subset read into runs with
+  their marks and written back, without a Markdown library -- `**bold**`, `*italic*` /
+  `_italic_`, `~~strike~~`, backslash escapes and code spans (literal text, `code` set) by
+  CommonMark 0.31.2's delimiter-run rules (flanking, intraword underscores, the rule of
+  three) and markdown-it-py's strikethrough (the parser the format libraries use; the
+  tests check random text against it when it is installed, now a dev dependency).
+  Links, images, HTML, entities and every other block stay text.  `parse` reads lines --
+  each line its own, not CommonMark's joined paragraphs; one empty line kept between
+  lines -- and list items (`-`, `*`, `+`, `1.`, `1)`) nested by CommonMark's content
+  columns and renumbered from a list's first number; `parse_inline` one line;
+  `inline_markdown`, `to_markdown` and `escape` write runs and lines back so that they
+  read back the same (a line start that would be an item escaped; marks Markdown cannot
+  place dropped, never text).
+- `ooxml_edit.sheets.RichText`: a cell's text as runs (`Worksheet.write`), a shared
+  string of `r` runs (an identical item reused) or an inline string without a table.
+  Each run's `rPr` is the cell's whole font with bold, italic and strikethrough added,
+  in the order Excel writes run properties: measured in Excel for Mac 16.106
+  (2026-10-20), a run with only `<b/>` shows in Excel's default font, not the cell's.
+  Plain text written over rich text makes it plain.  `Worksheet.runs(cell)` and
+  `rich_runs(item)` read a rich item's runs; `Workbook.shared_item(index)`,
+  `add_rich_string(item)`; `Worksheet.custom_height(row)` (a row Excel does not fit to
+  its text: measured, a row without `customHeight` grows to its wrapped lines on open).
+- `Styles.font(index)`, `Styles.wraps_text(index)` and `Styles.with_wrap_text(index)`
+  (the cell's format with `alignment wrapText="1"`, reused or appended: measured, a line
+  break shows only in a cell that wraps its text).
+
 ## 0.53.0 -- unreleased
 - Formula freshness for datasets and sources (lane X, X3): `Dataset.cache`, how many of the
   formula cells a dataset's values were read from have each of `CACHE_STATUSES` --

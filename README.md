@@ -44,16 +44,19 @@ package.save("out.zip")
 
 ## What it covers
 
-- **Core** (`ooxml_edit.opc`, `.xml`, `.history`, `.stamp`, `.provenance`, `.dates`): lossless OPC
+- **Core** (`ooxml_edit.opc`, `.xml`, `.history`, `.stamp`, `.provenance`, `.dates`,
+  `.markdown`): lossless OPC
   packages, parts and relationships, safe removal (`release`/`reap`), embedded packages,
   schema-ordered insertion, undo/redo with batches and versions, durable ids, the
-  record of where placed values came from, and date patterns in measured month names.
+  record of where placed values came from, date patterns in measured month names, and a
+  small Markdown subset (emphasis, strikethrough, code spans, escapes, lines and lists)
+  read into marked runs and written back.
   See [docs/CORE.md](docs/CORE.md).
 - **`ooxml_edit.charts`** (optional): charts with their embedded workbooks, new charts from
   data, and SmartArt diagrams, edited the same way in a deck or a Word document.
   See [docs/CHARTS.md](docs/CHARTS.md).
-- **`ooxml_edit.sheets`** (optional): a workbook's cells written losslessly -- text, numbers,
-  booleans, dates in the workbook's date system, formulas, blanks -- with shared strings,
+- **`ooxml_edit.sheets`** (optional): a workbook's cells written losslessly -- text, rich
+  text (runs with the cell's font, bold, italic, struck through), numbers, booleans, dates in the workbook's date system, formulas, blanks -- with shared strings,
   cell formats, rows with or without `r`, tables, the calculation chain and `calcPr` kept
   in step, a shared formula group's master released with its members' formulas kept, and
   the edit's footprint (`outside_footprint`) written down and checked. What
