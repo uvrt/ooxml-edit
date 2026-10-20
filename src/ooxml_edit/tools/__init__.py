@@ -42,7 +42,11 @@ What is here:
   provenance;
 * :mod:`.limits` -- size limits, magic-byte checks and the zip-bomb guard;
 * :mod:`.worker` -- worker processes whose deadlines are kept by killing the worker
-  (subprocess workers in a process that may not start multiprocessing children);
+  (subprocess workers in a process that may not start multiprocessing children), as many
+  by default as the process's CPUs and container quota allow, warmed before their first
+  task, several tasks at once (:func:`run_all`);
+* :mod:`.rendercache` -- rendered images (and decoded embedded fonts) by content key, in
+  memory, sized in bytes (:class:`ContentStore`);
 * :mod:`.logs` -- call records with argument digests, not content;
 * :mod:`.hints` -- what a name that is no tool means: a tool, and an action of it;
 * :mod:`.tiles` -- contact images: many rendered views tiled into one labelled image
@@ -61,7 +65,7 @@ out as bytes to the application, and no tool may take a path.  Like :mod:`ooxml_
 this subpackage is optional, and the core never imports it.
 """
 
-from . import assets, hints, shared, textfacts, tiles
+from . import assets, hints, rendercache, shared, textfacts, tiles
 from .assets import Asset, AssetCatalogue, FolderCatalogue
 from .adapters import StrictProblem, strict_problems
 from .datasets import (DATASET_ID, DATASET_PREFIX, TYPE_LABELS, Dataset, DatasetEntry,
@@ -80,7 +84,9 @@ from .sources import Rows
 from .session import (DEFAULT_LOCALE, LOCALE_FIELDS, Blob, DefaultLocale, DocumentEntry,
                       DocumentFormat, Output, Session, SessionView, StepOwner, doc_order,
                       locale_of)
-from .worker import InProcess, SubprocessPool, WorkerPool, worker_task
+from .rendercache import ContentStore, content_key
+from .worker import (InProcess, SubprocessPool, WorkerPool, available_cpus, default_workers,
+                     run_all, worker_task)
 
 __all__ = [
     "ACCEPT", "ANY_ROLE", "EDIT", "RESOLVE", "REVIEW", "ROLES", "role_set",
@@ -89,7 +95,8 @@ __all__ = [
     "ERROR_CODES", "LOCALE_FIELDS", "REF", "Image", "LimitError", "Limits", "Output", "Param",
     "Result", "Rows", "SYSTEM", "TYPE_LABELS",
     "InProcess", "Session", "SessionView", "StepOwner", "StrictProblem", "SubprocessPool", "SubsetError", "Tool", "ToolError", "ToolGroup", "Toolbox",
-    "WorkerPool",
+    "WorkerPool", "ContentStore", "available_cpus", "content_key", "default_workers",
+    "rendercache", "run_all",
     "anthropic_image_tokens", "array", "boolean", "build_schema", "canonical", "check_subset",
     "collect_warnings", "dataset_id", "doc_order", "free_object", "integer", "locale_of",
     "row_range",

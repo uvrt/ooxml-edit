@@ -191,6 +191,16 @@ class DocumentFormat:
     #: a plural or another prefix.  Only wording: the call still fails, its message naming
     #: the tool to use.  An entry naming a tool or action the toolbox lacks is ignored.
     tool_hints: dict[str, str] = field(default_factory=dict)
+    #: What a new worker process runs before its first task, so the first render is not
+    #: the one to pay for the format's imports and font index: a module-level function of
+    #: no arguments, registered (:func:`~.worker.worker_task`).  Its time is no call's
+    #: (:mod:`.worker`).  ``None``: nothing.
+    warm_up: Callable[[], Any] | None = None
+
+
+#: :attr:`DocumentEntry.render_keys` and :attr:`DocumentEntry.font_keys`, in entries.
+RENDER_KEYS = 4096
+FONT_KEYS = 256
 
 
 class LRU:
@@ -214,6 +224,10 @@ class LRU:
 
     def __contains__(self, key: Hashable) -> bool:
         return key in self._items
+
+    def keys(self) -> list[Hashable]:
+        """The keys, least recently used first."""
+        return list(self._items)
 
     def __len__(self) -> int:
         return len(self._items)
@@ -307,6 +321,13 @@ class DocumentEntry:
     lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
     render_cache: LRU = field(default_factory=lambda: LRU(16), repr=False)
     check_cache: LRU = field(default_factory=lambda: LRU(16), repr=False)
+    #: What each view was drawn as, by version: ``(version, view, options...)`` -> the
+    #: content key its image is under in the toolbox's :class:`~.rendercache.ContentStore`.
+    #: Keys are small, so many are kept: a repeat render of a long document finds them all.
+    render_keys: LRU = field(default_factory=lambda: LRU(RENDER_KEYS), repr=False)
+    #: The digests of the fonts a worker decoded from this document's embedded ones (kept
+    #: in the toolbox's ``decoded_fonts``): what the next task is handed.
+    font_keys: LRU = field(default_factory=lambda: LRU(FONT_KEYS), repr=False)
     log: list[CallRecord] = field(default_factory=list, repr=False)
     #: Idempotence keys of creating calls: ``(tool, key) -> result data``.
     keys: dict[tuple[str, str], Any] = field(default_factory=dict, repr=False)
@@ -322,6 +343,8 @@ class DocumentEntry:
     #: Callers' undos of their own changes, latest last, for their redo.
     own_undos: list[OwnUndo] = field(default_factory=list, repr=False)
     _own_version: int = field(default=0, repr=False)
+    #: ``(version, bytes)`` of the last :meth:`snapshot`.
+    _snapshot: tuple[int, bytes] | None = field(default=None, repr=False)
 
     @property
     def history(self) -> Any:
@@ -408,6 +431,19 @@ class DocumentEntry:
     def restore_refs(self) -> None:
         """The refs of the version the document is at now (after an undo or redo)."""
         self.refs = dict(self.ref_states.get(self.version, {}))
+
+    def snapshot(self) -> bytes:
+        """The document's bytes (``document.to_bytes()``) at this version, made once per
+        version: what work in a worker process gets.  Take it under the document's lock.
+        Equal versions are equal content (:mod:`ooxml_edit.history`), so a render after a
+        render, a check after a render, reuse the bytes the first made."""
+        version = self.version
+        kept = self._snapshot
+        if kept is not None and kept[0] == version:
+            return kept[1]
+        data = self.document.to_bytes()
+        self._snapshot = (version, data)
+        return data
 
     def cached(self, cache: LRU, key: Hashable, compute: Callable[[], Any]) -> Any:
         """``compute()`` cached under ``(version, key)``: a later edit makes a new entry."""
@@ -899,23 +935,34 @@ class Session:
                 if budget is not None]
             return max(0, min(left)) if left else None
 
-    def reserve_images(self, count: int) -> None:
-        """Count ``count`` images against the session's and the round's budgets, or refuse
-        with ``limit``."""
+    def check_images(self, count: int) -> None:
+        """Refuse with ``limit``, as :meth:`reserve_images` would, when ``count`` images
+        would pass the session's or the round's budget -- counting none: a format asks
+        before it renders, so a call that will be refused costs nothing."""
         limits = self.limits
         with self._lock:
             if limits.image_budget is not None and self.images_used + count > limits.image_budget:
-                raise ToolError("limit", f"the session's image budget is {limits.image_budget} "
-                                f"and {self.images_used} are used; work from text (describe, "
-                                "check) from here", details={
-                                    "budget": "session", "limit": limits.image_budget,
-                                    "remaining": max(0, limits.image_budget - self.images_used)})
+                self._over_budget("session", limits.image_budget, self.images_used)
             per_round = limits.image_budget_per_round
             if per_round is not None and self.images_this_round + count > per_round:
-                raise ToolError("limit", f"this round's image budget is {per_round} and "
-                                f"{self.images_this_round} are used; render again next round",
-                                details={"budget": "round", "limit": per_round,
-                                         "remaining": max(0, per_round - self.images_this_round)})
+                self._over_budget("round", per_round, self.images_this_round)
+
+    def _over_budget(self, which: str, limit: int, used: int) -> None:
+        if which == "session":
+            raise ToolError("limit", f"the session's image budget is {limit} and {used} are "
+                            "used; work from text (describe, check) from here", details={
+                                "budget": "session", "limit": limit,
+                                "remaining": max(0, limit - used)})
+        raise ToolError("limit", f"this round's image budget is {limit} and {used} are used; "
+                        "render again next round",
+                        details={"budget": "round", "limit": limit,
+                                 "remaining": max(0, limit - used)})
+
+    def reserve_images(self, count: int) -> None:
+        """Count ``count`` images against the session's and the round's budgets, or refuse
+        with ``limit``."""
+        with self._lock:
+            self.check_images(count)
             self.images_used += count
             self.images_this_round += count
 

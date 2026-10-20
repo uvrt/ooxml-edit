@@ -53,14 +53,40 @@ class Limits:
     #: Values (rows times columns) in one dataset; its sources are not counted.
     max_dataset_cells: int = 50_000
     # deadlines, in seconds
+    #: A render of up to :data:`RENDER_ITEMS` views; a task of more gets this per
+    #: :data:`RENDER_ITEMS` begun (:meth:`render_timeout_for`).  Starting a worker and
+    #: warming it never counts against it (``worker_start_timeout`` bounds that).
     render_timeout: float = 20.0
     layout_timeout: float = 30.0
     soft_deadline: float = 10.0
     #: The whole of one ``batch`` call: its ops and the checks after them.
     batch_timeout: float = 120.0
+    #: Starting one worker process and warming it (its imports, the renderers' font
+    #: index), apart from any call's deadline.
+    worker_start_timeout: float = 120.0
     # caches, in entries per document
+    #: Per document: SVG reads, contact images and other derived views by version.
     render_cache_size: int = 16
     check_cache_size: int = 16
+    #: Rendered images (PNG) kept in memory by their content (:mod:`.rendercache`), for the
+    #: whole toolbox -- every session, view and document together, the toolbox's own
+    #: limits setting it -- in bytes: 128 MB holds a few hundred views at 1,280 px.  Nothing
+    #: is written to disk.
+    image_cache_bytes: int = 128 * MB
+    #: Fonts decoded from documents' embedded ones, kept for the whole toolbox in bytes
+    #: and handed to each worker with its task, so none decodes them again (a template's
+    #: eight faces are about 3 MB).
+    font_cache_bytes: int = 32 * MB
+
+    def render_timeout_for(self, count: int) -> float:
+        """The deadline of one task rendering ``count`` views: ``render_timeout``
+        per :data:`RENDER_ITEMS` begun, so a long task -- or a cold one, decoding a document's
+        embedded fonts -- is not killed for its length."""
+        return self.render_timeout * max(1, -(-int(count) // RENDER_ITEMS))
+
+
+#: The views one ``render_timeout`` covers.
+RENDER_ITEMS = 4
 
 
 class LimitError(ValueError):

@@ -87,7 +87,8 @@ from .schema import CallError, validate_call
 from .session import (NO_CONTEXT, Clock, DocumentEntry, DocumentFormat, Output, Session,
                       SessionView, StepOwner, doc_order, font_dirs_of, locale_of, narrowed)
 from .sources import Rows, qualify, resolve as resolve_rows
-from .worker import WorkerPool
+from .rendercache import ContentStore
+from .worker import WorkerPool, default_workers, run_all
 
 
 #: A ref's name: what ``$name`` may say.
@@ -567,6 +568,40 @@ class Call:
         return self.toolbox.pool.run(fn, *args, timeout=timeout or self.limits.render_timeout,
                                      **kwargs)
 
+    def run_all(self, fn: Callable[..., Any], calls: Sequence[tuple], *,
+                timeouts: Sequence[float]) -> list[Any]:
+        """``fn(*args)`` for each ``args`` in ``calls``, at once over the pool's workers, each
+        with its own deadline; the results in order, an exception in its place (none is
+        raised: the handler keeps what succeeded, then raises).  The chunks of one render
+        (:func:`~.worker.run_all`); give each a deadline by its size
+        (:meth:`~.limits.Limits.render_timeout_for`)."""
+        return run_all(self.toolbox.pool, fn, calls, timeouts)
+
+    @property
+    def parallelism(self) -> int:
+        """How many tasks :meth:`run_all` runs at once: split work into this many chunks."""
+        return self.toolbox.parallelism
+
+    @property
+    def images(self) -> ContentStore:
+        """The toolbox's rendered images by content key (:mod:`.rendercache`)."""
+        return self.toolbox.images
+
+    @property
+    def decoded_fonts(self) -> ContentStore:
+        """The toolbox's fonts decoded from embedded ones, by payload digest: hand those of
+        the document to the worker with its task (:mod:`.rendercache`)."""
+        return self.toolbox.decoded_fonts
+
+    def check_images(self, count: int) -> None:
+        """Refuse with ``limit`` before rendering when ``count`` more images would pass the
+        per-call limit or the session's or round's budget (:meth:`Session.check_images`):
+        a call to be refused costs nothing.  :meth:`image` still counts each image."""
+        limits = self.limits
+        if len(self.result.images) + count > limits.max_images_per_call:
+            raise ToolError("limit", f"at most {limits.max_images_per_call} images per call")
+        self.session.check_images(count)
+
     def output(self, name: str, format: str, data: bytes, *,
                entry: DocumentEntry | None = None) -> dict[str, Any]:
         """Hand a file to the application, behind the validate gate.
@@ -632,20 +667,30 @@ class Toolbox:
 
     def __init__(self, tools: Iterable[Tool], *, formats: Iterable[DocumentFormat] = (),
                  groups: Iterable[ToolGroup] = (), limits: Limits | None = None,
-                 allow_new_problems: bool = False, workers: int = 2,
+                 allow_new_problems: bool = False, workers: int | None = None,
                  start_method: str = "spawn", log_arguments: bool = False,
                  error_map: Mapping[type[BaseException], Any] | None = None,
                  strict_first: Sequence[str] | None = None,
                  runner: Any = None, font_dirs: Any = None, locale: Any = None,
-                 roles: str | Iterable[str] | None = None) -> None:
-        """``workers`` worker processes render and lay out (:class:`~.worker.WorkerPool`).
-        In a daemonic process, which may not start multiprocessing children, the pool uses
-        ``workers`` subprocess workers instead (:class:`~.worker.SubprocessPool`), by
-        itself; ``0`` runs the work in-process, in threads, whose deadlines bound the wait
-        but cannot stop the work.  ``runner`` replaces the pool: anything with
-        ``run(fn, *args, timeout=..., **kwargs)`` and ``close()`` -- a
-        :class:`~.worker.SubprocessPool`, an :class:`~.worker.InProcess`, a
-        ``WorkerPool(fallback=...)`` of the application's choice, or its own executor.
+                 roles: str | Iterable[str] | None = None, prewarm: bool = True) -> None:
+        """``workers`` worker processes render and lay out (:class:`~.worker.WorkerPool`);
+        ``None`` (the default) is what this process may use -- its CPUs and its container's
+        CPU quota, at most eight (:func:`~.worker.default_workers`).  One call's views
+        are drawn over all of them at once, in chunks.  In a daemonic process, which
+        may not start multiprocessing children, the pool uses ``workers`` subprocess
+        workers instead (:class:`~.worker.SubprocessPool`), by itself; ``0`` runs the work
+        in-process, in threads, whose deadlines bound the wait but cannot stop the work.
+        ``runner`` replaces the pool: anything with ``run(fn, *args, timeout=...,
+        **kwargs)`` and ``close()`` -- a :class:`~.worker.SubprocessPool`, an
+        :class:`~.worker.InProcess`, a ``WorkerPool(fallback=...)`` of the application's
+        choice, or its own executor (with a ``size``, its work is spread over that many).
+
+        ``prewarm`` starts every worker in the background when the pool is first needed,
+        each running the formats' warm-up (:attr:`~.session.DocumentFormat.warm_up`), so
+        the first render waits for one worker, not for all; :meth:`warm` does it at once
+        (at the application's start).  Starting and warming never count against a call's
+        deadline.  Rendered images are kept by content for the whole toolbox
+        (:attr:`images`, in memory, sized by ``limits.image_cache_bytes``).
 
         ``font_dirs`` -- the application's own font folders, searched before the operating
         system's for every render and measurement -- is the default of the sessions this
@@ -690,10 +735,16 @@ class Toolbox:
         self.locale: Any = locale_of(locale)
         #: The default roles of the sessions, definitions and prompt (:data:`~.registry.ROLES`).
         self.roles: tuple[str, ...] = role_set(roles)
-        self._workers = workers
+        self._workers = default_workers() if workers is None else workers
         self._start_method = start_method
+        self._prewarm = prewarm
         self._pool: Any = runner
         self._pool_lock = threading.Lock()
+        #: Rendered images by content key, every session's and view's (:mod:`.rendercache`).
+        self.images = ContentStore(self.limits.image_cache_bytes)
+        #: Fonts a worker decoded from a document's embedded ones, by payload digest, for
+        #: the next worker's task (:mod:`.rendercache`).
+        self.decoded_fonts = ContentStore(self.limits.font_cache_bytes)
         self._errors: dict[type[BaseException], Any] = {}
         for fmt in self.formats.values():
             self._errors.update(fmt.errors)
@@ -947,8 +998,38 @@ class Toolbox:
         needed, or the ``runner`` the application gave."""
         with self._pool_lock:
             if self._pool is None:
-                self._pool = WorkerPool(self._workers, start_method=self._start_method)
+                self._pool = WorkerPool(self._workers, start_method=self._start_method,
+                                        warm_up=self.warm_ups,
+                                        start_timeout=self.limits.worker_start_timeout)
+                if self._prewarm:
+                    self._pool.warm()
             return self._pool
+
+    @property
+    def warm_ups(self) -> list[Callable[[], Any]]:
+        """The formats' :attr:`~.session.DocumentFormat.warm_up` tasks, each once."""
+        return list(dict.fromkeys(fmt.warm_up for fmt in self.formats.values()
+                                  if fmt.warm_up is not None))
+
+    @property
+    def parallelism(self) -> int:
+        """How many tasks the pool runs at once: its ``size`` (1 in-process, or for a
+        runner that says nothing)."""
+        pool = self.pool
+        if getattr(pool, "in_process", False):
+            return 1
+        size = getattr(pool, "size", 1)
+        return max(1, size) if isinstance(size, int) else 1
+
+    def warm(self, *, wait: bool = False) -> None:
+        """Start the worker processes now and warm them (the formats' imports and font
+        index), in the background -- at the application's start, say, so no call waits for
+        a cold worker; ``wait`` returns once they are ready.  A runner without ``warm``
+        is left as it is."""
+        pool = self.pool
+        warm = getattr(pool, "warm", None)
+        if warm is not None:
+            warm(wait=wait)
 
     def close(self) -> None:
         with self._pool_lock:
