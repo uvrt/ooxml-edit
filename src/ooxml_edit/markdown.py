@@ -228,7 +228,7 @@ def parse_inline(text: str) -> tuple[Run, ...]:
                 flush()
                 nodes.append([char * length, False])
                 delimiters.append(_Delimiter(char, len(nodes) - 1, length, length, opens,
-                                             closes))
+                                             closes, k))
             k = end
             continue
         pending.append(char)
@@ -250,15 +250,18 @@ def parse_inline(text: str) -> tuple[Run, ...]:
             nodes[pairs[p - 1]][0] += "~"
         else:
             nodes[pairs[0]][0] = "~" + nodes[pairs[0]][0]
+    # How many spans of each kind hold each node: +1 after its opener, -1 at its closer.
+    steps = {kind: [0] * (len(nodes) + 1) for kind in ("strong", "em", "strike")}
+    for first, last, kind in spans:
+        steps[kind][first + 1] += 1
+        steps[kind][last] -= 1
+    depth = {kind: 0 for kind in steps}
     runs: list[Run] = []
     for index, (content, code) in enumerate(nodes):
-        bold = italic = strike = False
-        for first, last, kind in spans:
-            if first < index < last:
-                bold |= kind == "strong"
-                italic |= kind == "em"
-                strike |= kind == "strike"
-        runs.append(Run(content, bold, italic, strike, code))
+        for kind in steps:
+            depth[kind] += steps[kind][index]
+        runs.append(Run(content, depth["strong"] > 0, depth["em"] > 0, depth["strike"] > 0,
+                        code))
     return merge(runs)
 
 
@@ -286,15 +289,26 @@ def _match(delimiters: list[_Delimiter], nodes: list) -> list[tuple[int, int, st
     that stay text."""
     spans: list[tuple[int, int, str]] = []
     stack = list(delimiters)
+    order = {id(d): n for n, d in enumerate(delimiters)}
+    first_of: dict[int, int] = {}
+    for n, d in enumerate(delimiters):
+        first_of.setdefault(d.run, n)
+    #: CommonMark's openers_bottom: per kind of closer, the last delimiter below which no
+    #: opener for it is left (it keeps the search linear).
+    bottom: dict[tuple, int] = {}
     position = 0
     while position < len(stack):
         closer = stack[position]
         if not closer.closes or closer.count == 0:
             position += 1
             continue
+        kind_of = (closer.char, closer.opens, closer.length % 3)
+        floor = bottom.get(kind_of, -1)
         found = None
         for back in range(position - 1, -1, -1):
             opener = stack[back]
+            if order[id(opener)] <= floor:
+                break
             if opener.char != closer.char or not opener.opens or opener.count == 0 \
                     or (closer.char == "~" and opener.run == closer.run):
                 continue
@@ -305,6 +319,9 @@ def _match(delimiters: list[_Delimiter], nodes: list) -> list[tuple[int, int, st
             found = back
             break
         if found is None:
+            # (A pair of tildes stays an opener for the rest of its own run's closers.)
+            bottom[kind_of] = (first_of[closer.run] if closer.char == "~"
+                               else order[id(closer)]) - 1
             if not closer.opens:
                 stack.pop(position)
             else:

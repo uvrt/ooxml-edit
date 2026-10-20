@@ -286,3 +286,14 @@ def test_agrees_with_markdown_it_on_random_text():
 def test_a_space_at_a_marks_end_does_not_turn_lines_into_text():
     lines = (Line(runs(("Total ", "b"), "due"), "bullet"), Line(runs("next"), "bullet"))
     assert to_markdown(lines) == "- **Total** due\n- next"
+
+
+@pytest.mark.parametrize("text", ["**a* " * 8000, "*a " * 12000, "~~ a" * 12000,
+                                  "`a" * 16000, "_" * 40000])
+def test_long_text_is_read_in_linear_time(text):
+    import time
+
+    start = time.monotonic()
+    found = parse_inline(text)
+    inline_markdown(found)
+    assert time.monotonic() - start < 5
