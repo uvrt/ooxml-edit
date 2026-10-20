@@ -25,6 +25,10 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet.
   group's `ref` the remaining members' rectangle), or, where that rectangle does not start
   at it, every member gets its own formula; every translation is made before anything
   changes, so a refused one leaves the sheet as it was. The calculation chain is dropped.
+- `Worksheet.style(cell, inherited=True)`: for a position with no cell, the format a cell
+  made there takes -- its row's (`s` with `customFormat`), else its column's (`col
+  style`), else 0 (ECMA-376 Part 1, 18.3.1.73, 18.3.1.13); `write` still gives a new cell
+  no format unless asked, so chart outputs are unchanged.
 - Definitions are unchanged.
 
 ## 0.52.0 -- unreleased

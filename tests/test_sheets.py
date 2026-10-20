@@ -506,3 +506,20 @@ def test_a_translation_refused_changes_nothing():
         stock.release_shared(Cell(FIRST_INPUT, 6), refuse)
     book.finish()
     assert not book.changed and book.to_bytes() == data
+
+
+def test_a_new_cell_s_inherited_format_is_its_row_s_then_its_column_s():
+    _, book = _open()
+    stock = book.sheet("Stock")
+    root = book.package.tree(stock.part)
+    columns = root.find(X + "cols")
+    etree.SubElement(columns, X + "col", min="8", max="8", width="12", style="2")
+    rows = {node.get("r"): node for node in root.iter(X + "row")}
+    rows["4"].set("customFormat", "1")
+    rows["4"].set("s", "3")
+    assert stock.style(Cell(30, 8)) == 0                      # no cell there
+    assert stock.style(Cell(30, 8), inherited=True) == 2      # its column's
+    assert stock.style(Cell(4, 8), inherited=True) == 3       # its row's comes first
+    assert stock.style(Cell(30, 2), inherited=True) == 0      # a column without a style
+    assert stock.style(Cell(30, 20), inherited=True) == 0     # past every col
+    assert stock.style(Cell(FIRST_INPUT, 8), inherited=True) == 2   # a cell's own

@@ -726,10 +726,31 @@ class Worksheet:
             formula.attrib.pop(name, None)
         formula.text = text
 
-    def style(self, cell: Cell) -> int:
-        """The cell's format, an index into the workbook's :class:`Styles`; 0 when none."""
+    def style(self, cell: Cell, *, inherited: bool = False) -> int:
+        """The cell's format, an index into the workbook's :class:`Styles`; 0 when none.
+
+        ``inherited``: for a position that holds no cell, the format a cell made there
+        takes -- its row's (``s``, when the row has ``customFormat``), else its column's
+        (``col style``), else 0 (ECMA-376 Part 1, 18.3.1.73 ``row``, 18.3.1.13 ``col``).
+        :meth:`write` gives a new cell no format of its own unless asked (``style``), so
+        a caller that wants a template's formatted column to show a value as typed into it
+        passes this."""
         node = self._find(cell)
-        return 0 if node is None else _style_of(node)
+        if node is not None or not inherited:
+            return 0 if node is None else _style_of(node)
+        row = self._by_number.get(cell.row)
+        if row is not None and row.get("customFormat", "").strip().lower() in {"1", "true"}:
+            given = row.get("s", "")
+            if given.isdigit():
+                return int(given)
+        columns = self._root.find(_X + "cols")
+        if columns is not None:
+            for column in columns.iterchildren(_X + "col"):
+                low, high, given = column.get("min", ""), column.get("max", ""), \
+                    column.get("style", "")
+                if low.isdigit() and high.isdigit() and int(low) <= cell.column <= int(high):
+                    return int(given) if given.isdigit() else 0
+        return 0
 
     def _read(self, node: Element):
         kind = node.get("t", "n")
