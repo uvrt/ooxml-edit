@@ -55,7 +55,8 @@ package.save("out.zip")
 - **`ooxml_edit.sheets`** (optional): a workbook's cells written losslessly -- text, numbers,
   booleans, dates in the workbook's date system, formulas, blanks -- with shared strings,
   cell formats, rows with or without `r`, tables, the calculation chain and `calcPr` kept
-  in step, and the edit's footprint (`outside_footprint`) written down and checked. What
+  in step, a shared formula group's master released with its members' formulas kept, and
+  the edit's footprint (`outside_footprint`) written down and checked. What
   `charts` writes a chart's embedded workbook with, and xlsx-agent's edits.
 - **`ooxml_edit.tools`** (optional): the plumbing of an agent tool layer -- tool
   definitions for the Anthropic and OpenAI APIs, sessions, refs and batches.
