@@ -93,6 +93,53 @@ class Styles:
             return None
         return fmt.id in BUILTIN_DATE_IDS
 
+    def font(self, index: int) -> Element | None:
+        """Cell format ``index``'s font (the ``font`` of ``fonts`` its ``fontId`` names,
+        ECMA-376 Part 1, 18.8.22), the live element; ``None`` when there is none (an index
+        past the end is format 0's, as for a cell without ``s``)."""
+        xfs = self._xfs()
+        if not xfs:
+            return None
+        xf = xfs[index] if 0 <= index < len(xfs) else xfs[0]
+        raw = xf.get("fontId", "0")
+        fonts = self._root.find(_X + "fonts")
+        if fonts is None or not raw.isdigit():
+            return None
+        found = fonts.findall(_X + "font")
+        number = int(raw)
+        return found[number] if number < len(found) else None
+
+    def wraps_text(self, index: int) -> bool:
+        """Whether cell format ``index`` wraps its text (``alignment wrapText``): what shows
+        a line break in the text as one."""
+        xfs = self._xfs()
+        if not 0 <= index < len(xfs):
+            return False
+        alignment = xfs[index].find(_X + "alignment")
+        return alignment is not None and alignment.get("wrapText", "").strip().lower() in {
+            "1", "true"}
+
+    def with_wrap_text(self, index: int) -> int:
+        """The cell format that is ``index`` with its text wrapped (``alignment
+        wrapText="1"``, ``applyAlignment="1"``) and everything else the same: ``index``
+        itself when it wraps already, an identical existing format, or one appended.
+        Measured in Excel for Mac 16.106 (2026-10-20): a line break shows only in a cell
+        whose format wraps its text; without it the cell shows one line."""
+        xfs = self._xfs()
+        if not 0 <= index < len(xfs):
+            raise IndexError(f"cell format {index} does not exist; the workbook has "
+                             f"{len(xfs)}")
+        if self.wraps_text(index):
+            return index
+        wanted = copy.deepcopy(xfs[index])
+        alignment = wanted.find(_X + "alignment")
+        if alignment is None:
+            alignment = etree.Element(_X + "alignment")
+            wanted.insert(0, alignment)     # alignment is the first child of xf (18.8.45)
+        alignment.set("wrapText", "1")
+        wanted.set("applyAlignment", "1")
+        return self._derived(xfs, xfs[index], wanted)
+
     def with_number_format(self, index: int, number_format: "int | str") -> int:
         """The cell format that is ``index`` with its number format set to
         ``number_format`` -- a built-in id, or a format code, which is found among the
@@ -118,6 +165,11 @@ class Styles:
         wanted.set("numFmtId", str(number))
         if number:
             wanted.set("applyNumberFormat", "1")
+        return self._derived(xfs, base, wanted)
+
+    def _derived(self, xfs: list[Element], base: Element, wanted: Element) -> int:
+        """``wanted`` (a changed copy of ``base``): an identical format's index, or its own
+        once appended."""
         key = _key(wanted)
         index_of = self._xf_lookup(xfs)
         if key in index_of:

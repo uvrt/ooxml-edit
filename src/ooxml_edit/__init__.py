@@ -7,6 +7,8 @@ What every Office Open XML editor needs, whatever the document inside the packag
 * :mod:`.xml` -- lxml helpers, a namespace registry and schema-ordered insertion.
 * :mod:`.history` -- undo/redo/batch over package snapshots.
 * :mod:`.stamp` -- durable ids written into an ``extLst`` extension.
+* :mod:`.markdown` -- a small Markdown subset (emphasis, strikethrough, code spans,
+  escapes, lines and lists) read into runs with their marks and written back.
 
 And two optional subpackages, imported explicitly and never by the core:
 
@@ -24,4 +26,4 @@ register their namespaces and child-order tables with :mod:`.xml` and subclass t
 format.
 """
 
-__version__ = "0.53.0"
+__version__ = "0.54.0"

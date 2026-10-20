@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ooxml-edit"
-version = "0.53.0"
+version = "0.54.0"
 description = "Lossless, undoable editing of OOXML packages (docx, pptx, xlsx) over lxml"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -32,7 +32,9 @@ classifiers = [
 dependencies = ["lxml>=4.9"]
 
 [project.optional-dependencies]
-dev = ["pytest>=7"]
+# markdown-it-py: tests only, to check ooxml_edit.markdown against the parser the format
+# libraries use for whole documents (tests/test_markdown.py skips without it).
+dev = ["pytest>=7", "markdown-it-py>=3"]
 
 [project.urls]
 Repository = "https://github.com/uvrt/ooxml-edit"
