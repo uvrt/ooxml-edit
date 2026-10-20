@@ -52,12 +52,17 @@ package.save("out.zip")
 - **`ooxml_edit.charts`** (optional): charts with their embedded workbooks, new charts from
   data, and SmartArt diagrams, edited the same way in a deck or a Word document.
   See [docs/CHARTS.md](docs/CHARTS.md).
+- **`ooxml_edit.sheets`** (optional): a workbook's cells written losslessly -- text, numbers,
+  booleans, dates in the workbook's date system, formulas, blanks -- with shared strings,
+  cell formats, rows with or without `r`, tables, the calculation chain and `calcPr` kept
+  in step, and the edit's footprint (`outside_footprint`) written down and checked. What
+  `charts` writes a chart's embedded workbook with, and xlsx-agent's edits.
 - **`ooxml_edit.tools`** (optional): the plumbing of an agent tool layer -- tool
   definitions for the Anthropic and OpenAI APIs, sessions, refs and batches.
   See [docs/TOOLS.md](docs/TOOLS.md) and [docs/TOOLS-ROADMAP.md](docs/TOOLS-ROADMAP.md).
 
-Not in it: any one format's vocabulary (no PresentationML, WordprocessingML or
-SpreadsheetML -- `tests/test_neutrality.py` checks this), rendering (that is
+Not in it: any one format's vocabulary in the core (no PresentationML, WordprocessingML or
+SpreadsheetML outside the optional subpackages -- `tests/test_neutrality.py` checks this), rendering (that is
 [ooxml-common](https://github.com/uvrt/ooxml-common)'s), and any one format's tools.
 Why, and how it relates to ooxml-common: [docs/DESIGN.md](docs/DESIGN.md).
 
@@ -75,7 +80,8 @@ python -m pytest -m provider     # online checks; need ANTHROPIC_API_KEY (and
 ```
 
 The tests build the small packages they need (`tests/synthetic.py`, and
-`tests/charts_synthetic.py` for charts of every kind, their workbooks and SmartArt); no
+`tests/charts_synthetic.py` for charts of every kind, their workbooks and SmartArt, and
+`tests/sheets_synthetic.py`, a made-up shop's stock-list template, for `sheets`); no
 Office document is committed here. Chart edits are checked against the embedded workbook
 by an independent reader, `tests/xlsx.py`. See [CONTRIBUTING.md](CONTRIBUTING.md).
 

@@ -238,3 +238,64 @@ def test_importing_the_core_never_imports_the_tools_subpackage():
         [sys.executable, "-c", code], capture_output=True, text=True, cwd=str(PACKAGE.parent)
     )
     assert completed.returncode == 0, completed.stderr
+
+
+# -- the sheets subpackage ---------------------------------------------------------------------
+
+SHEETS = PACKAGE / "sheets"
+
+
+def test_the_sheets_subpackage_has_its_modules():
+    assert {path.stem for path in SHEETS.glob("*.py")} >= {
+        "__init__", "workbook", "styles", "footprint"}
+
+
+@pytest.mark.parametrize("module", sorted(SHEETS.glob("*.py")), ids=lambda path: path.stem)
+def test_sheets_import_only_the_standard_library_lxml_and_the_core(module):
+    """SpreadsheetML is its vocabulary; charts, tools and the format libraries are not."""
+    tree = ast.parse(module.read_text(encoding="utf-8"))
+    stdlib = set(sys.stdlib_module_names)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            if node.level:
+                assert node.level <= 2, f"sheets/{module.name} reaches outside ooxml_edit"
+                parts = (node.module or "").split(".")
+                assert "charts" not in parts and "tools" not in parts, module.name
+                continue
+            names = [node.module or ""]
+        elif isinstance(node, ast.Import):
+            names = [alias.name for alias in node.names]
+        else:
+            continue
+        for name in names:
+            top = name.partition(".")[0]
+            assert top in stdlib or top in ALLOWED_THIRD_PARTY or top == "ooxml_edit", (
+                f"sheets/{module.name} imports {name}")
+            assert not name.startswith(("ooxml_edit.charts", "ooxml_edit.tools")), name
+
+
+@pytest.mark.parametrize("module", _modules(), ids=lambda path: path.stem)
+def test_the_core_does_not_import_the_sheets_subpackage(module):
+    tree = ast.parse(module.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            names = [getattr(node, "module", None) or ""] + [alias.name for alias in node.names]
+            assert not any("sheets" in name.split(".") for name in names), (
+                f"{module.name} imports the sheets subpackage")
+
+
+def test_importing_sheets_registers_nothing_and_loads_no_charts():
+    code = (
+        "import sys\n"
+        "import ooxml_edit.sheets\n"
+        "from ooxml_edit.xml import NAMESPACES, CHILD_ORDER\n"
+        "assert set(NAMESPACES) == {'r', 'mc', 'ct', 'pr'}, NAMESPACES\n"
+        "assert not CHILD_ORDER, CHILD_ORDER\n"
+        "loaded = sorted(m for m in sys.modules\n"
+        "                if m.startswith(('ooxml_edit.charts', 'ooxml_edit.tools')))\n"
+        "assert not loaded, loaded\n"
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, cwd=str(PACKAGE.parent)
+    )
+    assert completed.returncode == 0, completed.stderr
