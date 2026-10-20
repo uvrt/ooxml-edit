@@ -289,7 +289,8 @@ def test_a_space_at_a_marks_end_does_not_turn_lines_into_text():
 
 
 @pytest.mark.parametrize("text", ["**a* " * 8000, "*a " * 12000, "~~ a" * 12000,
-                                  "`a" * 16000, "_" * 40000])
+                                  "`a" * 16000, "_" * 40000],
+                         ids=["strong-em", "em", "strike", "backticks", "underscores"])
 def test_long_text_is_read_in_linear_time(text):
     import time
 
