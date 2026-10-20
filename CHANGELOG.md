@@ -2,6 +2,19 @@
 
 Versions are those in `pyproject.toml`; none is published to PyPI yet.
 
+## 0.55.0 -- unreleased
+- Contact sheets narrow their tiles instead of refusing (round 10, O4): tiles too wide for
+  the image's 2,576 px edge side by side are drawn at the widest that fit
+  (`tiles.tiling_of`; two columns of 1,280 px, 2,584 px, are 1,276 px each), and tiles too
+  tall at the widest that fit for their shapes (`tiles.fit`: each tile's height over its
+  width, a tile `ceil(width * ratio)` px tall as resvg sizes it); a call's own `width` over
+  a tile's 1,280 px stands in as 1,280.  `Tiling.shrunk` (`{"from", "why"}`) and
+  `tiles.narrowed_note` say from what width and why, for the result; only tiles that would
+  not fit even at 160 px are refused, naming how many columns or views would.
+- The shared `undo`'s `scope` says what each kind takes: a slide's (`256`) or a sheet's
+  (`Sales`) changes; a document takes none (refused, as before).  One or two estimated
+  tokens more in every format's definitions.
+
 ## 0.54.0 -- unreleased
 - `ooxml_edit.markdown` (core, lane X, X3b): a small Markdown subset read into runs with
   their marks and written back, without a Markdown library -- `**bold**`, `*italic*` /

@@ -228,8 +228,9 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
          {"doc": _DOC,
           "steps": integer("Steps, 1-50. Default 1.", minimum=1, maximum=50, optional=True),
           "redo": boolean("Redo instead. Default false.", optional=True),
-          "scope": string("Decks: only this slide's changes, e.g. 256. Default: the latest, "
-                          "anywhere.", optional=True)},
+          # Round 10: each kind's scope (Format.undo_scope); a document takes none.
+          "scope": string("A slide's (256) or sheet's (Sales) changes only. Default: the "
+                          "latest, anywhere.", optional=True)},
          batchable=False, role=EDIT),
     # S16: describe, one schema for every kind
     Spec("describe",
