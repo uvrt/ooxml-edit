@@ -11,8 +11,8 @@ import pytest
 from lxml import etree
 
 from ooxml_edit.tools import ToolError, shared, tiles
-from ooxml_edit.tools.tiles import (GAP, LABEL_HEIGHT, MAX_TILES, Tiling, check_size, tiled_svg,
-                                    tiling_of)
+from ooxml_edit.tools.tiles import (GAP, LABEL_HEIGHT, MAX_TILES, MIN_WIDTH, Tiling, check_size, fit,
+                                    tiled_size, tiled_svg, tiling_of)
 
 SVG = "{http://www.w3.org/2000/svg}"
 
@@ -63,19 +63,50 @@ def test_bounds_are_named(options, field, bound):
     assert caught.value.field == field and bound in caught.value.message
 
 
-def test_a_call_width_out_of_the_tiles_bounds_is_named_as_width():
-    with pytest.raises(ToolError) as caught:
-        of({}, 10, width=2000)
-    assert caught.value.field == "width" and "160-1280" in caught.value.message
+def test_a_call_width_over_a_tile_s_is_taken_as_the_widest_tile_and_said():
+    """Round 10, O4: ``width`` standing in for the tile's is at most 1,280 px."""
+    tiling = of({"columns": 1}, 10, width=2000)
+    assert (tiling.columns, tiling.width) == (1, 1280)
+    assert tiling.shrunk == {"from": 2000, "why": "width 2000 is over a tile's 1280 px"}
+    assert of({"columns": 1}, 10, width=1280).shrunk is None
 
 
-def test_an_image_too_wide_says_what_fits():
+def test_tiles_too_wide_side_by_side_are_narrowed_to_the_widest_that_fit():
+    """Round 10, O4: two columns of the call's 1,280 px are 2,584 px; 1,276 px fit."""
+    tiling = of({"columns": 2}, 4, width=1280)
+    assert tiling.width == 1276 and tiling.total_width <= 2576 < Tiling(2, 1277).total_width
+    assert tiling.shrunk["from"] == 1280
+    assert "2584 px wide, over the 2576 px limit" in tiling.shrunk["why"]
+    wide = of({"columns": 8, "width": 400}, 16)
+    assert wide.total_width <= 2576 < Tiling(8, wide.width + 1).total_width
+    assert wide.shrunk["from"] == 400
+    # Narrowed from what the call asked, both reasons kept.
+    both = of({"columns": 2}, 4, width=2000)
+    assert both.width == 1276 and both.shrunk["from"] == 2000
+    assert "over a tile's 1280 px; then 2 columns of 1280 px" in both.shrunk["why"]
+
+
+def test_columns_that_do_not_fit_even_at_the_narrowest_tile_are_refused():
     with pytest.raises(ToolError) as caught:
-        of({"columns": 8, "width": 400}, 16)
-    message = caught.value.message
-    assert caught.value.code == "limit" and "2576 px" in message
-    widest = int(re.search(r"at most (\d+)", message).group(1))
-    assert Tiling(8, widest).total_width <= 2576 < Tiling(8, widest + 1).total_width
+        of({"columns": 8}, 16, max_edge=1000)
+    assert caught.value.code == "limit" and caught.value.field == "sheet.columns"
+    assert f"even at a tile width of {MIN_WIDTH}" in caught.value.message
+    assert "at most 5 columns" in caught.value.message
+
+
+def test_tiles_too_tall_are_narrowed_to_the_widest_that_fit():
+    """Round 10, O4: 8 rows of Letter pages at 360 px are too tall; the widest that fit."""
+    tiling = of({}, 30)
+    ratios = [11 / 8.5] * 30
+    narrowed = fit(tiling, ratios, name="sheet", what="slides")
+    heights = lambda width: [-(-width * 22 // 17)] * 30  # noqa: E731
+    assert tiled_size(narrowed, heights(narrowed.width))[1] <= 2576
+    assert tiled_size(Tiling(4, narrowed.width + 1), heights(narrowed.width + 1))[1] > 2576
+    assert narrowed.shrunk["from"] == 360 and "px tall, over the 2576 px limit" in narrowed.shrunk["why"]
+    assert fit(of({}, 8), [9 / 16] * 8, name="sheet") == of({}, 8)        # fits: as it was
+    with pytest.raises(ToolError) as caught:
+        fit(of({"columns": 1}, 30), [2.0] * 30, name="sheet", what="pages")
+    assert caught.value.field == "pages" and "at most 7 pages" in caught.value.message
 
 
 def test_an_image_too_tall_says_how_many_fit():
