@@ -44,7 +44,7 @@ import datetime as _dt
 import math
 import re
 from dataclasses import dataclass, replace
-from typing import Iterator
+from typing import Iterable, Iterator
 
 from lxml import etree
 from ..opc import OpcPackage, normalize_part_path
@@ -673,7 +673,8 @@ class Worksheet:
             area = None
         return SharedGroup(si, master[0], master[1].text, area, tuple(members))
 
-    def release_shared(self, cell: Cell, translate) -> list[Cell]:
+    def release_shared(self, cell: Cell, translate, *,
+                       written: "Iterable[Cell]" = ()) -> list[Cell]:
         """Take the master of a shared formula group out of its group, so that it can be
         written (:meth:`write` refuses a master other cells use), every other member keeping
         its formula; the cells whose formula changed.  Nothing to do -- ``[]`` -- for a cell
@@ -694,7 +695,9 @@ class Worksheet:
         group = self.shared_group(cell)
         if group is None or group.master != cell:
             return []
-        others = [member for member in group.members if member != cell]
+        skipped = set(written)
+        others = [member for member in group.members if member != cell
+                  and member not in skipped]
         moved = {member: translate(group.text, member.row - cell.row,
                                    member.column - cell.column) for member in others[:1]}
         if others:

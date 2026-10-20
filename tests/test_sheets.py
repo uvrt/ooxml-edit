@@ -523,3 +523,21 @@ def test_a_new_cell_s_inherited_format_is_its_row_s_then_its_column_s():
     assert stock.style(Cell(30, 2), inherited=True) == 0      # a column without a style
     assert stock.style(Cell(30, 20), inherited=True) == 0     # past every col
     assert stock.style(Cell(FIRST_INPUT, 8), inherited=True) == 2   # a cell's own
+
+
+def test_members_written_in_the_same_step_are_given_nothing():
+    _, book = _open()
+    stock = book.sheet("Stock")
+    written = [Cell(FIRST_INPUT + 1, 6), Cell(FIRST_INPUT + 2, 6)]
+    changed = stock.release_shared(Cell(FIRST_INPUT, 6), _moved, written=written)
+    assert changed == [Cell(FIRST_INPUT, 6), Cell(FIRST_INPUT + 3, 6)]
+    group = stock.shared_group(Cell(FIRST_INPUT + 4, 6))
+    assert group.master == Cell(FIRST_INPUT + 3, 6)
+    assert group.ref.ref == f"F{FIRST_INPUT + 3}:F{FIRST_INPUT + 4}"
+    for cell in written + [Cell(FIRST_INPUT, 6)]:
+        stock.write(cell, 1)                      # each a member or a plain formula now
+    every = [Cell(FIRST_INPUT + i, 6) for i in range(5)]
+    _, book = _open()
+    stock = book.sheet("Stock")
+    assert stock.release_shared(Cell(FIRST_INPUT, 6), _moved, written=every[1:]) == every[:1]
+    assert stock.content(every[0]).formula_type == "normal"
