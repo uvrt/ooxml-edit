@@ -13,6 +13,19 @@ process and importing a renderer costs more than most renders (measured for one 
 for the interpreter, 0.25-0.4 s for the imports and 0.35 s more for the first render's font
 scan, against 0.33 s for a warm render).
 
+**Starting is not the call's time.**  A new worker first runs the pool's ``warm_up`` tasks
+-- a format's imports and font index -- and only then takes work; starting and warming are
+bounded by ``start_timeout``, apart from any task's deadline, and waiting for a worker that
+is starting does not count against a deadline either.  So a cold pool, or a worker replaced
+after a kill, cannot make a call time out, nor a slow start kill a worker again and again.
+:meth:`WorkerPool.warm` starts the workers ahead of the first call, in the background.
+
+**How many.**  :func:`default_workers` is what this process may use -- the CPUs it may run
+on and its container's CPU quota (cgroup v2 ``cpu.max``, v1 ``cpu.cfs_quota_us``), never
+``os.cpu_count()`` alone, which counts the host's -- capped at
+:data:`MAX_DEFAULT_WORKERS`.  :func:`run_all` runs several tasks at once over a pool's
+workers, results in order: one call's views, in chunks.
+
 **Three runners.**
 
 * :class:`WorkerPool` -- :mod:`multiprocessing` workers, the default.  ``spawn`` is the
@@ -40,6 +53,7 @@ from __future__ import annotations
 
 import importlib
 import io
+import math
 import logging
 import multiprocessing
 import os
@@ -51,7 +65,8 @@ import sys
 import threading
 import time
 import weakref
-from typing import Any, Callable
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any, Callable, Sequence
 
 from .results import ToolError
 
@@ -62,6 +77,129 @@ TASK_MARK = "__ooxml_edit_task__"
 
 #: The module a :class:`SubprocessPool` worker runs: its fixed entry point.
 ENTRY_POINT = "ooxml_edit.tools.subworker"
+
+
+#: The most workers :func:`default_workers` gives: each is a process with its own renderer
+#: and font index (a few hundred MB), and a call's chunks rarely gain past eight.
+MAX_DEFAULT_WORKERS = 8
+#: :attr:`_Pool.start_timeout`'s default: seconds to start one worker and warm it.
+START_TIMEOUT = 120.0
+
+
+def _cgroup_paths() -> tuple[str | None, str | None]:
+    """This process's cgroup: its v2 path, and its v1 ``cpu`` controller's path."""
+    v2 = v1 = None
+    try:
+        with open("/proc/self/cgroup", encoding="utf-8") as handle:
+            for line in handle:
+                number, _, rest = line.strip().partition(":")
+                controllers, _, path = rest.partition(":")
+                if number == "0" and controllers == "":
+                    v2 = path or "/"
+                elif "cpu" in controllers.split(","):
+                    v1 = path or "/"
+    except OSError:
+        pass
+    return v2, v1
+
+
+def _read(path: str) -> str | None:
+    try:
+        with open(path, encoding="utf-8") as handle:
+            return handle.read().strip()
+    except OSError:
+        return None
+
+
+def _ancestors(path: str) -> list[str]:
+    """``path`` and every cgroup above it, the root last: a limit anywhere above holds."""
+    parts = [part for part in path.split("/") if part]
+    return ["/" + "/".join(parts[:end]) for end in range(len(parts), -1, -1)]
+
+
+def cgroup_cpu_quota(root: str = "/sys/fs/cgroup") -> float | None:
+    """The CPUs this process's container may use, as its cgroup's quota says -- v2
+    ``cpu.max`` (``"200000 100000"``: 2), else v1 ``cpu.cfs_quota_us`` over
+    ``cpu.cfs_period_us`` -- the smallest along the cgroup and those above it; ``None``
+    where none is set (``max``, ``-1``) or there is no cgroup file system (macOS, Windows)."""
+    v2, v1 = _cgroup_paths()
+    quotas: list[float] = []
+    for path in _ancestors(v2 or "/"):
+        text = _read(os.path.join(root, path.lstrip("/"), "cpu.max"))
+        if text:
+            fields = text.split()
+            if fields[0] != "max" and len(fields) > 1:
+                try:
+                    quota, period = float(fields[0]), float(fields[1])
+                except ValueError:
+                    continue
+                if quota > 0 and period > 0:
+                    quotas.append(quota / period)
+    if not quotas:
+        bases = [os.path.join(root, name) for name in ("cpu", "cpu,cpuacct", "cpuacct,cpu")]
+        for base in bases:
+            for path in _ancestors(v1 or "/"):
+                quota = _read(os.path.join(base, path.lstrip("/"), "cpu.cfs_quota_us"))
+                period = _read(os.path.join(base, path.lstrip("/"), "cpu.cfs_period_us"))
+                try:
+                    q, p = float(quota or "-1"), float(period or "0")
+                except ValueError:
+                    continue
+                if q > 0 and p > 0:
+                    quotas.append(q / p)
+            if quotas:
+                break
+    return min(quotas) if quotas else None
+
+
+def available_cpus() -> int:
+    """The CPUs this process may use: the fewest of those it may run on
+    (``os.process_cpu_count``, ``os.sched_getaffinity``) and its container's CPU quota
+    (:func:`cgroup_cpu_quota`, rounded up); ``os.cpu_count()`` only where neither says.
+    At least 1."""
+    counts: list[int] = []
+    process_count = getattr(os, "process_cpu_count", None)            # 3.13+
+    affinity = getattr(os, "sched_getaffinity", None)                  # Linux
+    try:
+        if process_count is not None:
+            found = process_count()
+            if found:
+                counts.append(found)
+        elif affinity is not None:
+            counts.append(len(affinity(0)))
+    except OSError:
+        pass
+    if not counts:
+        counts.append(os.cpu_count() or 1)
+    quota = cgroup_cpu_quota()
+    if quota is not None:
+        counts.append(math.ceil(quota))
+    return max(1, min(counts))
+
+
+def default_workers() -> int:
+    """The workers a toolbox starts by default: :func:`available_cpus`, at most
+    :data:`MAX_DEFAULT_WORKERS`."""
+    return max(1, min(available_cpus(), MAX_DEFAULT_WORKERS))
+
+
+def run_all(runner: Any, fn: Callable[..., Any], calls: Sequence[tuple],
+            timeouts: Sequence[float]) -> list[Any]:
+    """``fn(*args)`` for each ``args`` of ``calls``, at once over ``runner``'s workers (a
+    thread per call waits on ``runner.run``), each with its own deadline; the results in
+    order, a call's exception in its place (raised by none: the caller decides).  One call
+    runs in this thread."""
+    def one(index: int) -> Any:
+        try:
+            return runner.run(fn, *calls[index], timeout=timeouts[index])
+        except BaseException as exc:  # noqa: BLE001 -- reported in its place
+            return exc
+
+    if len(calls) <= 1:
+        return [one(index) for index in range(len(calls))]
+    with ThreadPoolExecutor(max_workers=len(calls),
+                            thread_name_prefix="ooxml-edit-tools-run-all") as executor:
+        return list(executor.map(one, range(len(calls))))
 
 
 def daemonic() -> bool:
@@ -129,6 +267,12 @@ def resolve_task(reference: str) -> Callable[..., Any]:
     return fn
 
 
+@worker_task
+def _ready() -> int:
+    """What a new worker is asked first: it answers once it is running."""
+    return os.getpid()
+
+
 # -- the subprocess protocol ---------------------------------------------------------------------
 #
 # A frame is an 8-byte big-endian length and that many bytes of pickle.  The envelope of a
@@ -194,18 +338,27 @@ def read_frame(stream: Any) -> Any:
 
 
 class _Pool:
-    """At most ``size`` workers, started when first needed, each serving one task at a time."""
+    """At most ``size`` workers, started when first needed, each serving one task at a time.
 
-    def __init__(self, size: int) -> None:
+    A new worker runs ``warm_up`` -- functions of no arguments, registered tasks for a
+    subprocess worker -- before its first task; starting and warming one is bounded by
+    ``start_timeout`` and is no task's time (see the module's notes)."""
+
+    def __init__(self, size: int, *, warm_up: Sequence[Callable[[], Any]] = (),
+                 start_timeout: float = START_TIMEOUT) -> None:
         self.size = size
+        #: What each new worker runs before its first task (a failure is logged, not fatal).
+        self.warm_up: list[Callable[[], Any]] = list(warm_up)
+        self.start_timeout = start_timeout
         self._idle: list[Any] = []
         self._count = 0
+        self._starting = 0
         self._closed = False
         self._condition = threading.Condition()
         #: Workers killed at a deadline, for the record (and the tests).
         self.killed: list[int] = []
 
-    def _start(self, deadline: float, timeout: float) -> Any:
+    def _start(self) -> Any:
         raise NotImplementedError
 
     def pids(self) -> list[int]:
@@ -213,7 +366,16 @@ class _Pool:
         with self._condition:
             return [worker.pid or 0 for worker in self._idle]
 
-    def _acquire(self, deadline: float, timeout: float) -> Any:
+    @property
+    def starting(self) -> int:
+        """Workers being started (and warmed) now."""
+        with self._condition:
+            return self._starting
+
+    def _acquire(self, deadline: float, timeout: float) -> tuple[Any, float]:
+        """An idle worker, or a new one, and the seconds of the wait that do not count
+        against ``deadline``: starting one, or waiting while workers start."""
+        uncounted = 0.0
         with self._condition:
             while True:
                 if self._closed:
@@ -221,26 +383,85 @@ class _Pool:
                 if self._idle:
                     worker = self._idle.pop()
                     if worker.alive():
-                        return worker
+                        return worker, uncounted
                     self._count -= 1
                     self._forget(worker)
                     worker.dispose()
                     continue
                 if self._count < self.size:
                     self._count += 1
+                    self._starting += 1
                     break
-                remaining = deadline - time.monotonic()
+                began = time.monotonic()
+                if self._starting:
+                    # A worker is starting (warm-up, or a replacement): not the call's time.
+                    self._condition.wait(self.start_timeout)
+                    uncounted += time.monotonic() - began
+                    continue
+                remaining = deadline + uncounted - began
                 if remaining <= 0:
                     raise ToolError("timeout", f"no worker was free within {timeout:g} s",
                                     details={"timeout": timeout})
                 self._condition.wait(remaining)
+        began = time.monotonic()
         try:
-            return self._start(deadline, timeout)
+            worker = self._start()
         except BaseException:
             with self._condition:
                 self._count -= 1
-                self._condition.notify()
+                self._starting -= 1
+                self._condition.notify_all()
             raise
+        with self._condition:
+            self._starting -= 1
+            self._condition.notify_all()
+        return worker, uncounted + time.monotonic() - began
+
+    def warm(self, count: int | None = None, *, wait: bool = False) -> None:
+        """Start workers up to ``count`` (``None``: :attr:`size`) and warm them, in
+        background threads; ``wait`` returns when they are ready (or failed: logged)."""
+        want = self.size if count is None else max(0, min(count, self.size))
+        with self._condition:
+            if self._closed:
+                return
+            new = max(0, want - self._count)
+            self._count += new
+            self._starting += new
+        threads = [threading.Thread(target=self._warm_one, daemon=True,
+                                    name="ooxml-edit-tools-warm") for _ in range(new)]
+        for thread in threads:
+            thread.start()
+        if wait:
+            for thread in threads:
+                thread.join()
+            with self._condition:            # and those another call is starting
+                self._condition.wait_for(lambda: not self._starting or self._closed,
+                                         self.start_timeout)
+
+    def _warm_one(self) -> None:
+        try:
+            worker = self._start()
+        except BaseException as exc:  # noqa: BLE001 -- a call that needs a worker meets it again
+            logger.debug("a worker did not start ahead of use: %s", exc)
+            with self._condition:
+                self._count -= 1
+                self._starting -= 1
+                self._condition.notify_all()
+            return
+        with self._condition:
+            self._starting -= 1
+        self._release(worker)
+
+    def _warm_tasks(self, run: Callable[[Callable[[], Any]], Any]) -> None:
+        """Run each warm-up task with ``run`` (the worker's own way); a failure is logged."""
+        for fn in [_ready, *self.warm_up]:
+            try:
+                run(fn)
+            except _StartFailed:
+                raise
+            except Exception as exc:  # noqa: BLE001 -- the worker still serves
+                logger.warning("a worker's warm-up %s failed: %s: %s",
+                               getattr(fn, "__qualname__", fn), type(exc).__name__, exc)
 
     def _forget(self, worker: Any) -> None:
         """A worker leaves the pool for good (called with the condition held)."""
@@ -252,7 +473,7 @@ class _Pool:
                 self._forget(worker)
             else:
                 self._idle.append(worker)
-                self._condition.notify()
+                self._condition.notify_all()
                 return
         worker.stop()
 
@@ -262,7 +483,7 @@ class _Pool:
         worker.kill()
         with self._condition:
             self._count -= 1
-            self._condition.notify()
+            self._condition.notify_all()
 
     def _close_idle(self) -> list[Any]:
         with self._condition:
@@ -276,6 +497,10 @@ class _Pool:
 
 
 # -- multiprocessing workers -------------------------------------------------------------------
+
+
+class _StartFailed(ToolError):
+    """A worker did not start, or not in time: raised from its warm-up, never a task's."""
 
 
 class _NoChildren(Exception):
@@ -325,6 +550,21 @@ class _Worker:
     @property
     def pid(self) -> int | None:
         return self.process.pid
+
+    def ask(self, fn: Callable[[], Any], timeout: float) -> Any:
+        """``fn()`` in this worker, waited for at most ``timeout`` (its start, its warm-up)."""
+        try:
+            self.conn.send((fn, (), {}))
+            if not self.conn.poll(max(0.0, timeout)):
+                raise _StartFailed("timeout", f"the worker process did not start within "
+                                   f"{timeout:g} s", details={"timeout": timeout})
+            status, value = self.conn.recv()
+        except (EOFError, ConnectionError, BrokenPipeError, OSError) as exc:
+            raise _StartFailed("internal", f"the worker process exited as it started: "
+                            f"{exc or 'it exited'}") from None
+        if status == "error":
+            raise value
+        return value
 
     def alive(self) -> bool:
         return self.process.is_alive()
@@ -530,9 +770,10 @@ class SubprocessPool(_Pool):
 
     ``run(fn, *args, timeout=...)`` returns ``fn(*args)`` from a worker, re-raises what it
     raised, and raises :class:`~.results.ToolError` ``timeout`` when the deadline passes --
-    waiting for a free worker, and starting one, count against it -- after killing the
-    worker; the next call starts another.  A worker that dies mid-task is replaced and the
-    call reports ``internal``.  Usable where multiprocessing is not: in a daemonic process.
+    waiting for a busy worker counts against it, starting one and warming it
+    (``warm_up``, bounded by ``start_timeout``) does not -- after killing the worker; the
+    next call starts another.  A worker that dies mid-task is replaced and the call reports
+    ``internal``.  Usable where multiprocessing is not: in a daemonic process.
 
     ``fn`` must be registered (:func:`worker_task`).  One that is not -- an application's
     own function, a lambda, one in ``__main__`` -- runs in-process instead (an
@@ -548,10 +789,12 @@ class SubprocessPool(_Pool):
     Windows).
     """
 
-    def __init__(self, size: int = 2, *, executable: str | None = None) -> None:
+    def __init__(self, size: int = 2, *, executable: str | None = None,
+                 warm_up: Sequence[Callable[[], Any]] = (),
+                 start_timeout: float = START_TIMEOUT) -> None:
         if size < 1:
             raise ValueError("a subprocess pool has at least one worker")
-        super().__init__(size)
+        super().__init__(size, warm_up=warm_up, start_timeout=start_timeout)
         self.executable = executable or sys.executable
         self._inline: InProcess | None = None
         self._warned: set[str] = set()
@@ -576,7 +819,8 @@ class SubprocessPool(_Pool):
             return self._run_inline(fn, args, kwargs, timeout)
         payload = pickle.dumps((args, kwargs), protocol=_PROTOCOL)
         deadline = time.monotonic() + timeout
-        worker = self._acquire(deadline, timeout)
+        worker, uncounted = self._acquire(deadline, timeout)
+        deadline += uncounted
         try:
             worker.send(("task", reference, payload))
             reply = worker.wait(deadline - time.monotonic())
@@ -608,10 +852,34 @@ class SubprocessPool(_Pool):
                            name)
         return self._inline.run(fn, *args, timeout=timeout, **kwargs)
 
-    def _start(self, deadline: float, timeout: float) -> _Subprocess:
-        worker = _Subprocess(self.executable, deadline, timeout)
+    def _start(self) -> _Subprocess:
+        timeout = self.start_timeout
+        worker = _Subprocess(self.executable, time.monotonic() + timeout, timeout)
         with self._condition:
             self._all.add(worker)
+
+        def ask(fn: Callable[[], Any]) -> Any:
+            reference = task_reference(fn)
+            if reference is None:
+                raise RuntimeError("not a registered worker task (ooxml_edit.tools.worker_task)")
+            try:
+                worker.send(("task", reference, pickle.dumps(((), {}), protocol=_PROTOCOL)))
+                reply = worker.wait(timeout)
+            except _Gone as exc:
+                raise _StartFailed("internal", f"the worker process exited as it started: "
+                                   f"{exc}") from None
+            if reply is None:
+                raise _StartFailed("timeout", f"the worker process did not start within "
+                                   f"{timeout:g} s", details={"timeout": timeout})
+            return _outcome(reply)
+
+        try:
+            self._warm_tasks(ask)
+        except BaseException:
+            with self._condition:
+                self._all.discard(worker)
+            worker.kill()
+            raise
         return worker
 
     def _forget(self, worker: Any) -> None:
@@ -693,6 +961,9 @@ class InProcess:
     def pids(self) -> list[int]:
         return []
 
+    def warm(self, count: int | None = None, *, wait: bool = False) -> None:
+        """Nothing to start: the work runs in this process."""
+
     def close(self) -> None:
         self._closed = True
 
@@ -714,8 +985,9 @@ class WorkerPool(_Pool):
 
     ``run(fn, *args, timeout=...)`` returns ``fn(*args)`` from a worker, re-raises what it
     raised, and raises :class:`~.results.ToolError` ``timeout`` when the deadline passes --
-    waiting for a free worker counts against the deadline too -- after killing the worker.
-    A worker that dies mid-task is replaced and the call reports ``internal``.
+    waiting for a busy worker counts against the deadline too; starting a worker and
+    running its ``warm_up`` does not (``start_timeout`` bounds it) -- after killing the
+    worker.  A worker that dies mid-task is replaced and the call reports ``internal``.
 
     ``size=0`` runs every task in-process (:class:`InProcess`, one at a time).
 
@@ -733,13 +1005,14 @@ class WorkerPool(_Pool):
     """
 
     def __init__(self, size: int = 2, *, start_method: str = "spawn",
-                 fallback: bool | str = True) -> None:
+                 fallback: bool | str = True, warm_up: Sequence[Callable[[], Any]] = (),
+                 start_timeout: float = START_TIMEOUT) -> None:
         if size < 0:
             raise ValueError("a pool's size is 0 (in-process) or more")
         if not any(fallback is value or fallback == value and type(fallback) is type(value)
                    for value in FALLBACKS):
             raise ValueError(f"fallback is one of {FALLBACKS}, not {fallback!r}")
-        super().__init__(size)
+        super().__init__(size, warm_up=warm_up, start_timeout=start_timeout)
         self._context = multiprocessing.get_context(start_method)
         self._fallback = fallback
         self._inline: InProcess | None = None
@@ -785,7 +1058,8 @@ class WorkerPool(_Pool):
             if self._inline is not None:
                 return self._inline
             if self._subprocesses is None:
-                self._subprocesses = SubprocessPool(max(1, self.size))
+                self._subprocesses = SubprocessPool(max(1, self.size), warm_up=self.warm_up,
+                                                    start_timeout=self.start_timeout)
                 # One record of the workers killed at a deadline, whichever ran them.
                 self._subprocesses.killed = self.killed
                 logger.warning("ooxml-edit tools run their work in subprocess workers: %s",
@@ -815,7 +1089,8 @@ class WorkerPool(_Pool):
         if self._subprocesses is not None:
             return self._run_elsewhere(self._subprocesses, fn, args, kwargs, deadline)
         try:
-            worker = self._acquire(deadline, timeout)
+            worker, uncounted = self._acquire(deadline, timeout)
+            deadline += uncounted
         except _NoChildren as exc:
             if not self._fallback:
                 raise AssertionError(str(exc)) from None
@@ -852,6 +1127,15 @@ class WorkerPool(_Pool):
             return self._subprocesses.pids()
         return super().pids()
 
+    def warm(self, count: int | None = None, *, wait: bool = False) -> None:
+        """Start and warm workers ahead of use (:meth:`_Pool.warm`); in-process, nothing."""
+        if self._inline is not None:
+            return
+        if self._subprocesses is not None:
+            self._subprocesses.warm(count, wait=wait)
+            return
+        super().warm(count, wait=wait)
+
     def close(self) -> None:
         if self._inline is not None:
             self._inline.close()
@@ -866,5 +1150,11 @@ class WorkerPool(_Pool):
     def __exit__(self, *exc: Any) -> None:
         self.close()
 
-    def _start(self, deadline: float, timeout: float) -> _Worker:
-        return _Worker(self._context)
+    def _start(self) -> _Worker:
+        worker = _Worker(self._context)
+        try:
+            self._warm_tasks(lambda fn: worker.ask(fn, self.start_timeout))
+        except BaseException:
+            worker.kill()
+            raise
+        return worker

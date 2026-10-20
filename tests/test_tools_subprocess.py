@@ -141,7 +141,7 @@ def test_the_worker_refuses_an_unregistered_reference_before_reading_its_argumen
     marker = tmp_path / "touched"
     with SubprocessPool(1) as pool:
         deadline = time.monotonic() + 60
-        worker = pool._acquire(deadline, 60)
+        worker, _ = pool._acquire(deadline, 60)
         try:
             for reference in ("os:system", "tools_toys:not_registered", "builtins:eval",
                               "__main__:anything", "tools_toys:<locals>.f"):

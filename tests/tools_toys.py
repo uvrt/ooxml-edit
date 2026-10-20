@@ -16,6 +16,7 @@ The worker functions are module-level so a spawned worker process can import the
 
 from __future__ import annotations
 
+import os
 import struct
 import time
 import warnings
@@ -440,3 +441,26 @@ def exit_hard() -> None:
 def not_registered() -> int:
     import os
     return os.getpid()
+
+
+@worker_task
+def slow_warm_up() -> None:
+    """A warm-up that takes longer than the deadlines the tests give their tasks."""
+    time.sleep(2.0)
+    os.environ["OOXML_EDIT_TOYS_WARMED"] = "1"
+
+
+@worker_task
+def warmed() -> str | None:
+    return os.environ.get("OOXML_EDIT_TOYS_WARMED")
+
+
+@worker_task
+def sleep_then(seconds: float, value: object) -> object:
+    time.sleep(seconds)
+    return value
+
+
+@worker_task
+def failing_warm_up() -> None:
+    raise RuntimeError("this warm-up fails")
