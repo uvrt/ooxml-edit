@@ -17,7 +17,7 @@ standard library only, and no provider SDK. The plan it implements is
 | `tools.sources` | `Rows` (a source's `Dataset`, where it came from, `stale`) and the helpers that qualify, resolve and report sources: rows a tool takes from a dataset or another open document's table (below) |
 | `tools.limits` | size limits, magic-byte checks, image sizes read from headers, and a zip-bomb guard |
 | `tools.worker` | worker processes for rendering and layout whose deadlines are kept: a worker past its deadline is killed and the call reports `timeout`; multiprocessing workers by default, subprocess workers where multiprocessing may not start children, in-process on request (below) |
-| `tools.tiles` | contact sheets, format-neutral: `render`'s `sheet` options checked (`tiling_of`, `check_size`) and the SVG that tiles rendered PNGs with their labels (`tiled_svg`), which a format rasterises |
+| `tools.tiles` | contact sheets, format-neutral: `render`'s `sheet` options checked and narrowed to fit (`tiling_of`, `fit`, `check_size`) and the SVG that tiles rendered PNGs with their labels (`tiled_svg`), which a format rasterises |
 | `tools.logs`, `tools.prompts` | call records with argument digests, not content; the shared system-prompt fragment (mechanics only, no house style) and a reviewer's role line |
 | `tools.shared` | the one definition of each tool every format shares (open, new, save, close, undo, find, replace, render, check, charts, SmartArt, properties, reading an input's text) and the generic `batch`; a library adds its handler with `@shared.handler("render", kind=...)`, and lists `shared.SESSION_TOOLS`, whose handlers serve every kind. The one module that names formats, in its descriptions only |
 
@@ -136,9 +136,13 @@ default 4, and never more than the tiles. With the defaults the image is 1,480 p
 within the standard tier's 1,568 px, so no provider scales it down. Each tile's PNG is
 placed at its own pixel size, so the format renders at the tile width (its cache serving
 repeats) and rasterises `tiles.tiled_svg`'s document once. Refused, naming the bound and
-what to do: more than 30 ("render the first 30, and the rest in another call"); an image
-over `Limits.max_image_edge` wide (the widest tile that fits those columns) or tall (how
-many tiles fit). A sheet is one image in the per-call and session image counts. The
+what to do: more than 30 ("render the first 30, and the rest in another call"). Round 10,
+O4 (0.55.0): tiles that would make the image over `Limits.max_image_edge` wide or tall are
+drawn narrower instead -- the widest that fit those columns (`tiling_of`) and, for the
+tiles' shapes, that height (`tiles.fit`) -- and the result's `sheet.shrunk` (`{"from",
+"why"}`) and summary say from what width and why; only tiles that would not fit even at
+160 px are refused (how many columns or tiles would). A call's `width` over 1,280 px
+standing in for the tile's is taken as 1,280, said the same way. A sheet is one image in the per-call and session image counts. The
 definition grows by 64 estimated tokens (`sheet`: two optional integers); the module
 `tools.tiles` is format-neutral and stdlib only.
 
