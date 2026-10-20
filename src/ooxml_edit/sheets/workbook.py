@@ -35,7 +35,7 @@ from typing import Iterator
 from lxml import etree
 from ..opc import OpcPackage, normalize_part_path
 from ..xml import Element, qn, remove
-from .namespaces import SML_NS
+SML_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 
 _REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/"
 REL_WORKSHEET = _REL + "worksheet"
