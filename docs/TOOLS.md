@@ -676,7 +676,7 @@ serving other calls. There are three runners, all with `run(fn, *args, timeout=.
 
 | Runner | Used | A deadline |
 | --- | --- | --- |
-| `WorkerPool(n)`: `n` multiprocessing workers (`spawn`) | the default (`Toolbox(workers=2)`) | kills the worker and replaces it; the call reports `timeout` |
+| `WorkerPool(n)`: `n` multiprocessing workers (`spawn`) | the default (`Toolbox(workers=None)`: the CPUs the process may use, its container's CPU quota included, at most 8; warmed before their first task, the warm-up no call's time) | kills the worker and replaces it; the call reports `timeout` |
 | `SubprocessPool(n)`: `n` workers started with `subprocess` | by itself, in a daemonic process (below); or `Toolbox(runner=SubprocessPool(n))` anywhere | the same: the worker is killed and replaced |
 | `InProcess(n)`: threads of this process | `Toolbox(workers=0)`, `runner=InProcess(n)`, `WorkerPool(fallback="in-process")`, or where no subprocess can be started either | bounds the *wait* only: the call reports `timeout`, the task runs on to its end in the background, keeping its slot |
 

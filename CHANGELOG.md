@@ -2,6 +2,45 @@
 
 Versions are those in `pyproject.toml`; none is published to PyPI yet.
 
+## 0.52.0 -- unreleased
+- Render work over every worker at once (round 10, O1): `Call.run_all(fn, calls,
+  timeouts=...)` (`tools.worker.run_all`) runs a call's chunks at once over the pool, the
+  results in order, a chunk's exception in its place; `Call.parallelism` (the pool's size,
+  1 in-process) says how many chunks to make. A format splits its views into that many
+  chunks, not one per view (a task's fixed cost is a parse of the document).
+- Workers by the CPUs the process may use: `Toolbox(workers=None)`, now the default
+  (was 2), is `default_workers()` -- `available_cpus()`, the fewest of
+  `os.process_cpu_count()` / `sched_getaffinity` and the container's CPU quota
+  (`cgroup_cpu_quota()`: cgroup v2 `cpu.max`, else v1 `cpu.cfs_quota_us` over
+  `cpu.cfs_period_us`, the smallest along the cgroup and those above it, rounded up),
+  never `os.cpu_count()` alone -- at most `MAX_DEFAULT_WORKERS` (8). `workers=N` still
+  sets it.
+- Workers warmed, and their start no call's time: a new worker first runs the pool's
+  `warm_up` tasks (`DocumentFormat.warm_up`: a format's imports, font index, the
+  rasteriser's system-font load), bounded by `Limits.worker_start_timeout` (120 s);
+  starting and warming one, and waiting while workers start, never count against a task's
+  deadline, so a cold pool or a replaced worker cannot time a call out. `Toolbox(prewarm=True)`
+  (the default) starts every worker in the background when the pool is first needed;
+  `Toolbox.warm(wait=False)` and `WorkerPool.warm()` start them now (at the application's
+  start). A warm-up that raises is logged and the worker serves. `Limits.render_timeout_for(n)`:
+  `render_timeout` per 4 views begun, a task's deadline by its size.
+- Images kept by their content (round 10, O3): `ContentStore` (`tools.rendercache`), bytes
+  under a content key (`content_key(...)`) with a small meta, least recently used dropped
+  past a byte budget, thread-safe. A toolbox has two, shared by its sessions and views:
+  `Toolbox.images` (`Limits.image_cache_bytes`, 128 MB) and `Toolbox.decoded_fonts` (fonts
+  a worker decoded from a document's embedded ones, handed to the next task;
+  `Limits.font_cache_bytes`, 32 MB). Memory only: nothing is written to disk. Separate
+  from the per-document `render_cache` (SVG reads, contact images), which keeps its 16
+  entries. `DocumentEntry.render_keys` remembers each view's key by version (4,096 keys),
+  `font_keys` its decoded fonts' digests; `code_stamp(*modules)` names the code that draws
+  (versions and a digest of the files) for a key.
+- `DocumentEntry.snapshot()`: the document's bytes made once per version (equal versions
+  are equal content), so renders and checks of one version serialise it once.
+- `Session.check_images(n)` / `Call.check_images(n)`: the per-call limit and the session's
+  and round's image budgets asked before rendering, counting nothing, so a call that will
+  be refused costs no render. `reserve_images` uses it.
+- Definitions are unchanged.
+
 ## 0.51.0 -- unreleased
 - `ooxml_edit.sheets` (lane X, O4): the lossless cell writer that edited a chart's embedded
   workbook, lifted into a public, optional subpackage for whole workbooks -- moved with its
