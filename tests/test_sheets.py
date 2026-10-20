@@ -369,7 +369,7 @@ def test_many_writes_into_one_sheet():
 
 
 def test_protection_is_reported():
-    data = Shop().to_bytes().replace(b"", b"")
+    data = Shop().to_bytes()
     book = Workbook(OpcPackage.open(data))
     assert book.sheet("Stock").protected is False
     root = book.package.tree(STOCK)
@@ -394,3 +394,36 @@ def _set_value_error() -> str:
     except TypeError as error:
         return str(error)
     return ""
+
+
+def test_full_calculation_is_asked_for_where_calcpr_belongs():
+    data = Shop().to_bytes()
+    parts = _parts(data)
+    parts["xl/workbook.xml"] = parts["xl/workbook.xml"].replace(b'<calcPr calcId="191029"/>', b"")
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        for name, body in parts.items():
+            archive.writestr(name, body)
+    without = buffer.getvalue()
+    book = Workbook(OpcPackage.open(without))
+    assert book.request_full_calculation() is True and book.request_full_calculation() is False
+    edited = book.to_bytes()
+    root = etree.fromstring(_parts(edited)["xl/workbook.xml"])
+    names = [etree.QName(child).localname for child in root]
+    assert names[names.index("definedNames") + 1] == "calcPr" and names[-1] == "extLst"
+    assert outside_footprint(without, edited) == []
+    book = Workbook(OpcPackage.open(edited))
+    book.package.tree("xl/workbook.xml").find(X + "calcPr").set("calcMode", "manual")
+    book.package.mark_dirty("xl/workbook.xml")
+    assert outside_footprint(edited, book.to_bytes()) == [
+        "xl/workbook.xml: calcPr changed beyond fullCalcOnLoad"]
+
+
+def test_the_dimension_follows_each_write_without_finish():
+    _, book = _open()
+    book.sheet("Stock").write(Cell(40, 12), 1)
+    root = etree.fromstring(book.package.read(STOCK))  # no finish: the tree as it is
+    assert root.find(X + "dimension").get("ref") == "A1:L40"
+    book.sheet("Stock").write(Cell(40, 12), None)
+    root = etree.fromstring(book.package.read(STOCK))
+    assert root.find(X + "dimension").get("ref") == f"A1:I{FIRST_INPUT + 4}"

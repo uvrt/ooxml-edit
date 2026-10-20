@@ -141,24 +141,23 @@ def _rows(part: str, a: Element, b: Element, allowed: set[tuple[int, int]] | Non
 
 
 def _workbook(part: str, a: Element, b: Element) -> list[str]:
-    def strip(root: Element) -> tuple[list[bytes], dict]:
-        calc = root.find(_X + "calcPr")
-        attrs = {} if calc is None else _attrs(calc, {"fullCalcOnLoad"})
-        return [_c14n(k) for k in root if k.tag != _X + "calcPr"], attrs
-
+    """The workbook part: only ``calcPr fullCalcOnLoad`` may have become ``1``."""
     found = _same_node(part, a, b, children=False)
-    (kids_a, calc_a), (kids_b, calc_b) = strip(a), strip(b)
-    if kids_a != kids_b:
+    if [_c14n(k) for k in a if k.tag != _X + "calcPr"] != \
+            [_c14n(k) for k in b if k.tag != _X + "calcPr"]:
         found.append(f"{part}: changed beyond calcPr")
-    new_calc = b.find(_X + "calcPr")
-    if a.find(_X + "calcPr") is not None and calc_a != calc_b:
+    old, new = a.find(_X + "calcPr"), b.find(_X + "calcPr")
+    if new is None:
+        if old is not None:
+            found.append(f"{part}: calcPr removed")
+        return found
+    before = {} if old is None else dict(old.attrib)
+    after = dict(new.attrib)
+    full = after.pop("fullCalcOnLoad", None)
+    was = before.pop("fullCalcOnLoad", None)
+    if before != after or (full != was and full != "1") or len(new) != (
+            0 if old is None else len(old)):
         found.append(f"{part}: calcPr changed beyond fullCalcOnLoad")
-    elif a.find(_X + "calcPr") is None and new_calc is not None and calc_b:
-        found.append(f"{part}: calcPr added with more than fullCalcOnLoad")
-    if new_calc is not None and new_calc.get("fullCalcOnLoad") not in (
-            None, "1", (a.find(_X + "calcPr") if a.find(_X + "calcPr") is not None
-                        else new_calc).get("fullCalcOnLoad")):
-        found.append(f"{part}: fullCalcOnLoad set to something other than 1")
     return found
 
 

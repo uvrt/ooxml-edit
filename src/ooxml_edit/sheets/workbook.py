@@ -15,7 +15,7 @@ re-exports it from ``charts.workbook``) and a whole workbook edited for its own 
 it keeps in step, because Excel reports a repair otherwise:
 
 * cells in row and column order, rows with their ``spans`` hint and the sheet's
-  ``dimension`` (brought up to date by :meth:`Workbook.finish`);
+  ``dimension`` (computed once, then grown with each cell written);
 * rows and cells without an ``r`` attribute, which the format allows (each is the one after
   the one before): positions are computed, and only what is written gets an ``r``;
 * shared strings (``count``/``uniqueCount``) when the workbook uses them, inline strings
@@ -511,14 +511,11 @@ class Workbook:
     # -- finishing ---------------------------------------------------------------------------
 
     def finish(self) -> None:
-        """Bring the workbook-wide bookkeeping up to date: each written sheet's
-        ``dimension``, and the shared strings' counts.  Call it once at the end of a step
-        (inside a history batch, so the step holds it); it changes nothing when nothing was
-        written, and twice in a row is the same as once."""
+        """Bring the workbook-wide bookkeeping up to date: the shared strings' ``count``
+        and ``uniqueCount``.  Call it once at the end of a step (inside a history batch, so
+        the step holds it); it changes nothing when nothing was written, and twice in a row
+        is the same as once."""
         dirty = self.package.dirty_parts
-        for sheet in self._sheets.values():
-            if sheet.part in dirty:
-                sheet._update_dimension()
         part = self._shared_strings_part()
         if part is not None and (part in dirty or self._touched_sheets()):
             root = self.package.tree(part)
@@ -564,6 +561,9 @@ class Worksheet:
         self._order: list[tuple[int, Element]] | None = None
         self._by_number: dict[int, Element] = {}
         self._ascending = True
+        #: ``(first row, first column, last row, last column)`` of the cells, or ``None``
+        #: until computed and after a cell is removed.
+        self._bounds: tuple[int, int, int, int] | None = None
         if self._data is None:
             raise ValueError(f"sheet {name!r} has no sheetData")
 
@@ -576,6 +576,7 @@ class Worksheet:
             self._tree = root
             self._sheet_data = root.find(_X + "sheetData")
             self._order = None
+            self._bounds = None
         return root
 
     @property
@@ -700,7 +701,7 @@ class Worksheet:
             self._put(node, stored)
         if stored is None and node.get("s") is None and len(node) == 0:
             self._remove_cell(node)
-        self._touch()
+        self._touch(cell)
         return True
 
     def _stored(self, value):
@@ -779,8 +780,6 @@ class Worksheet:
             text = number_text(cached)
         raw = etree.Element(_X + "v")
         raw.text = text
-        if isinstance(cached, str) and isinstance(value, Formula):
-            _keep_spaces(raw, cached)
         _before_extensions(node, raw)
 
     def set_value(self, cell: Cell, value: "str | float | int | None", *,
@@ -824,7 +823,7 @@ class Worksheet:
         else:
             node.attrib.pop("t", None)
             etree.SubElement(node, _X + "v").text = number_text(value)
-        self._touch()
+        self._touch(cell)
 
     def _holds(self, node: Element, value, *, cached: bool = False) -> bool:
         """Whether the cell already holds exactly ``value``, stored as the same kind
@@ -852,7 +851,7 @@ class Worksheet:
         self._remove_cell(node)
         node.set("r", target.ref)
         self._place(node, target)
-        self._touch()
+        self._touch(target)
 
     def clear(self, cell: Cell) -> None:
         """Remove a cell entirely, style and all."""
@@ -889,10 +888,12 @@ class Worksheet:
 
     # -- internals ---------------------------------------------------------------------------
 
-    def _touch(self) -> None:
-        """The sheet was written: it is saved as its tree, and :meth:`Workbook.finish`
-        brings its ``dimension`` up to date."""
+    def _touch(self, cell: Cell | None = None) -> None:
+        """The sheet was written (``cell``, when one was): it is saved as its tree, and its
+        ``dimension`` follows -- computed from every cell the first time and after a cell
+        was removed, grown to take in ``cell`` otherwise."""
         self.workbook.package.mark_dirty(self.part)
+        self._update_dimension(cell)
 
     def _index(self) -> list[tuple[int, Element]]:
         """The rows in document order with their numbers -- a row without ``r`` is the one
@@ -982,6 +983,7 @@ class Worksheet:
         row = node.getparent()
         remove(node)
         if row is not None:
+            self._bounds = None
             if len(row) == 0 and not set(row.attrib.keys()) - {"r", "spans"}:
                 remove(row)
                 self._order = None
@@ -1007,10 +1009,26 @@ class Worksheet:
         if row.get("spans") != wanted:
             row.set("spans", wanted)
 
-    def _update_dimension(self) -> None:
+    def _update_dimension(self, cell: Cell | None = None) -> None:
         dimension = self._root.find(_X + "dimension")
         if dimension is None:
             return
+        if self._bounds is None:
+            self._bounds = self._measure()
+        elif cell is not None:
+            low_row, low_column, high_row, high_column = self._bounds
+            self._bounds = (min(low_row, cell.row), min(low_column, cell.column),
+                            max(high_row, cell.row), max(high_column, cell.column))
+        if self._bounds is None:
+            wanted = "A1"
+        else:
+            low_row, low_column, high_row, high_column = self._bounds
+            wanted = Area(Cell(low_row, low_column), Cell(high_row, high_column)).ref
+        if dimension.get("ref") != wanted:
+            dimension.set("ref", wanted)
+
+    def _measure(self) -> tuple[int, int, int, int] | None:
+        """The rectangle every cell is in, or ``None`` for a sheet without cells."""
         low_row = low_column = high_row = high_column = None
         for number, row in self._index():
             for column, _ in self._cells(row):
@@ -1021,12 +1039,7 @@ class Worksheet:
                     low_row, high_row = min(low_row, number), max(high_row, number)
                     low_column = min(low_column, column)
                     high_column = max(high_column, column)
-        if low_row is None:
-            wanted = "A1"
-        else:
-            wanted = Area(Cell(low_row, low_column), Cell(high_row, high_column)).ref
-        if dimension.get("ref") != wanted:
-            dimension.set("ref", wanted)
+        return None if low_row is None else (low_row, low_column, high_row, high_column)
 
 
 class Table:
