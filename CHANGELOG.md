@@ -2,6 +2,60 @@
 
 Versions are those in `pyproject.toml`; none is published to PyPI yet.
 
+## 0.51.0 -- unreleased
+- `ooxml_edit.sheets` (lane X, O4): the lossless cell writer that edited a chart's embedded
+  workbook, lifted into a public, optional subpackage for whole workbooks -- moved with its
+  history (`git log --follow src/ooxml_edit/sheets/workbook.py`); `charts.workbook`
+  re-exports it under the old names, and every chart edit writes the same bytes as before
+  (checked by recording every package the ooxml-edit, pptx-agent and docx-agent suites
+  write, before and after) -- except in an embedded workbook whose rows or cells have no
+  `r`, which now keeps that spelling instead of being given one everywhere. Like `charts`, it is imported explicitly, imports only the core
+  and lxml, never `charts` or `tools`, and registers nothing (`tests/test_neutrality.py`).
+- `Worksheet.write(cell, value, style=None)`: text (always text -- `"=A1"` is stored as
+  those characters), numbers, booleans, `date`/`datetime`/`time` as the serial number of
+  the workbook's date system (`Workbook.date1904`; `date_serial`, ECMA-376 Part 1,
+  18.17.4.1; a time-zone-aware value refused, not silently converted), a `Formula(text,
+  value=None)` with its cached result or none, or `None` -- a blank that keeps the cell's
+  format. Returns whether anything changed: writing what a cell holds is a no-op, and a
+  workbook with nothing changed is written back as the bytes it was read from. Refused
+  before anything is touched: text over 32,767 characters (`MAX_TEXT`), a number that is
+  not finite, a position off the grid, a type not listed, and the master of a shared
+  formula (`SharedFormulaError`, with the master, its range and index). A formula written
+  or replaced removes the calculation chain with its relationship and content-type
+  override, as a part change undo restores; `Workbook.request_full_calculation()` sets
+  `calcPr fullCalcOnLoad="1"`, adding `calcPr` where CT_Workbook puts it (ECMA-376 Part 1,
+  18.2.27) when there is none.
+- `Worksheet.content(cell)`: what a cell holds as stored (`Content`: kind, value, formula
+  text and type, format), for a caller that compares before it writes; a formula whose
+  cached result is `""` is text, and `is_empty` stays "no value and no formula".
+  `Worksheet.style(cell)`, `Worksheet.protected`.
+- Built for a whole workbook: the shared strings indexed once (an appended item lands
+  before the table's `extLst`); rows and cells without `r` positioned as the format says,
+  and only what is written gets an `r`; rows found through an index built once per tree; the
+  `dimension` grown with each cell written instead of recomputed from every cell; the
+  shared-string count cached per sheet. The objects follow the live trees, so they keep
+  working after an undo or a failed batch restores the package.
+- `Styles` (`Workbook.styles`): a cell format's `number_format` (`NumberFormat(id,
+  code)`), `is_date` (its own code read by its tokens, the built-in date and time ids of
+  ECMA-376 Part 1, 18.8.30's all-languages table, `None` for the language-dependent ids),
+  and `with_number_format(index, id_or_code)`: the cell's own format with only the number
+  format changed, reusing an identical `xf` and `numFmt`, appending them otherwise (a new
+  code from id 164 on).
+- `outside_footprint(before, after, cells=None)`: the writer's mutation footprint written
+  down (`sheets.footprint`'s docstring: the cells written, a row's `spans`, the
+  `dimension`, shared strings and cell formats appended with their counts, the
+  calculation chain removed with its relationship and override, `fullCalcOnLoad`) and
+  checked: every difference between two packages outside it, by part and cell address,
+  never a cell's text. An edited part is written by lxml, so its XML declaration and the
+  order of a start tag's namespace declarations and attributes may differ from what was
+  read; the check compares those as XML.
+- `tests/sheets_synthetic.py`: a made-up corner shop's stock-list template built in code
+  (title rows, headers on row 9, typed input rows with formula ids, a shared formula group,
+  a hidden lookup sheet, cross-sheet formulas, defined names, standard and `x14`
+  validations, conditional formats, merges, print settings with a printer-settings part,
+  `mc:AlternateContent`, `x14ac` attributes and a made-up extension in `extLst`), with
+  variants without `r`, with inline strings and in the 1904 date system.
+
 ## 0.50.0 -- unreleased
 - Undo by caller (round 9): an `undo` whose call has a context -- through a view
   (`Session.view(context=...)`) or `dispatch(..., context=...)` -- takes back that
