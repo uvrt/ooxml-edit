@@ -427,3 +427,117 @@ def test_the_dimension_follows_each_write_without_finish():
     book.sheet("Stock").write(Cell(40, 12), None)
     root = etree.fromstring(book.package.read(STOCK))
     assert root.find(X + "dimension").get("ref") == f"A1:I{FIRST_INPUT + 4}"
+
+
+# -- shared formula groups -------------------------------------------------------------------------
+
+
+def _moved(text: str, rows: int, columns: int) -> str:
+    """A stand-in for a formula lexer, enough for the stock list's ``D10*E10``: each relative
+    reference moved by the offset."""
+    def move(match: re.Match) -> str:
+        column = chr(ord(match.group(1)) + columns)
+        return f"{column}{int(match.group(2)) + rows}"
+    return re.sub(r"([A-Z])(\d+)", move, text)
+
+
+def test_a_shared_group_is_found_from_any_member():
+    _, book = _open()
+    stock = book.sheet("Stock")
+    group = stock.shared_group(Cell(FIRST_INPUT + 2, 6))
+    assert group is not None and group.si == "0" and group.master == Cell(FIRST_INPUT, 6)
+    assert group.text == f"D{FIRST_INPUT}*E{FIRST_INPUT}"
+    assert group.ref.ref == f"F{FIRST_INPUT}:F{FIRST_INPUT + 4}"
+    assert group.members == tuple(Cell(FIRST_INPUT + i, 6) for i in range(5))
+    assert stock.shared_group(Cell(FIRST_INPUT, 9)) is None      # a normal formula
+    assert stock.shared_group(Cell(FIRST_INPUT, 4)) is None      # a value
+
+
+@pytest.mark.parametrize("options", [{}, {"rless": True}], ids=["r", "rless"])
+def test_the_master_released_hands_the_group_to_the_next_member(options):
+    data, book = _open(**options)
+    stock = book.sheet("Stock")
+    assert stock.release_shared(Cell(FIRST_INPUT + 1, 6), _moved) == []   # a member: nothing
+    changed = stock.release_shared(Cell(FIRST_INPUT, 6), _moved)
+    assert changed == [Cell(FIRST_INPUT, 6), Cell(FIRST_INPUT + 1, 6)]
+    assert stock.content(Cell(FIRST_INPUT, 6)).formula_type == "normal"
+    master = stock.shared_group(Cell(FIRST_INPUT + 3, 6))
+    assert master.master == Cell(FIRST_INPUT + 1, 6)
+    assert master.text == f"D{FIRST_INPUT + 1}*E{FIRST_INPUT + 1}"
+    assert master.ref.ref == f"F{FIRST_INPUT + 1}:F{FIRST_INPUT + 4}"
+    stock.write(Cell(FIRST_INPUT, 6), 1)                    # now the old master can be written
+    book.finish()
+    edited = book.to_bytes()
+    cells = {"Stock": [f"F{FIRST_INPUT}", f"F{FIRST_INPUT + 1}"]}
+    assert outside_footprint(data, edited, cells=cells) == []
+    assert "xl/calcChain.xml" not in _parts(edited)
+
+
+def test_an_irregular_group_gives_every_member_its_own_formula():
+    data, book = _open()
+    stock = book.sheet("Stock")
+    # F11 out of the group and a member added at J11: the members after the master are J11,
+    # F12, F13, F14, whose rectangle (F11:J14) does not start at J11, the next master.
+    part = book.package.tree(stock.part)
+    for node in part.iter(X + "c"):
+        if node.get("r") == f"F{FIRST_INPUT + 1}":
+            node.remove(node.find(X + "f"))
+    extra = etree.SubElement(part.find(X + "sheetData").findall(X + "row")[5], X + "c")
+    extra.set("r", f"J{FIRST_INPUT + 1}")
+    etree.SubElement(extra, X + "f", t="shared", si="0")
+    book.package.mark_dirty(stock.part)
+    stock._order = None
+    changed = stock.release_shared(Cell(FIRST_INPUT, 6), _moved)
+    assert Cell(FIRST_INPUT + 1, 10) in changed
+    assert stock.content(Cell(FIRST_INPUT + 1, 10)) == Content(
+        "blank", None, f"H{FIRST_INPUT + 1}*I{FIRST_INPUT + 1}", "normal", 0)
+    assert stock.content(Cell(FIRST_INPUT + 4, 6)).formula == f"D{FIRST_INPUT + 4}*E{FIRST_INPUT + 4}"
+    assert stock.shared_group(Cell(FIRST_INPUT + 4, 6)) is None
+
+
+def test_a_translation_refused_changes_nothing():
+    data, book = _open()
+    stock = book.sheet("Stock")
+
+    def refuse(text, rows, columns):
+        raise ValueError("cannot move it")
+
+    with pytest.raises(ValueError, match="cannot move it"):
+        stock.release_shared(Cell(FIRST_INPUT, 6), refuse)
+    book.finish()
+    assert not book.changed and book.to_bytes() == data
+
+
+def test_a_new_cell_s_inherited_format_is_its_row_s_then_its_column_s():
+    _, book = _open()
+    stock = book.sheet("Stock")
+    root = book.package.tree(stock.part)
+    columns = root.find(X + "cols")
+    etree.SubElement(columns, X + "col", min="8", max="8", width="12", style="2")
+    rows = {node.get("r"): node for node in root.iter(X + "row")}
+    rows["4"].set("customFormat", "1")
+    rows["4"].set("s", "3")
+    assert stock.style(Cell(30, 8)) == 0                      # no cell there
+    assert stock.style(Cell(30, 8), inherited=True) == 2      # its column's
+    assert stock.style(Cell(4, 8), inherited=True) == 3       # its row's comes first
+    assert stock.style(Cell(30, 2), inherited=True) == 0      # a column without a style
+    assert stock.style(Cell(30, 20), inherited=True) == 0     # past every col
+    assert stock.style(Cell(FIRST_INPUT, 8), inherited=True) == 2   # a cell's own
+
+
+def test_members_written_in_the_same_step_are_given_nothing():
+    _, book = _open()
+    stock = book.sheet("Stock")
+    written = [Cell(FIRST_INPUT + 1, 6), Cell(FIRST_INPUT + 2, 6)]
+    changed = stock.release_shared(Cell(FIRST_INPUT, 6), _moved, written=written)
+    assert changed == [Cell(FIRST_INPUT, 6), Cell(FIRST_INPUT + 3, 6)]
+    group = stock.shared_group(Cell(FIRST_INPUT + 4, 6))
+    assert group.master == Cell(FIRST_INPUT + 3, 6)
+    assert group.ref.ref == f"F{FIRST_INPUT + 3}:F{FIRST_INPUT + 4}"
+    for cell in written + [Cell(FIRST_INPUT, 6)]:
+        stock.write(cell, 1)                      # each a member or a plain formula now
+    every = [Cell(FIRST_INPUT + i, 6) for i in range(5)]
+    _, book = _open()
+    stock = book.sheet("Stock")
+    assert stock.release_shared(Cell(FIRST_INPUT, 6), _moved, written=every[1:]) == every[:1]
+    assert stock.content(every[0]).formula_type == "normal"

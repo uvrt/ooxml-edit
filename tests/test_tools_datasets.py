@@ -38,9 +38,10 @@ def _titles(document) -> Dataset:
 @tool("ds_derive", "Derive a dataset from a document's pages, or from a dataset.",
       {"doc": string("Document id."), "id": string("The dataset's id."),
        "from": string("A dataset to derive from instead.", optional=True),
-       "fail": string("Fail after defining it.", optional=True)},
+       "fail": string("Fail after defining it.", optional=True),
+       "cache": string("The formula caches its values were read from.", optional=True)},
       datasets=("from",))
-def ds_derive(call, doc, id, fail=None, **rest):
+def ds_derive(call, doc, id, fail=None, cache=None, **rest):
     origin = rest.get("from")
     if origin is not None:
         entry = call.dataset(origin)
@@ -48,7 +49,11 @@ def ds_derive(call, doc, id, fail=None, **rest):
         derived = Dataset(data.columns, data.rows[:1], sources=data.sources[:1], keys=data.keys)
         address = call.define_dataset(id, derived, source=entry)
     else:
-        address = call.define_dataset(id, _titles(call.document))
+        titles = _titles(call.document)
+        if cache:
+            titles = Dataset(titles.columns, titles.rows, sources=titles.sources,
+                             keys=titles.keys, types=titles.types, cache={cache: 2})
+        address = call.define_dataset(id, titles)
     if fail:
         raise ToolError("refused", "failed after defining")
     return Result(summary=f"Derived {address}")
@@ -131,6 +136,36 @@ def test_a_dataset_is_columns_rows_and_opaque_sources():
 def test_a_malformed_dataset_is_refused(kwargs):
     with pytest.raises(ValueError):
         Dataset(**kwargs)
+
+
+def test_a_dataset_counts_the_formula_caches_its_values_came_from():
+    data = Dataset(["k"], [(1,)], cache={"external": 1, "invalidated": 0,
+                                         "cached_unverified": 2})
+    assert data.cache == {"cached_unverified": 2, "external": 1}    # in order, zeros dropped
+    assert not data.invalidated and Dataset(["k"], [(1,)], cache={}).cache is None
+    assert Dataset(["k"], [(1,)], cache={"invalidated": 1}).invalidated
+    assert data == Dataset(["k"], [(1,)])                 # not compared, as detail is not
+    assert data.row_slice(1).cache == data.cache
+    for bad in ({"fresh": 1}, {"absent": -1}, {"absent": True}, {"absent": 1.5}, [1]):
+        with pytest.raises(ValueError):
+            Dataset(["k"], [(1,)], cache=bad)
+
+
+def test_a_dataset_from_invalidated_caches_is_stale_from_the_start_and_stays_so(toolbox,
+                                                                               session):
+    """Its values are as last saved, after an edit asked for a recalculation: no version
+    of the source has current ones, so neither undo nor redo makes it current."""
+    result = call(toolbox, session, "ds_derive", doc="d1", id="titles", cache="invalidated")
+    assert result.ok and result.warnings == [
+        "d:titles is stale: it was computed from formula values whose cache is invalidated "
+        "(2 cell(s)): they are as last saved, and nothing here recalculates; recalculate the "
+        "source in its application, then derive it again"]
+    entry = session.dataset("d:titles")
+    assert entry.stale and entry.brief()["stale"] is True
+    read = call(toolbox, session, "ds_read", **{"from": "d:titles"})
+    assert read.data["stale"] and read.warnings
+    fresh = call(toolbox, session, "ds_derive", doc="d1", id="other", cache="cached_unverified")
+    assert fresh.ok and not fresh.warnings and not session.dataset("d:other").stale
 
 
 def test_an_address_names_its_id_and_the_rest_is_the_formats():

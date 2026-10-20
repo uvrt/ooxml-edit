@@ -220,6 +220,15 @@ only -- so:
 | a change to a document without a history | stale for good (its count only goes up) |
 | closed | frozen as it was at that moment, for good |
 | changed by a later op of the batch that derived it | stale for good (the state it came from had no version) |
+| its values read from invalidated formula caches (`Dataset.cache`) | stale from the start, whatever the versions say; no undo makes it current |
+
+**Formula caches** (0.53.0). A producer whose values come from formula cells -- a
+workbook's cached results -- counts the caches it read in `Dataset.cache`, by status
+(`CACHE_STATUSES`: `cached_unverified`, as last saved and never checked to be current;
+`invalidated`, an input changed since or the file asks for a recalculation; `absent`, no
+cached value) and how many refer to another file (`external`). `Rows.describe()` -- the
+`from` of every placed value -- carries the counts, and a `t:` source read from an
+invalidated cache is `stale` too, so the deck and document tools pass both on unchanged.
 
 A dataset derived from another (`define_dataset(..., source=entry)`) inherits that one's
 source and version, and goes stale with it. `Limits.max_datasets` (50) bounds a session and
@@ -248,7 +257,8 @@ such an address with its document (`t:sales` -> `d2/t:sales`; with several candi
 `ambiguous`, the qualified forms its `valid_options`) and holds that document's lock for the
 call, for reading only: no undo step, no version, no checks, even inside a `batch`. The
 handler reads either with `call.source(value)`, a `sources.Rows`: the `Dataset`, the source
-as resolved, its document and version, and `stale` for a dataset. A dataset's source may be
+as resolved, its document and version, and `stale` for a dataset (and for an address whose
+values came from invalidated formula caches). A dataset's source may be
 a run of its rows, written as the format libraries write a row by position:
 `d:by_region/#9:#16` (rows 9 to 16, from 1, the last included), `d:by_region/#9:` (to the
 last row), `d:by_region/#9` (one row); each value keeps its own sources, and a row past the

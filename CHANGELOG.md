@@ -2,6 +2,37 @@
 
 Versions are those in `pyproject.toml`; none is published to PyPI yet.
 
+## 0.53.0 -- unreleased
+- Formula freshness for datasets and sources (lane X, X3): `Dataset.cache`, how many of the
+  formula cells a dataset's values were read from have each of `CACHE_STATUSES` --
+  `cached_unverified` (as last saved, no known invalidation, never checked to be current),
+  `invalidated` (an input changed since, or the file asks for a recalculation), `absent`
+  (no cached value) -- and how many refer to another file (`CACHE_EXTERNAL`, `external`);
+  zeros dropped, `None` when no value came from a formula, not compared (as `detail`), kept
+  by `row_slice`. `Dataset.invalidated` says whether any cache was invalidated.
+- A dataset computed from invalidated caches is stale from the start, whatever the
+  versions say (`DatasetEntry.stale`, `CallContext.pending_stale`), and naming it warns
+  with the reason (recalculate in the application, then derive again); undo cannot make
+  it current. A `t:` source read from invalidated caches is `Rows.stale` too, so a placed
+  record says `stale`. `Rows.describe()` (every placed value's `from`) carries `cache`
+  when the values came from formula cells: the deck and document tools that take rows
+  from a workbook pass the counts on without a change of their own.
+- `ooxml_edit.sheets`: `Worksheet.shared_group(cell)` (`SharedGroup`: `si`, `master`, its
+  `text` and `ref`, every member in sheet order) and `Worksheet.release_shared(cell,
+  translate)`, which takes a shared group's master out of its group so that it can be
+  written, every other member keeping its formula: the next member becomes the master
+  (its formula moved by `translate(text, rows, columns)`, the caller's formula lexer; the
+  group's `ref` the remaining members' rectangle), or, where that rectangle does not start
+  at it, every member gets its own formula; every translation is made before anything
+  changes, so a refused one leaves the sheet as it was. `written=`: the group's cells the
+  same step writes over too, which are given nothing (none becomes the master). The
+  calculation chain is dropped.
+- `Worksheet.style(cell, inherited=True)`: for a position with no cell, the format a cell
+  made there takes -- its row's (`s` with `customFormat`), else its column's (`col
+  style`), else 0 (ECMA-376 Part 1, 18.3.1.73, 18.3.1.13); `write` still gives a new cell
+  no format unless asked, so chart outputs are unchanged.
+- Definitions are unchanged.
+
 ## 0.52.0 -- unreleased
 - Render work over every worker at once (round 10, O1): `Call.run_all(fn, calls,
   timeouts=...)` (`tools.worker.run_all`) runs a call's chunks at once over the pool, the

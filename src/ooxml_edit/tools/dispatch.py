@@ -143,7 +143,8 @@ class CallContext:
     def pending_stale(self, entry: DatasetEntry) -> bool:
         """Whether a dataset this call (or batch) defined is stale so far: before the call
         ends it has no version to compare (:meth:`changed_since`)."""
-        return entry.stale if entry.version is not None else self.changed_since(entry)
+        return entry.stale if entry.version is not None else (
+            entry.dataset.invalidated or self.changed_since(entry))
 
     def missing_ref(self, name: str, field: str | None) -> ToolError | None:
         """The error for ``$name`` that a failed op of the batch would have made."""
@@ -384,7 +385,8 @@ class Call:
                             f"{self.limits.max_dataset_cells}: derive a smaller dataset",
                             field=field)
         return Rows(f"{doc}/{address}", dataset, doc=doc, kind=entry.kind, name=entry.name,
-                    version=entry.version, merge=fmt.merge_sources)
+                    version=entry.version, stale=dataset.invalidated,
+                    merge=fmt.merge_sources)
 
     def facts_at(self, field: str) -> list[textfacts.Fact]:
         """The values written into the argument ``field`` (``items[0].text``), in order."""
@@ -2057,6 +2059,11 @@ def _stale_warning(entry: DatasetEntry) -> str:
         return (f"{entry.address} is stale: {entry.doc} has changed since it was derived "
                 f"(version {entry.version}, now {entry.source_version}); derive it again "
                 "for current values")
+    if entry.dataset.invalidated:
+        return (f"{entry.address} is stale: it was computed from formula values whose "
+                f"cache is invalidated ({entry.dataset.cache['invalidated']} cell(s)): "
+                "they are as last saved, and nothing here recalculates; recalculate the "
+                "source in its application, then derive it again")
     return (f"{entry.address} is stale: {entry.doc} was changed after it was derived in "
             "the same batch; derive it again for current values")
 

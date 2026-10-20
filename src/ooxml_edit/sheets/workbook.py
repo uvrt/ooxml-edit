@@ -44,7 +44,7 @@ import datetime as _dt
 import math
 import re
 from dataclasses import dataclass, replace
-from typing import Iterator
+from typing import Iterable, Iterator
 
 from lxml import etree
 from ..opc import OpcPackage, normalize_part_path
@@ -300,6 +300,22 @@ class SharedFormulaError(ValueError):
         self.cell = cell
         self.ref = ref
         self.si = si
+
+
+@dataclass(frozen=True)
+class SharedGroup:
+    """A shared formula group of one sheet (ECMA-376 Part 1, 18.3.1.40 ``f``, ``t="shared"``):
+    ``si`` its index, ``master`` the cell that holds its text (``text``, the master's own
+    formula) and its range (``ref``, ``None`` when the file gives none), and ``members``
+    every cell of the group, the master included, in the order of the sheet.  A member's
+    formula is the master's with its relative references moved by the member's offset from
+    the master."""
+
+    si: str
+    master: Cell
+    text: str
+    ref: Area | None
+    members: tuple[Cell, ...]
 
 
 def date_serial(value: "_dt.date | _dt.time", *, date1904: bool = False) -> "int | float":
@@ -628,10 +644,116 @@ class Worksheet:
                        None if formula is None else formula.get("t", "normal"),
                        _style_of(node))
 
-    def style(self, cell: Cell) -> int:
-        """The cell's format, an index into the workbook's :class:`Styles`; 0 when none."""
+    def shared_group(self, cell: Cell) -> SharedGroup | None:
+        """The shared formula group the cell is a member of, or ``None`` (no formula, or not
+        a shared one).  Found by walking the sheet's cells once; ``None`` too for a group
+        whose master is not there (no cell holds its text)."""
         node = self._find(cell)
-        return 0 if node is None else _style_of(node)
+        formula = None if node is None else node.find(_X + "f")
+        if formula is None or formula.get("t") != "shared" or formula.get("si") is None:
+            return None
+        si = formula.get("si")
+        members: list[Cell] = []
+        master: tuple[Cell, Element] | None = None
+        for number, row in self._index():
+            for column, other in self._cells(row):
+                found = other.find(_X + "f")
+                if found is None or found.get("t") != "shared" or found.get("si") != si:
+                    continue
+                position = Cell(number, column)
+                members.append(position)
+                if master is None and found.text:
+                    master = (position, found)
+        if master is None:
+            return None
+        ref = master[1].get("ref")
+        try:
+            area = Area.parse(ref) if ref else None
+        except ValueError:
+            area = None
+        return SharedGroup(si, master[0], master[1].text, area, tuple(members))
+
+    def release_shared(self, cell: Cell, translate, *,
+                       written: "Iterable[Cell]" = ()) -> list[Cell]:
+        """Take the master of a shared formula group out of its group, so that it can be
+        written (:meth:`write` refuses a master other cells use), every other member keeping
+        its formula; the cells whose formula changed.  Nothing to do -- ``[]`` -- for a cell
+        that is no master: writing a member leaves the others' formulas as they are.
+
+        ``translate(text, rows, columns)`` is the master's formula with its relative
+        references moved by ``rows`` and ``columns`` (a member's offset from the master): a
+        formula lexer's, which this module does not have.  It may raise to refuse a formula
+        it cannot move safely; it is called for every cell that needs it before anything
+        changes, so a refusal leaves the sheet as it was.
+
+        The first other member, in the order of the sheet, becomes the master: its formula
+        moved there, the group's ``ref`` the rectangle the remaining members span -- when
+        that rectangle starts at the new master.  Otherwise (an irregular group) every other
+        member is given its own formula, moved from the master, and the group is gone.  The
+        old master keeps its formula as a plain one, for the write that follows to replace.
+        The calculation chain is dropped, as for any formula changed."""
+        group = self.shared_group(cell)
+        if group is None or group.master != cell:
+            return []
+        skipped = set(written)
+        others = [member for member in group.members if member != cell
+                  and member not in skipped]
+        moved = {member: translate(group.text, member.row - cell.row,
+                                   member.column - cell.column) for member in others[:1]}
+        if others:
+            top = Cell(min(m.row for m in others), min(m.column for m in others))
+            bottom = Cell(max(m.row for m in others), max(m.column for m in others))
+            regular = top == others[0]
+            if not regular:
+                moved = {member: translate(group.text, member.row - cell.row,
+                                           member.column - cell.column) for member in others}
+        changed = [cell]
+        self._plain(self._find(cell).find(_X + "f"), group.text)
+        if others and regular:
+            formula = self._find(others[0]).find(_X + "f")
+            formula.text = moved[others[0]]
+            formula.set("ref", Area(top, bottom).ref)
+            changed.append(others[0])
+        else:
+            for member, text in moved.items():
+                self._plain(self._find(member).find(_X + "f"), text)
+                changed.append(member)
+        self.workbook.drop_calc_chain()
+        self.workbook.package.mark_dirty(self.part)
+        return changed
+
+    @staticmethod
+    def _plain(formula: Element, text: str) -> None:
+        """A shared formula's ``f`` made a normal one holding ``text``."""
+        for name in ("t", "ref", "si"):
+            formula.attrib.pop(name, None)
+        formula.text = text
+
+    def style(self, cell: Cell, *, inherited: bool = False) -> int:
+        """The cell's format, an index into the workbook's :class:`Styles`; 0 when none.
+
+        ``inherited``: for a position that holds no cell, the format a cell made there
+        takes -- its row's (``s``, when the row has ``customFormat``), else its column's
+        (``col style``), else 0 (ECMA-376 Part 1, 18.3.1.73 ``row``, 18.3.1.13 ``col``).
+        :meth:`write` gives a new cell no format of its own unless asked (``style``), so
+        a caller that wants a template's formatted column to show a value as typed into it
+        passes this."""
+        node = self._find(cell)
+        if node is not None or not inherited:
+            return 0 if node is None else _style_of(node)
+        row = self._by_number.get(cell.row)
+        if row is not None and row.get("customFormat", "").strip().lower() in {"1", "true"}:
+            given = row.get("s", "")
+            if given.isdigit():
+                return int(given)
+        columns = self._root.find(_X + "cols")
+        if columns is not None:
+            for column in columns.iterchildren(_X + "col"):
+                low, high, given = column.get("min", ""), column.get("max", ""), \
+                    column.get("style", "")
+                if low.isdigit() and high.isdigit() and int(low) <= cell.column <= int(high):
+                    return int(given) if given.isdigit() else 0
+        return 0
 
     def _read(self, node: Element):
         kind = node.get("t", "n")
