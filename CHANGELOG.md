@@ -2,6 +2,13 @@
 
 Versions are those in `pyproject.toml`; none is published to PyPI yet.
 
+## 0.56.0 -- unreleased
+- The shared `check` takes `spacing` (round 12, Q1): decks report the gaps, padding and
+  frame clearances below that many points (`"spacing": 8`), measured as drawn and nearest
+  first (pptx-agent's handler; a document's refuses it, as it does `boxes`). A number, not
+  an object with `below`: 35 estimated tokens in every format's core rather than 64.
+  Bounded 0-200 pt by the call validator.
+
 ## 0.55.0 -- unreleased
 - Contact sheets narrow their tiles instead of refusing (round 10, O4): tiles too wide for
   the image's 2,576 px edge side by side are drawn at the widest that fit

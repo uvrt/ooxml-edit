@@ -260,3 +260,13 @@ def test_render_and_check_take_slide_ids_while_pages_stay_numbers():
         with pytest.raises(CallError) as caught:
             validate_call(tool.schema, {"doc": "d1", "pages": ["p:3"]})
         assert caught.value.message == "pages[0] must be a number"
+
+
+def test_check_takes_a_spacing_threshold_in_points():
+    """Round 12, Q1: ``spacing`` asks a deck's check for its spacings below that many pt."""
+    tool = shared.definition("check")
+    spacing = tool.canonical["properties"]["spacing"]
+    assert spacing["type"] == "number" and spacing["description"].startswith("Decks:")
+    assert validate_call(tool.schema, {"doc": "d1", "spacing": 6})["spacing"] == 6
+    with pytest.raises(CallError):
+        validate_call(tool.schema, {"doc": "d1", "spacing": -1})
