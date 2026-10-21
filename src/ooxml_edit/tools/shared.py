@@ -294,7 +294,11 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
               "Default: fit, collisions, validate (decks); validate, reflow, fields "
               "(documents).", optional=True),
           "boxes": boolean("Decks: also text boxes that overlap where their text does not. "
-                           "Default false.", optional=True)},
+                           "Default false.", optional=True),
+          # Q1 (round 12): measured gaps, padding and clearances as drawn, nearest first.
+          # A number, not {"below": 8}: half the tokens in every format's core.
+          "spacing": number("Decks: also the gaps, padding and frame clearances below this, "
+                            "pt; 8 is usual.", minimum=0, maximum=200, optional=True)},
          refs=("slides[]",)),
     # S10, S11: edit_chart reads too
     Spec("edit_chart",
