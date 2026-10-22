@@ -42,6 +42,26 @@ different documents run concurrently. A mutating call is one undo step, and a fa
 changes nothing. Saving refuses new validation problems unless the application (never the
 model) passes `allow_new_problems=True`.
 
+**What a call changed (round 13, R2, 0.57.0).** Every result carries `result.touched`, for
+the application and never in what the model reads (`to_json`, `to_text`): what the call
+changed, one entry per thing, each with its `"doc"` and the rest in the format's own
+addresses. It is derived from the parts whose bytes changed -- the history's own snapshots,
+compared part by part (`History.watch`, a `history.Change`) -- so every tool is covered,
+undo and redo included, and a tool written tomorrow without saying anything; addresses a
+call only read never appear. A format maps the parts to its addresses with
+`DocumentFormat.touched(document, change)` (decks: slides and shape ids, layouts, masters
+and the slides built on them; pptx-agent's `pptx_agent.edit.touched`); without one each
+changed part is `{"doc": "d1", "part": "word/document.xml"}` (`tools.part_entries`). A
+`batch` reports the union in `touched` and each op's in `result.touched_by_op` (`{op index:
+entries}`; an op that changed nothing, or failed and was rolled back, has no key); an
+error, a read and a repeat that changed no bytes report `[]`. A live view re-renders what
+`touched` names after each call.
+
+```python
+result = toolbox.dispatch(session, "ppt_set_text", {"doc": "d1", "items": [...]})
+result.touched     # [{"doc": "d1", "slide": "s:258", "shapes": ["258.7"]}]
+```
+
 **Refs and batches.** A creating call may name what it makes (`"ref": "step1"`); a later
 call writes `$step1` wherever its tool takes a target, and the dispatcher puts the address
 in. The `batch` tool runs many calls in one round trip -- in order, one undo step per

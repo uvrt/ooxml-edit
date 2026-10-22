@@ -103,6 +103,17 @@ class Result:
     total: int | None = None
     error: ToolError | None = None
     images: list[Image] = field(default_factory=list)
+    #: Set by the dispatcher, for the application -- never in :meth:`to_json`, so the model
+    #: reads none of it: what the call changed, one entry per thing, each with its
+    #: ``"doc"`` and the rest in the format's own addresses (``DocumentFormat.touched``;
+    #: a format without its own mapping, ``{"doc": "d1", "part": <part name>}``).  Derived from the parts
+    #: whose bytes changed (:class:`~ooxml_edit.history.Change`), so every tool is
+    #: covered, undo and redo included; empty when nothing changed.  A batch's is the union
+    #: over its ops.
+    touched: list[dict[str, Any]] = field(default_factory=list)
+    #: A batch's :attr:`touched` per op, by the op's index; an op that changed nothing
+    #: (or failed and was rolled back) has no key.
+    touched_by_op: dict[int, list[dict[str, Any]]] = field(default_factory=dict)
     #: Set by the dispatcher: the tool's name and how long the call took.
     tool: str = ""
     duration: float = 0.0

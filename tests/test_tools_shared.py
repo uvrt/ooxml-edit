@@ -700,3 +700,72 @@ def test_read_blob_is_a_session_tool_outside_batch(toolbox, session):
     refused = call(toolbox, session, "batch",
                    ops=[{"tool": "read_blob", "arguments": {"blob": handle}}])
     assert refused.error.code == "invalid_arguments"
+
+
+# -- what a call changed: Result.touched (round 13, R2) --------------------------------------------
+
+
+def test_a_changing_call_says_which_parts_it_changed_for_the_application_not_the_model(
+        toolbox, session):
+    added = call(toolbox, session, "t_add", doc="d1", items=[{"text": "a"}])
+    assert added.touched == [{"doc": "d1", "part": synthetic.MAIN}]
+    assert "touched" not in added.to_json() and synthetic.MAIN not in added.to_text()
+    assert call(toolbox, session, "t_read", doc="d1").touched == []
+    assert call(toolbox, session, "t_fail", doc="d1").touched == []
+    undone = call(toolbox, session, "undo", doc="d1")
+    assert undone.touched == [{"doc": "d1", "part": synthetic.MAIN}]
+    assert call(toolbox, session, "undo", doc="d1", redo=True).touched == undone.touched
+
+
+def test_a_batch_reports_the_union_and_what_each_applied_op_changed(toolbox, session):
+    call(toolbox, session, "t_add", doc="d1", items=[{"text": "a"}])
+    ops = _ops(("t_set", {"doc": "d1", "target": "item:1", "text": "A"}),
+               ("t_read", {"doc": "d1"}),
+               ("t_fail", {"doc": "d1"}),
+               ("t_title", {"doc": "d2", "page": "2", "text": "Two"}),
+               ("t_set", {"doc": "d1", "target": "item:1", "text": "B"}))
+    result = call(toolbox, session, "batch", ops=ops)
+    assert result.ok and result.data["failed"] == [2]
+    assert result.touched == [{"doc": "d1", "part": synthetic.MAIN},
+                              {"doc": "d2", "part": synthetic.PAGE2}]
+    assert result.touched_by_op == {0: [{"doc": "d1", "part": synthetic.MAIN}],
+                                    3: [{"doc": "d2", "part": synthetic.PAGE2}],
+                                    4: [{"doc": "d1", "part": synthetic.MAIN}]}
+    atomic = call(toolbox, session, "batch", atomic=True, ops=_ops(
+        ("t_title", {"doc": "d2", "page": "1", "text": "One"}),
+        ("t_set", {"doc": "d1", "target": "item:1", "text": "C"})))
+    assert atomic.ok and atomic.touched == [{"doc": "d1", "part": synthetic.MAIN},
+                                            {"doc": "d2", "part": synthetic.PAGE1}]
+    assert atomic.touched_by_op == {0: [{"doc": "d2", "part": synthetic.PAGE1}],
+                                    1: [{"doc": "d1", "part": synthetic.MAIN}]}
+    refused = call(toolbox, session, "batch", atomic=True, ops=_ops(
+        ("t_set", {"doc": "d1", "target": "item:1", "text": "D"}), ("t_fail", {"doc": "d1"})))
+    assert not refused.ok and refused.touched == [] and refused.touched_by_op == {}
+
+
+def test_a_format_says_what_changed_in_its_own_addresses_and_parts_stand_in_if_it_fails(
+        session):
+    seen = []
+
+    def pages(document, change):
+        seen.append(sorted(change.parts))
+        return [{"page": str(document.pages.index(part) + 1)} for part in sorted(change.parts)]
+
+    deck = dataclasses.replace(DECK, touched=pages)
+    with Toolbox(TEXT_TOOLS + DECK_TOOLS, formats=[deck, TEXT], groups=shared.GROUPS) as box:
+        own = box.session(clock=CLOCK)
+        own.open(synthetic.outer_package(), "deck.pptx")
+        result = box.dispatch(own, "t_title", {"doc": "d1", "page": "2", "text": "Two"})
+        assert result.touched == [{"doc": "d1", "page": "2"}] and seen == [[synthetic.PAGE2]]
+        assert box.dispatch(own, "t_title", {"doc": "d1", "page": "2", "text": "Two"}).touched \
+            == []                               # the same title: no bytes changed
+
+    def broken(document, change):
+        raise RuntimeError("a bug in the mapping")
+
+    deck = dataclasses.replace(DECK, touched=broken)
+    with Toolbox(TEXT_TOOLS + DECK_TOOLS, formats=[deck, TEXT], groups=shared.GROUPS) as box:
+        own = box.session(clock=CLOCK)
+        own.open(synthetic.outer_package(), "deck.pptx")
+        result = box.dispatch(own, "t_title", {"doc": "d1", "page": "1", "text": "One"})
+        assert result.ok and result.touched == [{"doc": "d1", "part": synthetic.PAGE1}]
