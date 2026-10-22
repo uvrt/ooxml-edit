@@ -197,6 +197,9 @@ class Call:
         #: (``Tool.facts``), in order: each a :class:`~.textfacts.Fact` -- the argument,
         #: the value's place in its text as the handler gets it, and its record.
         self.facts: list[textfacts.Fact] = []
+        #: Whether :meth:`unlocked` let the locks go at some point: another call may have
+        #: changed the documents meanwhile, so what changed is not this call's to report.
+        self.released = False
 
     @property
     def in_batch(self) -> bool:
@@ -560,6 +563,7 @@ class Call:
             yield False
             return
         held = sorted(self.held, key=lambda entry: doc_order(entry.doc_id))
+        self.released = True
         for entry in reversed(held):
             entry.lock.release()
         try:
@@ -1249,9 +1253,9 @@ class Toolbox:
                 else:
                     returned = handler(call, **arguments)
             result = _as_result(returned, call.result)
-            if result.ok and primary is not None and call.version_used is None:
-                # (A call that worked on a snapshot may have let its lock go meanwhile:
-                # it changes nothing, and another call's change is not its.)
+            if result.ok and primary is not None and not call.released:
+                # (A call that let its lock go -- a reading one, working on a snapshot --
+                # changes nothing, and another call's change meanwhile is not its.)
                 result.touched = self._touched(session, primary, change)
             _report_facts(call, result)
             if call.version_used is not None:
