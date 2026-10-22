@@ -317,6 +317,9 @@ DocumentEntry
 - **Rendering and Word layout are CPU-bound pure Python** (measured: a slide PNG takes 0.63 s; a 36-page document lays out in 2.35 s and renders page 1 in 3.3 s). They run in a **process pool** (`worker.py`):
   - The worker gets `document.to_bytes()`; both libraries already render from bytes.
   - A deadline is enforced by killing the worker.
+  - A worker that exits as it starts fails the call at once, with its cause (round 13, R6,
+    0.58.0): a script with no `__main__` guard used to make every call wait the whole
+    start timeout. See TOOLS.md, "A worker that exits as it starts".
   - The GIL is not held across sessions.
   - pptx `text_fit`/`overflows`, design facts and label placement stay in-process, scoped to the edited slides (0.68 s for a 4-slide deck, all slides), with a soft deadline.
 - **Memory.** Each session caps its open documents (default 4), its total package bytes (default 200 MB) and its blob bytes (default 100 MB). The app's TTL evicts idle sessions.

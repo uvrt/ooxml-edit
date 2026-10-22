@@ -20,6 +20,26 @@ is starting does not count against a deadline either.  So a cold pool, or a work
 after a kill, cannot make a call time out, nor a slow start kill a worker again and again.
 :meth:`WorkerPool.warm` starts the workers ahead of the first call, in the background.
 
+**A worker that exits as it starts fails the call at once.**  A starting worker is waited
+for on its pipe and on its process together, so one that exits before it is ready is seen
+at once, not at ``start_timeout``; the error names the cause -- its exit code, or the
+signal that stopped it.  The usual cause under ``spawn`` is the program's own main module:
+a worker imports it again before its loop runs, and a script with no
+``if __name__ == "__main__":`` guard runs its work there once more -- a render (and the
+script's work after it) in every worker, the parent waiting the while.  A worker that gets
+that far -- a :class:`WorkerPool`'s ``run`` or a toolbox's ``dispatch``, while the worker
+is still being started -- stops at once instead, saying so on stderr, with exit code
+:data:`UNGUARDED_EXIT`, and the parent's error says plainly what to do: put the work under
+the guard, or use ``workers=0`` or a :class:`SubprocessPool`, whose workers never import
+the main module.  An exit with a code as a worker starts (that one, an import error, a
+``sys.exit`` in the main module) happens again for every worker, so the pool does not try
+again: a :class:`WorkerPool` falls back as it does where multiprocessing may not start
+children (below; the warning names the cause), and with ``fallback=False`` every later call
+fails at once with the same error.  A worker stopped by a signal as it starts (killed) is
+not remembered: the next call starts another.  A worker that is alive keeps its whole
+``start_timeout``, however slowly it starts.  A failure met by :meth:`WorkerPool.warm`, in
+the background, is the one the call that needs a worker then gets.
+
 **How many.**  :func:`default_workers` is what this process may use -- the CPUs it may run
 on and its container's CPU quota (cgroup v2 ``cpu.max``, v1 ``cpu.cfs_quota_us``), never
 ``os.cpu_count()`` alone, which counts the host's -- capped at
@@ -66,6 +86,7 @@ import threading
 import time
 import weakref
 from concurrent.futures import ThreadPoolExecutor
+from multiprocessing.connection import wait as wait_for
 from typing import Any, Callable, Sequence
 
 from .results import ToolError
@@ -84,6 +105,12 @@ ENTRY_POINT = "ooxml_edit.tools.subworker"
 MAX_DEFAULT_WORKERS = 8
 #: :attr:`_Pool.start_timeout`'s default: seconds to start one worker and warm it.
 START_TIMEOUT = 120.0
+#: A :class:`WorkerPool` worker's process name, which spawn sets before the main module
+#: is imported again in it.
+WORKER_NAME = "ooxml-edit-tools-worker"
+#: The exit code of a worker that stopped because the program's main module, imported
+#: again as the worker started, reached work outside its ``__main__`` guard.
+UNGUARDED_EXIT = 86
 
 
 def _cgroup_paths() -> tuple[str | None, str | None]:
@@ -200,6 +227,54 @@ def run_all(runner: Any, fn: Callable[..., Any], calls: Sequence[tuple],
     with ThreadPoolExecutor(max_workers=len(calls),
                             thread_name_prefix="ooxml-edit-tools-run-all") as executor:
         return list(executor.map(one, range(len(calls))))
+
+
+def bootstrapping_worker() -> bool:
+    """Whether this process is a :class:`WorkerPool` worker that is still starting: spawn
+    (or forkserver) importing the parent's main module in it, before the worker's loop."""
+    try:
+        current = multiprocessing.current_process()
+        return bool(getattr(current, "_inheriting", False)) and current.name == WORKER_NAME
+    except Exception:  # noqa: BLE001 -- an unusual process object: not a starting worker
+        return False
+
+
+#: What a worker that stops for :data:`UNGUARDED_EXIT` writes to stderr.
+UNGUARDED_TEXT = (
+    "ooxml-edit: this worker process stops as it starts: the program's main module, "
+    "imported again in every worker process (spawn), reached work that is not under "
+    "`if __name__ == \"__main__\":`. Put that work under the guard, or use Toolbox(workers=0) "
+    "or a SubprocessPool, whose workers do not import the main module.\n")
+
+
+def refuse_while_bootstrapping() -> None:
+    """In a :class:`WorkerPool` worker still starting (:func:`bootstrapping_worker`), stop
+    the process at once with :data:`UNGUARDED_EXIT`, saying why on stderr: the main module
+    is running the program's work again here.  Elsewhere, nothing."""
+    if not bootstrapping_worker():
+        return
+    try:
+        sys.stderr.write(UNGUARDED_TEXT)
+        sys.stderr.flush()
+    except Exception:  # noqa: BLE001 -- no stderr: the exit code says it
+        pass
+    os._exit(UNGUARDED_EXIT)
+
+
+def exit_cause(code: int | None) -> str:
+    """Why a worker process ended before it was ready, from its exit code."""
+    if code == UNGUARDED_EXIT:
+        return (f"it stopped (exit code {code}) because this program's main module, "
+                "imported again in every worker process (spawn), reached work that is not "
+                "under `if __name__ == \"__main__\":` -- put that work under the guard, or use "
+                "workers=0 or a SubprocessPool, whose workers do not import the main module")
+    if code is None:
+        return "it exited; its error, if any, is on stderr"
+    if code < 0:
+        return f"it was stopped by signal {-code}"
+    return (f"it exited with exit code {code}; its error is on stderr (under spawn a "
+            "worker first imports this program's main module: an error or sys.exit there "
+            "ends it)")
 
 
 def daemonic() -> bool:
@@ -357,6 +432,14 @@ class _Pool:
         self._condition = threading.Condition()
         #: Workers killed at a deadline, for the record (and the tests).
         self.killed: list[int] = []
+        #: A start failure that would happen again (:attr:`_StartFailed.lasting`): every
+        #: later start raises it at once instead of trying.
+        self.failed: BaseException | None = None
+
+    def _failure(self, exc: BaseException) -> None:
+        """Remember ``exc`` if it is lasting (called with the condition held)."""
+        if getattr(exc, "lasting", False) and self.failed is None:
+            self.failed = exc
 
     def _start(self) -> Any:
         raise NotImplementedError
@@ -380,6 +463,8 @@ class _Pool:
             while True:
                 if self._closed:
                     raise RuntimeError("the worker pool is closed")
+                if self.failed is not None:
+                    raise _again(self.failed)
                 if self._idle:
                     worker = self._idle.pop()
                     if worker.alive():
@@ -406,10 +491,11 @@ class _Pool:
         began = time.monotonic()
         try:
             worker = self._start()
-        except BaseException:
+        except BaseException as exc:
             with self._condition:
                 self._count -= 1
                 self._starting -= 1
+                self._failure(exc)
                 self._condition.notify_all()
             raise
         with self._condition:
@@ -422,7 +508,7 @@ class _Pool:
         background threads; ``wait`` returns when they are ready (or failed: logged)."""
         want = self.size if count is None else max(0, min(count, self.size))
         with self._condition:
-            if self._closed:
+            if self._closed or self.failed is not None:
                 return
             new = max(0, want - self._count)
             self._count += new
@@ -446,6 +532,7 @@ class _Pool:
             with self._condition:
                 self._count -= 1
                 self._starting -= 1
+                self._failure(exc)          # the call that needs a worker gets it
                 self._condition.notify_all()
             return
         with self._condition:
@@ -500,7 +587,13 @@ class _Pool:
 
 
 class _StartFailed(ToolError):
-    """A worker did not start, or not in time: raised from its warm-up, never a task's."""
+    """A worker did not start, or not in time: raised from its warm-up, never a task's.
+    ``lasting``: it exited with a code as it started, so the next would too."""
+
+    def __init__(self, code: str, message: str, *, details: dict[str, Any] | None = None,
+                 lasting: bool = False) -> None:
+        super().__init__(code, message, details=details)
+        self.lasting = lasting
 
 
 class _NoChildren(Exception):
@@ -508,7 +601,27 @@ class _NoChildren(Exception):
 
 
 class _CannotStart(RuntimeError):
-    """A subprocess worker could not be started (or exited before it was ready)."""
+    """A subprocess worker could not be started (or exited before it was ready);
+    ``lasting`` as for :class:`_StartFailed`."""
+
+    def __init__(self, message: str, *, lasting: bool = False) -> None:
+        super().__init__(message)
+        self.lasting = lasting
+
+
+def _again(exc: BaseException) -> BaseException:
+    """A fresh copy of a remembered start failure, to raise once more."""
+    if isinstance(exc, _StartFailed):
+        return _StartFailed(exc.code, exc.message, details=exc.details, lasting=True)
+    if isinstance(exc, _CannotStart):
+        return _CannotStart(str(exc), lasting=True)
+    return exc
+
+
+def _exited(code: int | None) -> _StartFailed:
+    return _StartFailed("internal", f"the worker process exited as it started: "
+                        f"{exit_cause(code)}", details={"exit_code": code},
+                        lasting=code is not None and code >= 0)
 
 
 def _serve(conn: Any) -> None:
@@ -535,7 +648,7 @@ class _Worker:
     def __init__(self, context: Any) -> None:
         self.conn, child = context.Pipe(duplex=True)
         self.process = context.Process(target=_serve, args=(child,), daemon=True,
-                                       name="ooxml-edit-tools-worker")
+                                       name=WORKER_NAME)
         try:
             self.process.start()
         except AssertionError as exc:
@@ -552,19 +665,27 @@ class _Worker:
         return self.process.pid
 
     def ask(self, fn: Callable[[], Any], timeout: float) -> Any:
-        """``fn()`` in this worker, waited for at most ``timeout`` (its start, its warm-up)."""
+        """``fn()`` in this worker, waited for at most ``timeout`` (its start, its warm-up)
+        -- on its pipe and its process at once, so an exit ends the wait (see the module's
+        notes)."""
         try:
             self.conn.send((fn, (), {}))
-            if not self.conn.poll(max(0.0, timeout)):
+            ready = wait_for([self.conn, self.process.sentinel], max(0.0, timeout))
+            if not ready:
                 raise _StartFailed("timeout", f"the worker process did not start within "
                                    f"{timeout:g} s", details={"timeout": timeout})
+            if self.conn not in ready and not self.conn.poll(0):
+                raise EOFError
             status, value = self.conn.recv()
-        except (EOFError, ConnectionError, BrokenPipeError, OSError) as exc:
-            raise _StartFailed("internal", f"the worker process exited as it started: "
-                            f"{exc or 'it exited'}") from None
+        except (EOFError, ConnectionError, BrokenPipeError, OSError):
+            raise _exited(self._exit_code()) from None
         if status == "error":
             raise value
         return value
+
+    def _exit_code(self) -> int | None:
+        self.process.join(2)
+        return self.process.exitcode
 
     def alive(self) -> bool:
         return self.process.is_alive()
@@ -626,7 +747,7 @@ class _Subprocess:
                 stdout=subprocess.PIPE, stderr=None, env=env, close_fds=True,
                 creationflags=flags)
         except OSError as exc:
-            raise _CannotStart(f"could not start {executable!r}: {exc}") from None
+            raise _CannotStart(f"could not start {executable!r}: {exc}", lasting=True) from None
         self.replies: queue.Queue[Any] = queue.Queue()
         self._reader = threading.Thread(target=self._read, daemon=True,
                                         name="ooxml-edit-tools-subprocess-reader")
@@ -638,7 +759,8 @@ class _Subprocess:
             code = self._exit_code()
             self.kill()
             raise _CannotStart(f"the worker process exited as it started (exit code {code}); "
-                               "its error is on stderr") from None
+                               "its error is on stderr",
+                               lasting=code is not None and code >= 0) from None
         if reply is None:
             self.kill()
             raise ToolError("timeout", f"the worker process did not start within {timeout:g} s",
@@ -865,9 +987,8 @@ class SubprocessPool(_Pool):
             try:
                 worker.send(("task", reference, pickle.dumps(((), {}), protocol=_PROTOCOL)))
                 reply = worker.wait(timeout)
-            except _Gone as exc:
-                raise _StartFailed("internal", f"the worker process exited as it started: "
-                                   f"{exc}") from None
+            except _Gone:
+                raise _exited(worker._exit_code()) from None
             if reply is None:
                 raise _StartFailed("timeout", f"the worker process did not start within "
                                    f"{timeout:g} s", details={"timeout": timeout})
@@ -993,7 +1114,8 @@ class WorkerPool(_Pool):
 
     ``fallback`` says what a pool does where multiprocessing may not start workers -- a
     daemonic process (``multiprocessing.current_process().daemon``), or one whose first
-    start fails that way:
+    start fails that way -- or its workers exit as they start, with a code (a main module
+    with no ``__main__`` guard; see the module's notes):
 
     * ``True`` (the default) or ``"subprocess"``: a :class:`SubprocessPool` of the same size
       runs the work (:attr:`runner` is ``"subprocesses"``) -- deadlines still kill.  Where a
@@ -1071,31 +1193,40 @@ class WorkerPool(_Pool):
         try:
             return runner.run(fn, *args, timeout=max(0.0, deadline - time.monotonic()),
                               **kwargs)
-        except _CannotStart as exc:
-            with self._condition:
-                if self._subprocesses is runner:
-                    self._subprocesses = None
-            runner.close()
-            inline = self._go_in_process(f"no subprocess worker either: {exc}")
-            return inline.run(fn, *args, timeout=max(0.0, deadline - time.monotonic()),
-                              **kwargs)
+        except (_CannotStart, _StartFailed) as exc:
+            if isinstance(exc, _StartFailed) and not exc.lasting:
+                raise
+            why = f"no subprocess worker either: {exc}"
+        with self._condition:
+            if self._subprocesses is runner:
+                self._subprocesses = None
+        runner.close()
+        inline = self._go_in_process(why)
+        return inline.run(fn, *args, timeout=max(0.0, deadline - time.monotonic()), **kwargs)
 
     def run(self, fn: Callable[..., Any], *args: Any, timeout: float, **kwargs: Any) -> Any:
         if self._closed:
             raise RuntimeError("the worker pool is closed")
+        refuse_while_bootstrapping()
         deadline = time.monotonic() + timeout
         if self._inline is not None:
             return self._inline.run(fn, *args, timeout=timeout, **kwargs)
         if self._subprocesses is not None:
             return self._run_elsewhere(self._subprocesses, fn, args, kwargs, deadline)
+        why = None
         try:
             worker, uncounted = self._acquire(deadline, timeout)
             deadline += uncounted
         except _NoChildren as exc:
             if not self._fallback:
                 raise AssertionError(str(exc)) from None
-            return self._run_elsewhere(self._go_elsewhere(str(exc)), fn, args, kwargs,
-                                       deadline)
+            why = str(exc)
+        except _StartFailed as exc:
+            if not (exc.lasting and self._fallback):
+                raise
+            why = exc.message
+        if why is not None:         # outside the handler: the work's own error unchained
+            return self._run_elsewhere(self._go_elsewhere(why), fn, args, kwargs, deadline)
         try:
             worker.conn.send((fn, args, kwargs))
             if not worker.conn.poll(max(0.0, deadline - time.monotonic())):
@@ -1128,8 +1259,9 @@ class WorkerPool(_Pool):
         return super().pids()
 
     def warm(self, count: int | None = None, *, wait: bool = False) -> None:
-        """Start and warm workers ahead of use (:meth:`_Pool.warm`); in-process, nothing."""
-        if self._inline is not None:
+        """Start and warm workers ahead of use (:meth:`_Pool.warm`); in-process, or in a
+        worker still starting (:func:`bootstrapping_worker`), nothing."""
+        if self._inline is not None or bootstrapping_worker():
             return
         if self._subprocesses is not None:
             self._subprocesses.warm(count, wait=wait)

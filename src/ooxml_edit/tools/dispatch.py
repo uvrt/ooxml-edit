@@ -95,7 +95,7 @@ from .session import (NO_CONTEXT, Clock, DocumentEntry, DocumentFormat, Output, 
                       part_entries)
 from .sources import Rows, qualify, resolve as resolve_rows
 from .rendercache import ContentStore
-from .worker import WorkerPool, default_workers, run_all
+from .worker import WorkerPool, default_workers, refuse_while_bootstrapping, run_all
 
 
 #: A ref's name: what ``$name`` may say.
@@ -1070,7 +1070,12 @@ class Toolbox:
         call is held to and whose context its handlers see (:attr:`Call.caller`).
         ``roles`` narrows them for this call alone, ``context`` adds to the context: what a
         view does, per call.  Roles the session (view) does not have are a ``ValueError``
-        -- the application's mistake, not the model's."""
+        -- the application's mistake, not the model's.
+
+        In a worker process that is still starting -- a main module with no ``__main__``
+        guard, imported again there -- it stops that process instead (see
+        :mod:`.worker`): the program's work does not run once more in each worker."""
+        refuse_while_bootstrapping()
         session, roles, caller = _caller(session, roles, context)
         started = time.perf_counter()
         tool: Tool | None = None
@@ -1122,6 +1127,7 @@ class Toolbox:
                       context: Mapping[str, Any] | None = None) -> list[Result]:
         """Run one turn's calls: per document in the order given, documents concurrently.
         ``session``, ``roles`` and ``context`` as for :meth:`dispatch`, for every call."""
+        refuse_while_bootstrapping()
         if not calls:
             return []
         session, roles, caller = _caller(session, roles, context)

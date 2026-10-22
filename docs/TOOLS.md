@@ -726,6 +726,30 @@ in a daemonic process with work that holds the GIL for 1 s: two such renders at 
 1.08 s with subprocess workers and 2.08 s in-process, and an edit asked for during a render
 returned in 8 ms with subprocess workers and 831 ms in-process.
 
+**A worker that exits as it starts** (round 13, R6, 0.58.0). Under `spawn` a worker first
+imports the program's main module again, so a script with no `if __name__ == "__main__":`
+guard ran its work once more in every worker -- its renders failing there, its work after
+them going on -- while the parent waited the whole `worker_start_timeout` for each: 120 s a
+call, 240 s for the first (measured: it waited for the two workers being warmed, then
+started its own). Now a starting worker is waited for on its pipe and its process at once,
+so an exit ends the wait, and the error names the cause: its exit code, or the signal that
+stopped it. A worker that reaches a `WorkerPool.run` or a `Toolbox.dispatch` while it is
+still starting stops at once (exit code 86, `worker.UNGUARDED_EXIT`) and says why on stderr;
+the parent's error says: put that work under the guard, or use `workers=0` or a
+`SubprocessPool`, whose workers never import the main module. Measured with a guardless
+script rendering a deck three times: 240, 120 and 120 s, each `"the worker process did not
+start within 120 s"`, before; 1.5, 0.0 and 0.0 s after, rendered by subprocess workers.
+
+An exit with a code as a worker starts -- that one, an import error, a `sys.exit` in the
+main module -- would happen to every worker, so the pool does not try again: a
+`WorkerPool` falls back as in a daemonic process (subprocess workers, then in-process; the
+warning names the cause), and with `fallback=False` every later call fails at once with the
+same error (`pool.failed`). A worker stopped by a signal as it starts is not remembered: the
+next call starts another. A worker that is alive keeps its whole start timeout, however
+slowly it starts and warms. A failure met while warming in the background (`warm()`, the
+toolbox's prewarm) is the one the call needing a worker gets. A `SubprocessPool` worker
+that exits before it is ready is remembered the same way.
+
 A subprocess worker is `python -m ooxml_edit.tools.subworker` (the same `sys.executable`),
 long-lived like a multiprocessing worker: starting one costs about 0.25 s to its first
 reply, and a renderer's imports and first font scan another 0.6 s -- more than a warm render

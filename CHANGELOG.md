@@ -2,6 +2,26 @@
 
 Versions are those in `pyproject.toml`; none is published to PyPI yet.
 
+## 0.58.0 -- unreleased
+- A worker that exits as it starts fails the call at once, naming the cause (round 13, R6).
+  A starting multiprocessing worker is waited for on its pipe and its process together
+  (`multiprocessing.connection.wait`), so an exit is seen at once, not at
+  `start_timeout`; the error gives the exit code or the signal.  The case production met: a
+  script with no `if __name__ == "__main__":` guard, which spawn imports again in each
+  worker, so the script's work ran there too while the parent waited 120 s a call (240 s
+  for the first: the warming workers' 120 s, then its own).  A worker that reaches
+  `WorkerPool.run` or `Toolbox.dispatch` while still starting
+  (`worker.bootstrapping_worker()`) now stops at once with exit code 86
+  (`worker.UNGUARDED_EXIT`), saying so on stderr, and the parent's error says to add the
+  guard or use `workers=0` or a `SubprocessPool`.  An exit with a code as a worker starts
+  is lasting: a `WorkerPool` falls back as in a daemonic process (subprocess workers, which
+  never import the main module; then in-process), with `fallback=False` later calls raise
+  the same error at once (`pool.failed`), and `warm()` stops trying; a signal (a kill) is
+  not remembered.  A `SubprocessPool` worker that exits before it is ready is remembered
+  the same way.  A live worker still gets its whole `start_timeout`.  Tool definitions
+  unchanged; the only new text a model may read is the error of a call whose worker
+  could not start.
+
 ## 0.57.0 -- unreleased
 - Every result says what the call changed, for the application (round 13, R2):
   `Result.touched`, one entry per thing changed with its `"doc"`, in the format's own
