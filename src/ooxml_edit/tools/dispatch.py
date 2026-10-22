@@ -46,6 +46,12 @@ result's ``data.facts``; a reference that names no single value refuses the call
 **Checks.**  Handlers say what they touched (``call.touch(page)``); after a changing call
 the dispatcher asks the document's format for the facts (``DocumentFormat.checks``) once.
 
+**What changed.**  Every call watches its document (:meth:`DocumentEntry.watch`); the
+parts whose bytes changed, in the format's addresses (``DocumentFormat.touched``), are the
+result's ``touched`` -- for the application, never the model -- whatever the tool did, so
+no handler says it.  A batch watches each document it changes for the union, and marks the
+state before each op that changes one (:meth:`DocumentEntry.mark`) for ``touched_by_op``.
+
 **Batch.**  The shared ``batch`` tool runs other calls (*ops*) in order under every lock they
 need, inside one undo step per document.  Each op stands on its own: one that fails -- an
 unknown tool, arguments its schema refuses, an address that names nothing, an error while
@@ -85,7 +91,8 @@ from .registry import (ACCEPT, ANY_ROLE, CORE, EDIT, RESOLVE, ROLES, Tool, ToolG
 from .results import Image, Result, ToolError
 from .schema import CallError, validate_call
 from .session import (NO_CONTEXT, Clock, DocumentEntry, DocumentFormat, Output, Session,
-                      SessionView, StepOwner, doc_order, font_dirs_of, locale_of, narrowed)
+                      SessionView, StepOwner, doc_order, font_dirs_of, locale_of, narrowed,
+                      part_entries)
 from .sources import Rows, qualify, resolve as resolve_rows
 from .rendercache import ContentStore
 from .worker import WorkerPool, default_workers, run_all
@@ -124,6 +131,11 @@ class CallContext:
         self.roles: tuple[str, ...] = ROLES
         #: The application's context of the calls (:attr:`Call.caller`); none by default.
         self.caller: Mapping[str, Any] = NO_CONTEXT
+        #: In a batch, ``doc_id -> (op, state)``: the state each document was in when the
+        #: last op that changes it began (:meth:`DocumentEntry.mark`), for what it changed.
+        self.states: dict[str, tuple[int, Any]] = {}
+        #: In a batch, ``(op, doc_id, change)`` for each op that changed a document.
+        self.op_changes: list[tuple[int, str, Any]] = []
 
     def mark(self) -> tuple[Any, ...]:
         """What the ops so far defined and touched, for :meth:`reset` after a failed op."""
@@ -185,6 +197,9 @@ class Call:
         #: (``Tool.facts``), in order: each a :class:`~.textfacts.Fact` -- the argument,
         #: the value's place in its text as the handler gets it, and its record.
         self.facts: list[textfacts.Fact] = []
+        #: Whether :meth:`unlocked` let the locks go at some point: another call may have
+        #: changed the documents meanwhile, so what changed is not this call's to report.
+        self.released = False
 
     @property
     def in_batch(self) -> bool:
@@ -548,6 +563,7 @@ class Call:
             yield False
             return
         held = sorted(self.held, key=lambda entry: doc_order(entry.doc_id))
+        self.released = True
         for entry in reversed(held):
             entry.lock.release()
         try:
@@ -1226,13 +1242,21 @@ class Toolbox:
             self._with_datasets(tool, arguments, call)
             arguments = self._with_facts(tool, arguments, call)
             call.held = list(entries.values())   # dispatch() holds each once
-            if changing and primary is not None:
-                with primary.batch(StepOwner(dict(caller), tool.name)):
+            with ExitStack() as watching:
+                # Whatever the tool, what its document's content did (undo included).
+                change = (watching.enter_context(primary.watch()) if primary is not None
+                          else None)
+                if changing and primary is not None:
+                    with primary.batch(StepOwner(dict(caller), tool.name)):
+                        returned = handler(call, **arguments)
+                    primary.bump()
+                else:
                     returned = handler(call, **arguments)
-                primary.bump()
-            else:
-                returned = handler(call, **arguments)
             result = _as_result(returned, call.result)
+            if result.ok and primary is not None and not call.released:
+                # (A call that let its lock go -- a reading one, working on a snapshot --
+                # changes nothing, and another call's change meanwhile is not its.)
+                result.touched = self._touched(session, primary, change)
             _report_facts(call, result)
             if call.version_used is not None:
                 result.version = call.version_used
@@ -1551,6 +1575,8 @@ class Toolbox:
         with collect_warnings() as caught:
             try:
                 with ExitStack() as stack:
+                    changes = {doc: stack.enter_context(entries[doc].watch())
+                               for doc in sorted(entries, key=doc_order)}
                     for doc in sorted(entries, key=doc_order):
                         stack.enter_context(entries[doc].batch(owner))
                     for index, tool, clean in prepared:
@@ -1559,11 +1585,13 @@ class Toolbox:
                             raise _OpFailed(index, tool.name, ToolError(
                                 "timeout", f"the batch passed its {limits.batch_timeout:g} s "
                                 "deadline"))
+                        self._op_states(index, tool, clean, entries, context)
                         done.append(self._run_op(session, index, tool, clean, entries, context,
                                                  combined, reading or {}))
                         if tool.changes(clean):
                             for doc in tool.doc_ids(clean):
                                 context.changed_at[doc] = index
+                    self._op_states(len(prepared), None, {}, entries, context)
             except _OpFailed as failed:
                 error = failed.error
                 raise ToolError(
@@ -1584,6 +1612,7 @@ class Toolbox:
         combined.warnings[:0] = notes
         combined.warnings.extend(caught)
         _set_checks(combined, checks)
+        self._batch_touched(session, entries, changes, context, combined)
         combined.summary = f"Ran {len(done)} op(s) as one step: " + _summaries(done)
         combined.data = {"ops": done}
         return combined
@@ -1605,6 +1634,8 @@ class Toolbox:
         combined = Result()
         with collect_warnings() as caught:
             with ExitStack() as stack:
+                changes = {doc: stack.enter_context(entries[doc].watch())
+                           for doc in sorted(entries, key=doc_order)}
                 for doc in sorted(entries, key=doc_order):
                     stack.enter_context(entries[doc].batch(owner))
                 for index, op in enumerate(ops):
@@ -1633,6 +1664,7 @@ class Toolbox:
                         changing = True
                         for doc in tool.doc_ids(clean):
                             context.changed_at[doc] = index
+                self._op_states(len(ops), None, {}, entries, context)
             if errors and len(errors) == len(outcomes):
                 raise _none_applied(outcomes, errors)
             for doc in sorted(entries, key=doc_order):
@@ -1644,6 +1676,7 @@ class Toolbox:
             self._keep_datasets(session, context, combined)
         combined.warnings.extend(caught)
         _set_checks(combined, checks)
+        self._batch_touched(session, entries, changes, context, combined)
         done = [outcome for outcome in outcomes if "error" not in outcome]
         if errors:
             combined.summary = (f"Ran {len(done)} of {len(outcomes)} ops as one step: "
@@ -1663,11 +1696,12 @@ class Toolbox:
         datasets and touched scopes it defined."""
         mark = context.mark()
         rolled: list[DocumentEntry] = []
+        states = self._op_states(index, tool, arguments, entries, context)
         try:
             with ExitStack() as stack:
                 for doc in sorted({d for d in tool.doc_ids(arguments) if d in entries},
                                   key=doc_order):
-                    if stack.enter_context(entries[doc].savepoint()):
+                    if stack.enter_context(entries[doc].savepoint(states.get(doc))):
                         rolled.append(entries[doc])
                 return self._run_op(session, index, tool, arguments, entries, context,
                                     combined, reading)
@@ -1726,6 +1760,67 @@ class Toolbox:
         if result.data not in (None, {}, []):
             entry["data"] = result.data
         return entry
+
+    # -- what calls changed -----------------------------------------------------------------
+
+    def _touched(self, session: Session, entry: DocumentEntry, change: Any
+                 ) -> list[dict[str, Any]]:
+        """``Result.touched`` for what ``change`` (a :class:`~ooxml_edit.history.Change`)
+        did to ``entry``'s document, in its format's addresses (``DocumentFormat.touched``;
+        one entry per part without).  A format whose mapping fails falls back to the
+        parts, logged: what changed is never left out."""
+        if change is None or not change.parts:
+            return []
+        fmt = session.formats.get(entry.kind)
+        found: list[dict[str, Any]]
+        if fmt is None or fmt.touched is None:
+            found = part_entries(change)
+        else:
+            try:
+                found = list(fmt.touched(entry.document, change))
+            except Exception:  # noqa: BLE001 -- the parts still say what changed
+                logger.exception("the %s format's touched failed; reporting parts", entry.kind)
+                found = part_entries(change)
+        return [{"doc": entry.doc_id, **item} for item in found]
+
+    def _op_states(self, index: int, tool: Tool | None, arguments: Mapping[str, Any],
+                   entries: Mapping[str, DocumentEntry], context: CallContext
+                   ) -> dict[str, Any]:
+        """Before a batch's op ``index`` that changes documents: their states now
+        (:meth:`DocumentEntry.mark`), returned for the op's savepoints; and for each, what
+        the op that last changed it before did -- from its state then to this one.  With
+        ``tool`` ``None`` (after the last op), every document's last op is settled."""
+        if tool is None:
+            docs = [doc for doc in context.states if doc in entries]
+        elif tool.changes(arguments):
+            docs = [doc for doc in tool.doc_ids(arguments) if doc in entries]
+        else:
+            return {}
+        states: dict[str, Any] = {}
+        for doc in docs:
+            entry = entries[doc]
+            state = entry.mark()
+            if state is None:
+                continue
+            states[doc] = state
+            earlier = context.states.pop(doc, None)
+            if earlier is not None:
+                context.op_changes.append((earlier[0], doc,
+                                           entry.history.change(earlier[1], state)))
+            if tool is not None:
+                context.states[doc] = (index, state)
+        return states
+
+    def _batch_touched(self, session: Session, entries: Mapping[str, DocumentEntry],
+                       changes: Mapping[str, Any], context: CallContext,
+                       combined: Result) -> None:
+        """A batch's ``touched`` (each document's whole change) and ``touched_by_op``."""
+        for doc in sorted(entries, key=doc_order):
+            combined.touched += self._touched(session, entries[doc], changes.get(doc))
+        for op, doc, change in sorted(context.op_changes, key=lambda item: item[0]):
+            found = self._touched(session, entries[doc], change)
+            if found:
+                combined.touched_by_op.setdefault(op, []).extend(found)
 
     def map_exception(self, exc: BaseException) -> ToolError:
         """A library exception as an error code, with its valid options when known."""

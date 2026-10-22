@@ -414,3 +414,89 @@ def test_undo_step_names_the_later_steps_that_touched_its_parts():
     with pytest.raises(Entangled) as shared:
         history.undo_step(2, shared=[PAGE2])
     assert shared.value.later == [] and shared.value.shared == [PAGE2]
+
+
+# -- what changed: watches ------------------------------------------------------------------------
+
+
+def test_a_watch_says_which_parts_a_batch_changed_and_their_bytes_either_side():
+    package = OpcPackage.open(outer_package())
+    history = History(package)
+    with history.watch() as nothing:
+        with history.batch():
+            package.tree(PAGE1)                 # read, not changed
+    assert not nothing.changed and nothing.parts == frozenset()
+    with history.watch() as change:
+        with history.batch():
+            _title(package, PAGE1, "A", history)
+            package.add_part("doc/media/image9.png", b"\x89PNG new")
+    assert change.parts == {PAGE1, "doc/media/image9.png"}
+    assert b"title" not in change.before(PAGE1) and b'title="A"' in change.after(PAGE1)
+    assert change.before("doc/media/image9.png") is None
+    assert change.after("doc/media/image9.png") == b"\x89PNG new"
+
+
+def test_a_watch_sees_undo_redo_and_a_checkpointed_edit_and_nets_them_out():
+    package = OpcPackage.open(outer_package())
+    history = History(package)
+    _title(package, PAGE1, "A", history)
+    with history.watch() as undone:
+        history.undo()
+    assert undone.parts == {PAGE1}
+    with history.watch() as both:
+        history.redo()
+        _title(package, PAGE2, "B", history)    # checkpointed, outside a batch
+    assert both.parts == {PAGE1, PAGE2}
+    with history.watch() as cancelled:          # an edit and its undo: nothing net
+        _title(package, PAGE2, "C", history)
+        history.undo()
+    assert cancelled.changed and cancelled.parts == frozenset()
+
+
+def test_a_watch_sees_a_scoped_undo_and_redo_and_nests():
+    package = OpcPackage.open(outer_package())
+    history = History(package)
+    _title(package, PAGE1, "A", history)
+    _title(package, PAGE2, "B", history)
+    with history.watch() as outer:
+        with history.watch() as inner:
+            history.undo_in(_page(package, PAGE1))
+        assert inner.parts == {PAGE1}
+        history.redo_in(_page(package, PAGE1))
+    assert outer.parts == frozenset()           # back as it was
+    with history.watch() as change:
+        history.undo_in(_page(package, PAGE1))
+    assert change.parts == {PAGE1} and _titles(package) == (None, "B")
+
+
+def test_a_failed_batch_and_an_open_one_change_nothing_a_watch_sees():
+    package = OpcPackage.open(outer_package())
+    history = History(package)
+    with history.watch() as change:
+        with pytest.raises(RuntimeError):
+            with history.batch():
+                _title(package, PAGE1, "A", history)
+                raise RuntimeError("no")
+    assert not change.changed
+    with history.batch():
+        with history.watch() as inside:
+            _title(package, PAGE1, "A", history)
+        assert not inside.changed               # the step is made when the batch closes
+
+
+def test_marks_compare_stretches_of_an_open_batch_and_start_a_savepoint():
+    package = OpcPackage.open(outer_package())
+    history = History(package)
+    assert history.compares and not History(Counter()).compares
+    with history.batch():
+        first = history.mark()
+        _title(package, PAGE1, "A", history)
+        second = history.mark()
+        with pytest.raises(RuntimeError):
+            with history.savepoint(second):
+                _title(package, PAGE2, "B", history)
+                raise RuntimeError("rolled back to the mark")
+        third = history.mark()
+    assert history.change(first, second).parts == {PAGE1}
+    assert history.change(second, third).parts == frozenset()
+    assert _titles(package) == ("A", None)

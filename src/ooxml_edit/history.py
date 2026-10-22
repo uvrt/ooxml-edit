@@ -40,6 +40,16 @@ takes out the one that made a given version -- under the same rule as :meth:`und
 application that knows who made each step (the tool layer's views) can take back one
 writer's latest step and refuse when a later step depends on it.  :meth:`redo_step` brings
 it back; :attr:`History.next_redo` is the version a plain :meth:`redo` would restore.
+
+**What changed.**  :meth:`History.watch` reports what the package's content did while it
+was open: each state change the history makes -- an outermost batch closing, an undo, a
+redo, a scoped undo or redo, a single checkpointed edit -- is reported to every open watch,
+which keeps the state before the first and after the last (:class:`Change`).  The snapshots
+are the ones the history takes anyway, so a watch costs nothing until it is asked which
+parts differ (:attr:`Change.parts`); only an edit checkpointed outside a batch, whose
+after-state no one took, costs one snapshot when the watch closes.  The tool layer watches
+every call, so its results say what each changed (``Result.touched``), whatever the tool.
+:meth:`History.mark` is the state now, for comparing the steps inside an open batch.
 """
 
 from __future__ import annotations
@@ -94,6 +104,61 @@ class Step:
     parts: frozenset[str] | None = None
 
 
+class Change:
+    """What the package's content did while a :meth:`History.watch` was open: the states
+    before and after, as the package's snapshots, and the parts whose bytes differ.
+
+    ``before``/``after`` read one part's bytes in either state (``None``: the part did not
+    exist then), for a format to say what in a part changed -- the objects of a page, the
+    values of a table.  A watch over which nothing changed has ``parts`` empty; so has one
+    whose changes cancel out (an edit and its undo)."""
+
+    def __init__(self, package: Any) -> None:
+        self._package = package
+        self._before: Any = None
+        self._after: Any = None
+        self._live = False
+        self._parts: frozenset[str] | None = None
+
+    @property
+    def changed(self) -> bool:
+        """Whether any state change was reported (its parts may still be none)."""
+        return self._before is not None
+
+    @property
+    def parts(self) -> frozenset[str]:
+        """The parts whose bytes differ between before and after; empty when nothing
+        changed, or the package cannot compare snapshots part by part."""
+        if self._parts is None:
+            if self._before is None or self._after is None \
+                    or not hasattr(self._package, "changed_between"):
+                self._parts = frozenset()
+            else:
+                self._parts = frozenset(self._package.changed_between(self._before,
+                                                                      self._after))
+        return self._parts
+
+    def before(self, path: str) -> bytes | None:
+        """``path``'s bytes before; ``None`` when it did not exist then."""
+        return self._package.snapshot_value(self._before, path)
+
+    def after(self, path: str) -> bytes | None:
+        """``path``'s bytes after; ``None`` when it does not exist then."""
+        return self._package.snapshot_value(self._after, path)
+
+    def _record(self, before: Any, after: Any) -> None:
+        if self._before is None:
+            self._before = before
+        # ``None``: the live state, taken when the watch closes (an edit checkpointed
+        # outside a batch, which is still to happen when it is reported).
+        self._after, self._live = after, after is None
+        self._parts = None
+
+    def _close(self) -> None:
+        if self._live:
+            self._after, self._live = self._package.snapshot(), False
+
+
 @dataclass(frozen=True)
 class _Undone:
     parts: frozenset[str]
@@ -117,6 +182,8 @@ class History:
         self._batch_snapshot: Any | None = None
         #: Steps taken out by :meth:`undo_in`, latest last, for :meth:`redo_in`.
         self._undone: list[_Undone] = []
+        #: The open watches (:meth:`watch`), told of every state change.
+        self._watches: list[Change] = []
 
     # -- checkpoints -----------------------------------------------------------------------
 
@@ -125,7 +192,9 @@ class History:
         if self._batch_depth:
             # Inside a batch the only checkpoint that matters is the one taken on entry.
             return
-        self._push(self._package.snapshot())
+        snapshot = self._package.snapshot()
+        self._push(snapshot)
+        self._changed(snapshot, None)       # after: once the mutation is done
 
     def _push(self, snapshot: Any) -> None:
         self._undo.append((snapshot, self._version))
@@ -144,6 +213,44 @@ class History:
         outermost one closes, and a batch that fails leaves the version as it was.
         """
         return self._version
+
+    # -- watching --------------------------------------------------------------------------
+
+    @contextmanager
+    def watch(self) -> Iterator[Change]:
+        """A :class:`Change` that says what the content did while the block ran: every
+        state change the history makes in it, from the state before the first to the state
+        after the last.  Nestable; free until :attr:`Change.parts` is asked.  A batch still
+        open when the block ends is not in it: it changes the content when it closes."""
+        change = Change(self._package)
+        self._watches.append(change)
+        try:
+            yield change
+        finally:
+            self._watches.remove(change)
+            change._close()
+
+    def _changed(self, before: Any, after: Any) -> None:
+        for change in self._watches:
+            change._record(before, after)
+
+    def mark(self) -> Any:
+        """The state now (the package's snapshot): inside a batch, where no step is made
+        until it closes, what to compare one stretch of it against the next with
+        (:meth:`change`), or to hand :meth:`savepoint` as its start."""
+        return self._package.snapshot()
+
+    @property
+    def compares(self) -> bool:
+        """Whether the package compares snapshots part by part (``changed_between``), so
+        a :class:`Change` can say which parts changed."""
+        return hasattr(self._package, "changed_between")
+
+    def change(self, before: Any, after: Any) -> Change:
+        """The :class:`Change` from one state to another (:meth:`mark`, or a watch's)."""
+        change = Change(self._package)
+        change._record(before, after)
+        return change
 
     # -- batching --------------------------------------------------------------------------
 
@@ -170,20 +277,24 @@ class History:
             snapshot, self._batch_snapshot = self._batch_snapshot, None
             # A batch that changed nothing is no step: undo would otherwise undo nothing,
             # and the version would claim a new state with the old content.
-            if self._package.snapshot() != snapshot:
+            after = self._package.snapshot()
+            if after != snapshot:
                 self._push(snapshot)
+                self._changed(snapshot, after)
 
     @contextmanager
-    def savepoint(self) -> Iterator[None]:
+    def savepoint(self, start: Any = None) -> Iterator[None]:
         """Inside a batch: if the code inside raises, roll back to here and re-raise, and
         the batch stays open -- what came before in it is kept, as one step when it closes.
         A batch nested inside rolls nothing back by itself; this is the inner rollback a
-        batch of independent edits needs.  Outside a batch it is a :meth:`batch`."""
+        batch of independent edits needs.  Outside a batch it is a :meth:`batch`.
+        ``start``: the state now, when the caller has just taken it (:meth:`mark`), so it
+        is not taken twice."""
         if not self._batch_depth:
             with self.batch():
                 yield
             return
-        snapshot = self._package.snapshot()
+        snapshot = start if start is not None else self._package.snapshot()
         try:
             yield
         except Exception:
@@ -211,18 +322,22 @@ class History:
         if not self._undo:
             return False
         snapshot, version = self._undo.pop()
-        self._redo.append((self._package.snapshot(), self._version))
+        current = self._package.snapshot()
+        self._redo.append((current, self._version))
         self._package.restore(snapshot)
         self._version = version
+        self._changed(current, snapshot)
         return True
 
     def redo(self) -> bool:
         if not self._redo:
             return False
         snapshot, version = self._redo.pop()
-        self._undo.append((self._package.snapshot(), self._version))
+        current = self._package.snapshot()
+        self._undo.append((current, self._version))
         self._package.restore(snapshot)
         self._version = version
+        self._changed(current, snapshot)
         return True
 
     def clear(self) -> None:
@@ -324,6 +439,7 @@ class History:
             rewritten.append((snapshot, new))
         new_current, new_version = rewritten.pop()
         package.restore(new_current)
+        self._changed(current, new_current)
         self._undo = self._undo[:index] + rewritten
         self._version = new_version
         self._redo.clear()
@@ -364,7 +480,9 @@ class History:
                             moved)
         del self._undone[index]
         self._push(current)
-        package.restore(package.snapshot_with(current, undone.after_snapshot, undone.parts))
+        restored = package.snapshot_with(current, undone.after_snapshot, undone.parts)
+        package.restore(restored)
+        self._changed(current, restored)
         return ScopedStep(undone.parts, undone.before, undone.after, self._version)
 
     def can_undo_in(self, scope: Collection[str]) -> bool:

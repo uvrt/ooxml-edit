@@ -83,7 +83,7 @@ from .schema import CallError, SubsetError, canonical, check_subset, validate_ca
 from .sources import Rows
 from .session import (DEFAULT_LOCALE, LOCALE_FIELDS, Blob, DefaultLocale, DocumentEntry,
                       DocumentFormat, Output, Session, SessionView, StepOwner, doc_order,
-                      locale_of)
+                      locale_of, part_entries)
 from .rendercache import ContentStore, content_key
 from .worker import (InProcess, SubprocessPool, WorkerPool, available_cpus, default_workers,
                      run_all, worker_task)
@@ -101,6 +101,6 @@ __all__ = [
     "collect_warnings", "dataset_id", "doc_order", "free_object", "integer", "locale_of",
     "row_range",
     "names_as", "number", "obj", "openai_image_tokens",
-    "page_list", "page_text", "hints", "shared", "textfacts", "strict_problems", "string", "system_prompt", "tool", "truncate", "validate_call",
+    "page_list", "page_text", "part_entries", "hints", "shared", "textfacts", "strict_problems", "string", "system_prompt", "tool", "truncate", "validate_call",
     "worker_task",
 ]

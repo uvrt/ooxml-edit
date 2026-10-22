@@ -398,6 +398,11 @@ DocumentEntry
  "data": {}, "next_cursor": null}
 ```
 
+   Round 13 (R2, 0.57.0): beside the envelope, not in it, `Result.touched` tells the
+   application what the call changed (a deck's `{"doc": "d1", "slide": "s:258", "shapes":
+   ["258.7"]}`), from the bytes that changed, for every tool and undo; `touched_by_op` per
+   op of a batch. See TOOLS.md, "What a call changed".
+
 12. **Batch, don't loop.** Build a whole graphic in one `items[]` call, chaining with refs; mix tools with `batch` (D14). Not allowed in a batch: render, save_document and the session tools. (Data scales and `place`, D15, left the tools post-T4.)
 
 ---

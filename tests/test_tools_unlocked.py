@@ -61,6 +61,8 @@ def test_an_edit_to_page_2_does_not_wait_for_a_render_of_page_1(toolbox):
     result = rendered["result"]
     assert result.ok and len(result.images) == 1
     assert result.version == before                      # what was drawn: the snapshot
+    # The edit made meanwhile is the edit's, not the render's (Result.touched, round 13).
+    assert result.touched == [] and edit.touched == [{"doc": doc, "part": synthetic.PAGE2}]
     entry = session.entry(doc)
     assert entry.version == before + 1
     assert entry.document.title(2) == "Edited"

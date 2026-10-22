@@ -191,6 +191,15 @@ class DocumentFormat:
     #: a plural or another prefix.  Only wording: the call still fails, its message naming
     #: the tool to use.  An entry naming a tool or action the toolbox lacks is ignored.
     tool_hints: dict[str, str] = field(default_factory=dict)
+    #: What a changing call changed, for the application (``Result.touched``; the model
+    #: never sees it): ``touched(document, change)`` -> entries (dicts), where ``change``
+    #: is a :class:`~ooxml_edit.history.Change` -- its ``parts`` the part names whose bytes
+    #: differ, ``before(path)``/``after(path)`` their bytes -- and each entry names what
+    #: changed in the format's own addresses (a page and the objects on it).  The
+    #: dispatcher adds ``"doc"`` to each.  Called once per call that changed parts, and per
+    #: op and document in a ``batch``.  ``None``: :func:`part_entries`, one ``{"part"}``
+    #: per changed part.
+    touched: Callable[[Any, Any], list[dict[str, Any]]] | None = None
     #: What a new worker process runs before its first task, so the first render is not
     #: the one to pay for the format's imports and font index: a module-level function of
     #: no arguments, registered (:func:`~.worker.worker_task`).  Its time is no call's
@@ -393,19 +402,44 @@ class DocumentEntry:
             self.owners[step.version] = self.owners[step.after]
 
     @contextmanager
-    def savepoint(self) -> Iterator[bool]:
+    def savepoint(self, start: Any = None) -> Iterator[bool]:
         """Inside :meth:`batch`: roll back what the code inside changed if it raises, the
         batch staying open (the document's ``savepoint()``, or its history's:
         :meth:`~ooxml_edit.history.History.savepoint`).  Yields whether a rollback is
-        possible; a document with neither keeps what a failing edit did."""
+        possible; a document with neither keeps what a failing edit did.  ``start``: the
+        state now when the caller just took it (:meth:`mark`), for the history's own."""
         savepoint = getattr(self.document, "savepoint", None)
-        if savepoint is None and self.history is not None:
-            savepoint = getattr(self.history, "savepoint", None)
-        if savepoint is None:
-            yield False
+        if savepoint is not None:
+            with savepoint():
+                yield True
             return
-        with savepoint():
-            yield True
+        if self.history is not None and hasattr(self.history, "savepoint"):
+            with (self.history.savepoint(start) if start is not None
+                  else self.history.savepoint()):
+                yield True
+            return
+        yield False
+
+    @contextmanager
+    def watch(self) -> Iterator[Any]:
+        """What the document's content did while the block ran: its history's
+        :meth:`~ooxml_edit.history.History.watch`, a
+        :class:`~ooxml_edit.history.Change`; ``None`` for a document whose history
+        cannot say."""
+        history = self.history
+        if history is None or not hasattr(history, "watch"):
+            yield None
+            return
+        with history.watch() as change:
+            yield change
+
+    def mark(self) -> Any:
+        """The document's state now (:meth:`~ooxml_edit.history.History.mark`), for
+        comparing the ops of a batch; ``None`` for a document whose history cannot."""
+        history = self.history
+        if history is None or not getattr(history, "compares", False):
+            return None
+        return history.mark()
 
     def keep_refs(self, defined: dict[str, str]) -> None:
         """Add refs a call defined, and remember the set as this version's."""
@@ -460,6 +494,12 @@ class DocumentEntry:
 
 
 _DOC_ID = re.compile(r"^d(\d+)$")
+
+
+def part_entries(change: Any) -> list[dict[str, Any]]:
+    """What a format without its own ``touched`` reports: ``{"part": name}`` for every part
+    whose bytes changed, in name order."""
+    return [{"part": part} for part in sorted(change.parts)]
 
 
 def doc_order(doc_id: str) -> tuple[int, str]:

@@ -2,6 +2,27 @@
 
 Versions are those in `pyproject.toml`; none is published to PyPI yet.
 
+## 0.57.0 -- unreleased
+- Every result says what the call changed, for the application (round 13, R2):
+  `Result.touched`, one entry per thing changed with its `"doc"`, in the format's own
+  addresses (`DocumentFormat.touched(document, change)`; without one,
+  `{"doc", "part"}` per changed part, `tools.part_entries`), and for a `batch` the union
+  plus `Result.touched_by_op` (`{op: entries}`).  Never in `to_json`/`to_text`: the model
+  reads not one token more.  Derived from the bytes, not the arguments: the dispatcher
+  watches the call's document (`DocumentEntry.watch`, over `History.watch`), so every
+  tool, `undo` and `redo` included, is covered, and an address only read (a `like`, a
+  source) never appears; an error or a call that changed no bytes reports `[]`.  A format
+  whose mapping raises falls back to the parts, logged.
+- `History.watch()` yields a `history.Change` -- the state before the first and after the
+  last state change made while it is open (an outermost batch closing, undo, redo, a
+  scoped undo or redo, a checkpointed edit), `parts` (the part names whose bytes differ,
+  computed when asked) and `before(path)`/`after(path)` (the bytes either side).  Free:
+  the snapshots are the ones the history takes anyway.  `History.mark()` (the state now,
+  to compare stretches of an open batch: `History.change(a, b)`), `History.compares`,
+  and `History.savepoint(start)`, which takes a mark as its start instead of taking the
+  snapshot again; `DocumentEntry.watch`, `mark`, `savepoint(start)`.  A batch's ops each
+  take one mark per document they change (a partial batch's savepoint reuses it).
+
 ## 0.56.0 -- unreleased
 - The shared `check` takes `spacing` (round 12, Q1): decks report the gaps, padding and
   frame clearances below that many points (`"spacing": 8`), measured as drawn and nearest
