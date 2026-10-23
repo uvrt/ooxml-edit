@@ -2,6 +2,13 @@
 
 Versions are those in `pyproject.toml`; none is published to PyPI yet.
 
+## 0.59.0 -- unreleased
+- The shared `check` takes `contrast` (round 15, T2): decks report text whose contrast with
+  what is behind it is below that ratio (`"contrast": 4.5`, WCAG 2's for text; large text,
+  18 pt or 14 pt bold, is held to two thirds of it), measured, lowest first (pptx-agent's
+  handler; a document's refuses it, as it does `spacing`). A number, not `true | ratio`:
+  one type, which a strict schema can carry. Bounded 1-21 by the call validator.
+
 ## 0.58.0 -- unreleased
 - A worker that exits as it starts fails the call at once, naming the cause (round 13, R6).
   A starting multiprocessing worker is waited for on its pipe and its process together

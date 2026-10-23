@@ -298,7 +298,12 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
           # Q1 (round 12): measured gaps, padding and clearances as drawn, nearest first.
           # A number, not {"below": 8}: half the tokens in every format's core.
           "spacing": number("Decks: also the gaps, padding and frame clearances below this, "
-                            "pt; 8 is usual.", minimum=0, maximum=200, optional=True)},
+                            "pt; 8 is usual.", minimum=0, maximum=200, optional=True),
+          # T2 (round 15): text in low contrast with what is behind it, measured.  A number
+          # (the ratio), not true | ratio: one type, strict-safe, as spacing.
+          "contrast": number("Decks: also text below this contrast ratio with what is "
+                             "behind it; 4.5 is WCAG's.", minimum=1, maximum=21,
+                             optional=True)},
          refs=("slides[]",)),
     # S10, S11: edit_chart reads too
     Spec("edit_chart",

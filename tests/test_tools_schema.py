@@ -270,3 +270,14 @@ def test_check_takes_a_spacing_threshold_in_points():
     assert validate_call(tool.schema, {"doc": "d1", "spacing": 6})["spacing"] == 6
     with pytest.raises(CallError):
         validate_call(tool.schema, {"doc": "d1", "spacing": -1})
+
+
+def test_check_takes_a_contrast_ratio():
+    """Round 15, T2: ``contrast`` asks a deck's check for text below that contrast ratio."""
+    tool = shared.definition("check")
+    contrast = tool.canonical["properties"]["contrast"]
+    assert contrast["type"] == "number" and contrast["description"].startswith("Decks:")
+    assert validate_call(tool.schema, {"doc": "d1", "contrast": 4.5})["contrast"] == 4.5
+    for wrong in (0.5, 22, True):
+        with pytest.raises(CallError):
+            validate_call(tool.schema, {"doc": "d1", "contrast": wrong})
