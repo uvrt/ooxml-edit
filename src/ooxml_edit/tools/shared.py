@@ -302,8 +302,8 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
           # T2 (round 15): text in low contrast with what is behind it, measured.  A number
           # (the ratio), not true | ratio: one type, strict-safe, as spacing.
           "contrast": number("Decks: also text below this contrast ratio with what is "
-                             "behind it; 4.5 is WCAG's (large text: 2/3 of it).", minimum=1,
-                             maximum=21, optional=True)},
+                             "behind it; 4.5 is WCAG's.", minimum=1, maximum=21,
+                             optional=True)},
          refs=("slides[]",)),
     # S10, S11: edit_chart reads too
     Spec("edit_chart",
