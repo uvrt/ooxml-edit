@@ -257,6 +257,25 @@ def test_new_document_runs_the_handler_of_the_kind_it_names(toolbox, session):
     assert missing.error.field == "kind" and missing.error.valid_options == ["docx"]
 
 
+def test_a_made_document_is_the_results_doc(toolbox, session):
+    """Round 16, F10: new_document and open_document name no document, so the result's
+    doc is the one they made -- not None, with the id only in the summary."""
+    made = call(toolbox, session, "new_document", kind="docx")
+    assert made.doc == made.created[0] and made.to_json()["doc"] == made.doc
+    assert made.version == session.entry(made.doc).version
+    opened = call(toolbox, session, "open_document", blob=session.add_blob(synthetic.outer_package(), "x.docx"))
+    assert opened.doc == opened.created[0]
+
+
+def test_clean_reaches_only_a_handler_that_takes_it(toolbox, session):
+    """Round 16, F11: save_document's clean goes to a kind's handler that takes it; one
+    that does not refuses clean: true, naming the field, and never sees clean: false."""
+    plain = call(toolbox, session, "save_document", doc="d1", name="a.docx", format="docx", clean=False)
+    assert plain.ok
+    refused = call(toolbox, session, "save_document", doc="d1", name="a.docx", format="docx", clean=True)
+    assert not refused.ok and refused.error.code == "invalid_arguments" and refused.error.field == "clean"
+
+
 def test_open_document_opens_a_blob_with_the_formats_summary(toolbox, session):
     handle = session.add_blob(synthetic.outer_package(), "more.docx")
     result = call(toolbox, session, "open_document", blob=handle)

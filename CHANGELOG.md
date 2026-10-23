@@ -2,6 +2,22 @@
 
 Versions are those in `pyproject.toml`; none is published to PyPI yet.
 
+## 0.60.0 -- unreleased
+- A call that names no document and makes one -- `new_document`, `open_document` -- has
+  that document as its result's `doc` (and its version as `version`), as every later call
+  has the one it names; it was `None`, the id only in the summary and `created` (round 16,
+  F10). For every kind: the dispatcher sets it when the call made exactly one open document.
+- The shared `save_document` takes `clean` (round 16, F11): a boolean, handed only to a
+  kind's handler that takes it (docx-agent's: orphaned parts, rsids, pasted web divs and an
+  external template link taken out of the file saved, reported as `cleaned`); another
+  kind's refuses `clean: true` (`invalid_arguments`, `field: "clean"`) and never sees
+  `clean: false`, so pptx-agent and xlsx-agent need no change. `OpcPackage.orphaned_parts()`
+  (unreachable parts, and stray entries no content type is declared for that nothing
+  targets, such as `[trash]/0000.dat`) and `drop_orphans()` (removes them with their
+  relationships parts and overrides, an unused extension's `Default` too; returns
+  `(part, bytes)`), for every format. The definition grows by the `clean` property in
+  every kind's core.
+
 ## 0.59.0 -- unreleased
 - The shared `check` takes `contrast` (round 15, T2): decks report text whose contrast with
   what is behind it is below that ratio (`"contrast": 4.5`, WCAG 2's for text; large text,

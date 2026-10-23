@@ -105,6 +105,22 @@ def test_relationship_sources_and_unreachable_parts(package):
     assert package.unreachable_parts() == {ORPHAN}
 
 
+def test_orphaned_parts_are_the_unreachable_and_the_untyped_unreferenced(data, package):
+    """Round 16, F11: a part nothing reaches, and a stray zip entry with no content type
+    (``[trash]/0000.dat``) that nothing targets, go -- and come back on undo."""
+    history = History(package)
+    history.checkpoint()
+    package.replace_part("[trash]/0000.dat", b"\0" * 100)
+    assert package.content_type("[trash]/0000.dat") is None
+    assert package.orphaned_parts() == ["[trash]/0000.dat", ORPHAN]
+    removed = package.drop_orphans()
+    assert [part for part, _ in removed] == ["[trash]/0000.dat", ORPHAN]
+    assert removed[0][1] == 100 and package.orphaned_parts() == []
+    assert not package.has_part(ORPHAN) and package.has_part(IMAGE)
+    history.undo()
+    assert package.to_bytes() == data
+
+
 # -- adding parts --------------------------------------------------------------------------
 
 

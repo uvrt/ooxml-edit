@@ -649,6 +649,39 @@ class OpcPackage:
             and not (_part_for_rels(path) != path and _part_for_rels(path) in reached)
         }
 
+    def orphaned_parts(self) -> list[str]:
+        """Parts nothing uses, in name order: those no chain of relationships from the
+        package root reaches (:meth:`unreachable_parts`; a page and its notes that point
+        only at each other count), and those no content type is declared for that no
+        relationship targets (a stray zip entry such as ``[trash]/0000.dat``, which no
+        application reads as a part).  A relationships part is left out when its owner is
+        listed: it goes with it."""
+        found = self.unreachable_parts()
+        targets = {rel.target_part for owner in self._relationship_owners()
+                   for rel in self.relationships(owner).values() if rel.target_part is not None}
+        for path in self._parts:
+            if (path != CONTENT_TYPES_PART and path not in targets and _part_for_rels(path) == path
+                    and self.content_type(path) is None):
+                found.add(path)
+        return sorted(path for path in found
+                      if not (_part_for_rels(path) != path and _part_for_rels(path) in found))
+
+    def drop_orphans(self) -> list[tuple[str, int]]:
+        """Remove :meth:`orphaned_parts` -- each with its relationships part and its
+        content-type ``Override``, and an extension's ``Default`` once no part has that
+        extension -- and return ``(part, bytes)`` for every part removed, relationships
+        parts included, in name order.  Like :meth:`remove_part`, part of the undo snapshot."""
+        removed: list[tuple[str, int]] = []
+        for path in self.orphaned_parts():
+            if path not in self._parts:
+                continue
+            rels = rels_path_for(path)
+            for gone in ([path, rels] if rels != path and rels in self._parts else [path]):
+                removed.append((gone, len(self.read(gone) or b"")))
+            self.remove_part(path)
+        self._prune_defaults({path.rsplit(".", 1)[-1] for path, _ in removed if "." in path})
+        return sorted(removed)
+
     def _relationship_owners(self) -> list[str]:
         return [_part_for_rels(path) for path in self._parts
                 if _part_for_rels(path) != path or path == "_rels/.rels"]
