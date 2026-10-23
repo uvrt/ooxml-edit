@@ -1113,6 +1113,12 @@ class Toolbox:
         except Exception as exc:  # noqa: BLE001 -- the model gets an error result
             result = Result.failure(self.map_exception(exc))
         result.warnings[:0] = notes
+        if primary is None and result.ok and result.doc is None:
+            # A call that names no document and makes one (new_document, open_document):
+            # its doc is the one it made, as a later call's is the one it names.
+            made = [session.documents[doc] for doc in result.created if doc in session.documents]
+            if len(made) == 1:
+                primary = made[0]
         if primary is not None:
             result.doc = primary.doc_id
             if result.version is None:      # a snapshot's (Call.unlocked), else the latest

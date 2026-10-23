@@ -51,6 +51,7 @@ from __future__ import annotations
 
 import datetime as dt
 import functools
+import inspect
 from typing import Any, Callable, Mapping
 
 from .. import dates, provenance
@@ -215,8 +216,11 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
           "format": string("potx/dotx/xltx: a template; outline (decks) or markdown "
                            "(documents): a text copy.",
                            enum=["pptx", "potx", "docx", "dotx", "xlsx", "xlsm", "xltx",
-                                 "markdown", "outline"])},
-         batchable=False, role=ANY_ROLE),
+                                 "markdown", "outline"]),
+          # Round 16, F11: a kind whose handler takes no clean refuses it (_with_clean).
+          "clean": boolean("Documents: strip what Word never draws (orphaned parts, "
+                           "rsids, web divs, template link). Default false.", optional=True)},
+         batchable=False, role=ANY_ROLE, wrap=lambda fn: _with_clean(fn)),
     # S4 (list_documents went post-T4: the application names the documents and inputs)
     Spec("close_document", "Close a document, discarding unsaved changes. The session holds "
          "a few documents at a time: close a source once you have taken what you need.",
@@ -438,6 +442,23 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
 
 #: The ``edit_chart`` actions that take ``from``.
 FROM_ACTIONS = ("add", "set_values", "add_series")
+
+
+def _with_clean(handler: Callable[..., Any]) -> Callable[..., Any]:
+    """``save_document``'s handler for a kind, ``clean`` handed on only to a handler that
+    takes it (docx-agent's, round 16, F11).  Another kind's refuses ``clean: true`` --
+    ``invalid_arguments`` naming the field -- and never sees ``clean: false``, so a library
+    that predates the argument keeps working unchanged."""
+    takes = "clean" in inspect.signature(handler).parameters
+
+    @functools.wraps(handler)
+    def run(call: Any, **arguments: Any) -> Any:
+        if not takes and arguments.pop("clean", None):
+            raise ToolError("invalid_arguments", "clean is for documents (docx, dotx); this "
+                            "file is saved as it is: leave clean out", field="clean")
+        return handler(call, **arguments)
+
+    return run
 
 
 def _with_datasets(handler: Callable[..., Any]) -> Callable[..., Any]:

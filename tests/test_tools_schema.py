@@ -281,3 +281,15 @@ def test_check_takes_a_contrast_ratio():
     for wrong in (0.5, 22, True):
         with pytest.raises(CallError):
             validate_call(tool.schema, {"doc": "d1", "contrast": wrong})
+
+
+def test_save_document_takes_clean():
+    """Round 16, F11: ``clean`` is a boolean, for documents, optional."""
+    tool = shared.definition("save_document")
+    clean = tool.canonical["properties"]["clean"]
+    assert clean["type"] == "boolean" and clean["description"].startswith("Documents:")
+    assert "clean" not in tool.canonical.get("required", [])
+    arguments = {"doc": "d1", "name": "a.docx", "format": "docx"}
+    assert validate_call(tool.schema, {**arguments, "clean": True})["clean"] is True
+    with pytest.raises(CallError):
+        validate_call(tool.schema, {**arguments, "clean": "yes"})
