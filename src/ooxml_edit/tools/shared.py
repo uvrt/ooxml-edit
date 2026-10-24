@@ -289,12 +289,13 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
     # S9
     Spec("check",
          "Facts as the document will show: text that does not fit, collisions, validation "
-         "problems, and on request design facts. Facts, not verdicts.",
+         "problems, and on request design or layout facts. Facts, not verdicts.",
          {"doc": _DOC,
           "slides": _slide_addresses(". Default all"),
           "pages": _pages(". Default all"),
           "include": array(string(enum=[
-              "fit", "collisions", "facts", "design", "validate", "reflow", "fields", "app"]),
+              "fit", "collisions", "facts", "design", "validate", "reflow", "fields", "layout",
+              "app"]),
               "Default: fit, collisions, validate (decks); validate, reflow, fields "
               "(documents).", optional=True),
           "boxes": boolean("Decks: also text boxes that overlap where their text does not. "
@@ -307,8 +308,15 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
           # (the ratio), not true | ratio: one type, strict-safe, as spacing.
           "contrast": number("Decks: also text below this contrast ratio with what is "
                              "behind it; 4.5 is WCAG's.", minimum=1, maximum=21,
-                             optional=True)},
-         refs=("slides[]",)),
+                             optional=True),
+          # F8 (round 16): a document's layout facts (include layout) measure text against
+          # these two; either asks for them.  A kind whose handler takes neither refuses them
+          # (_with_layout_options).
+          "min_size": number("Documents: also text below this, pt.", minimum=1,
+                             maximum=400, optional=True),
+          "styles": array(string(), "Documents: the allowed paragraph and table styles; "
+                          "others listed.", optional=True)},
+         refs=("slides[]",), wrap=lambda fn: _with_layout_options(fn)),
     # S10, S11: edit_chart reads too
     Spec("edit_chart",
          "Add, read or change a chart. add: a new chart, styled as Office inserts one. read: "
@@ -456,6 +464,25 @@ def _with_clean(handler: Callable[..., Any]) -> Callable[..., Any]:
         if not takes and arguments.pop("clean", None):
             raise ToolError("invalid_arguments", "clean is for documents (docx, dotx); this "
                             "file is saved as it is: leave clean out", field="clean")
+        return handler(call, **arguments)
+
+    return run
+
+
+def _with_layout_options(handler: Callable[..., Any]) -> Callable[..., Any]:
+    """``check``'s handler for a kind, ``min_size`` and ``styles`` -- a document's layout
+    facts' measures (round 16, F8) -- handed on only to a handler that takes them
+    (docx-agent's).  Another kind's refuses either when given (``invalid_arguments`` naming
+    the field) and never sees them left out, so a library that predates them keeps
+    working unchanged."""
+    takes = set(inspect.signature(handler).parameters)
+
+    @functools.wraps(handler)
+    def run(call: Any, **arguments: Any) -> Any:
+        for name in ("min_size", "styles"):
+            if name not in takes and arguments.pop(name, None) is not None:
+                raise ToolError("invalid_arguments", f"{name} measures a document's layout "
+                                "(docx, include layout); leave it out here", field=name)
         return handler(call, **arguments)
 
     return run

@@ -293,3 +293,46 @@ def test_save_document_takes_clean():
     assert validate_call(tool.schema, {**arguments, "clean": True})["clean"] is True
     with pytest.raises(CallError):
         validate_call(tool.schema, {**arguments, "clean": "yes"})
+
+
+def test_check_takes_a_documents_layout_measures():
+    """Round 16, F8: ``layout`` in ``include``; ``min_size`` (a number) and ``styles`` (names)
+    are what a document's layout facts measure against, each one strict-safe type."""
+    tool = shared.definition("check")
+    properties = tool.canonical["properties"]
+    assert "layout" in properties["include"]["items"]["enum"]
+    assert properties["min_size"]["type"] == "number"
+    assert properties["styles"]["type"] == "array" and properties["styles"]["items"]["type"] == "string"
+    for name in ("min_size", "styles"):
+        assert properties[name]["description"].startswith("Documents:")
+        assert name not in tool.canonical.get("required", [])
+    arguments = validate_call(tool.schema, {"doc": "d1", "min_size": 9, "styles": ["Normal"]})
+    assert arguments["min_size"] == 9 and arguments["styles"] == ["Normal"]
+    for wrong in ({"min_size": 0.5}, {"min_size": 401}, {"min_size": True}, {"styles": "Normal"}):
+        with pytest.raises(CallError):
+            validate_call(tool.schema, {"doc": "d1", **wrong})
+
+
+def test_check_hands_the_layout_measures_only_to_a_handler_that_takes_them():
+    """A kind whose check handler takes no ``min_size`` or ``styles`` refuses them when given,
+    naming the field, and never sees them left out (``None``)."""
+    from ooxml_edit.tools import ToolError
+
+    seen = {}
+
+    def deck_check(call, doc, include=None):
+        seen["deck"] = include
+        return "deck"
+
+    def document_check(call, doc, include=None, min_size=None, styles=None):
+        seen["document"] = (min_size, styles)
+        return "document"
+
+    made = shared.SPECS["check"].make({"pptx": deck_check, "docx": document_check})
+    assert made.handlers["pptx"](None, doc="d1", include=None, min_size=None, styles=None) == "deck"
+    for name, value in (("min_size", 9), ("styles", ["Normal"])):
+        with pytest.raises(ToolError) as refused:
+            made.handlers["pptx"](None, doc="d1", **{name: value})
+        assert refused.value.code == "invalid_arguments" and refused.value.field == name
+    assert made.handlers["docx"](None, doc="d1", min_size=9, styles=["Normal"]) == "document"
+    assert seen["document"] == (9, ["Normal"])

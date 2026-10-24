@@ -2,6 +2,19 @@
 
 Versions are those in `pyproject.toml`; none is published to PyPI yet.
 
+## 0.61.0 -- unreleased
+- The shared `check` takes `layout` in `include`, and `min_size` and `styles` (round 16,
+  F8): a document's layout facts, measured from the layout the document is drawn with
+  (docx-agent's handler) -- text below `min_size` points by kind, direct formatting over
+  the style with the call that clears it, styles not in `styles`, empty paragraphs used as
+  spacing, keep-with-next paragraphs left at a page's foot, rows split across pages and
+  header rows that do not repeat, pictures and tables past the margins, and the pages the
+  layout only approximated or drew placeholders on. Either measure asks for the facts. Each
+  is one type a strict schema carries: a number, a list of names. They are handed only to
+  a kind's handler that takes them (`_with_layout_options`, as `save_document`'s `clean`);
+  another kind's refuses either when given (`invalid_arguments`, the field named) and
+  never sees them left out. The definition grows in every kind's core.
+
 ## 0.60.0 -- unreleased
 - A call that names no document and makes one -- `new_document`, `open_document` -- has
   that document as its result's `doc` (and its version as `version`), as every later call
