@@ -2,6 +2,19 @@
 
 Versions are those in `pyproject.toml`; none is published to PyPI yet.
 
+## 0.62.0 -- unreleased
+- The names the siblings import are declared and held (review, N2):
+  [docs/USED-BY.md](docs/USED-BY.md) lists every name the agents and ooxml-common's tests
+  import from here (226 names in 30 modules, from an AST scan of their `src`, `tests` and
+  `tools`), and `tests/test_public_api.py` imports each one, so a rename fails this
+  repository's own CI rather than a sibling's next run; the test also holds the page and
+  its list to the same names, and no listed name may start with an underscore. The private
+  names the agents imported get public ones: `opc.part_for_rels` (was `_part_for_rels`),
+  `xml.child_ranks` (was `_ranks`), `charts.chart.series_of` (was `_series_of`),
+  `charts.create.check_options` (was `_options`) and `charts.diagram.DiagramModel` (was
+  `_Model`); the old names stay as aliases for one release, as `xml._prefixed_name` does.
+  No behaviour change.
+
 ## 0.61.0 -- unreleased
 - CI runs pptx-agent's, docx-agent's and xlsx-agent's suites (their main) against
   every change here, in a `downstream` job (Linux, Python 3.12), so a change that breaks

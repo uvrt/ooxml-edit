@@ -100,7 +100,7 @@ def new_model_id(seed: str | None = None, taken: "set[str] | None" = None) -> st
         counter += 1
 
 
-class _Model:
+class DiagramModel:
     """The data-model part, indexed."""
 
     def __init__(self, root: Element, host: GraphicHost | None = None) -> None:
@@ -171,6 +171,10 @@ class _Model:
             remove(extensions)
 
 
+#: The old name, kept for docx-agent's tools/charts_probe.py until it moves.
+_Model = DiagramModel
+
+
 class Diagram:
     """The SmartArt a :class:`~.host.GraphicHost` holds.  ``resolve`` is called afresh on
     every call, so a ``Diagram`` survives undo.
@@ -219,7 +223,7 @@ class Diagram:
     def drawing_part(self) -> str | None:
         """The cached drawing, e.g. ``.../diagrams/drawing1.xml``, if there is one."""
         host = self._resolve()
-        rel_id = _Model(self._root()).drawing_rel_id()
+        rel_id = DiagramModel(self._root()).drawing_rel_id()
         if rel_id is None:
             return None
         rel = host.package.relationships(host.part).get(rel_id)
@@ -241,7 +245,7 @@ class Diagram:
     @property
     def nodes(self) -> list["DiagramNode"]:
         return [DiagramNode(self, point.get("modelId"))
-                for point, _, _ in _Model(self._root()).walk()]
+                for point, _, _ in DiagramModel(self._root()).walk()]
 
     def node(self, which: "int | str") -> "DiagramNode":
         """A node by position (depth first) or by ``modelId``."""
@@ -257,7 +261,7 @@ class Diagram:
 
     @property
     def texts(self) -> list[str]:
-        return [_text(point) for point, _, _ in _Model(self._root()).walk()]
+        return [_text(point) for point, _, _ in DiagramModel(self._root()).walk()]
 
     @property
     def model(self) -> dict:
@@ -377,7 +381,7 @@ class Diagram:
                 if point is not None:
                     remove(point)
             if parent_id is not None:
-                for cxn in _Model(model.root).cxns:
+                for cxn in DiagramModel(model.root).cxns:
                     if cxn.get("type") in _PARENT_OF and cxn.get("srcId") == parent_id \
                             and _ord(cxn) > gone_order:
                         cxn.set("srcOrd", str(_ord(cxn) - 1))
@@ -391,14 +395,14 @@ class Diagram:
         host = self._resolve()
         part = self.part
         with host.edit():
-            model = _Model(host.package.tree(part), host)
+            model = DiagramModel(host.package.tree(part), host)
             yield model
             host.package.mark_dirty(part)
         if self.notify is not None:
             for message in model.notes:
                 self.notify(message)
 
-    def _drawing_root(self, model: _Model) -> tuple[str | None, Element | None]:
+    def _drawing_root(self, model: DiagramModel) -> tuple[str | None, Element | None]:
         host = model.host
         rel_id = model.drawing_rel_id()
         package = host.package
@@ -407,7 +411,7 @@ class Diagram:
             return None, None
         return rel.target_part, package.tree(rel.target_part)
 
-    def _update_drawing(self, model: _Model, node_id: str, old: dict[str, str],
+    def _update_drawing(self, model: DiagramModel, node_id: str, old: dict[str, str],
                         text: str) -> bool:
         """Rewrite the node's paragraphs in the cached drawing; ``False`` when that cannot
         be done exactly (the caller then drops the drawing)."""
@@ -457,7 +461,7 @@ class Diagram:
         package.mark_dirty(part)
         return True
 
-    def _inexact_drawing(self, model: _Model) -> None:
+    def _inexact_drawing(self, model: DiagramModel) -> None:
         """The cached drawing cannot be kept exactly in step: act on ``on_inexact_drawing``."""
         rel_id = model.drawing_rel_id()
         if rel_id is None:
@@ -474,7 +478,7 @@ class Diagram:
         model.notes.append(f"{host.address}: the cached drawing was dropped; "
                            f"{host.application} lays the diagram out again")
 
-    def _drop_drawing(self, model: _Model) -> None:
+    def _drop_drawing(self, model: DiagramModel) -> None:
         """Forget the cached drawing, which an application that lays diagrams out again
         regenerates (measured)."""
         host = model.host
@@ -495,7 +499,7 @@ class DiagramNode:
         self.id = model_id
 
     def _point(self) -> Element:
-        point = _Model(self.diagram._root()).points.get(self.id)
+        point = DiagramModel(self.diagram._root()).points.get(self.id)
         if point is None:
             raise KeyError(f"{self.diagram.address}: node {self.id} is gone")
         return point
@@ -514,21 +518,21 @@ class DiagramNode:
 
     @property
     def level(self) -> int:
-        for point, level, _ in _Model(self.diagram._root()).walk():
+        for point, level, _ in DiagramModel(self.diagram._root()).walk():
             if point.get("modelId") == self.id:
                 return level
         raise KeyError(self.id)
 
     @property
     def parent(self) -> "DiagramNode | None":
-        for point, _, parent in _Model(self.diagram._root()).walk():
+        for point, _, parent in DiagramModel(self.diagram._root()).walk():
             if point.get("modelId") == self.id:
                 return None if parent is None else DiagramNode(self.diagram, parent)
         raise KeyError(self.id)
 
     @property
     def children(self) -> list["DiagramNode"]:
-        model = _Model(self.diagram._root())
+        model = DiagramModel(self.diagram._root())
         return [DiagramNode(self.diagram, child.get("modelId"))
                 for _, child in model.children(self.id)]
 
@@ -553,7 +557,7 @@ class DiagramNode:
 def diagram_model(root: Element, layout: str | None = None) -> dict:
     """``{"layout": ..., "nodes": [{"id": "{...}", "lvl": 0, "t": "Plan"}]}``."""
     model = {"nodes": [{"id": point.get("modelId"), "lvl": level, "t": _text(point)}
-                       for point, level, _ in _Model(root).walk()]}
+                       for point, level, _ in DiagramModel(root).walk()]}
     if layout is not None:
         model = {"layout": layout, **model}
     return model
@@ -597,5 +601,5 @@ def _transition(model_id: str, kind: str, cxn_id: str, lang: str | None = None) 
     return point
 
 
-__all__ = ["DRAWING_POLICIES", "Diagram", "DiagramDrawingError", "DiagramNode", "diagram_model",
+__all__ = ["DRAWING_POLICIES", "Diagram", "DiagramDrawingError", "DiagramModel", "DiagramNode", "diagram_model",
            "new_model_id"]

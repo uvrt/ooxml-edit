@@ -670,7 +670,8 @@ def _axes(kind: str, ids: tuple[str, str], look: ChartLook, lang: str | None,
     return [axis for axis, _, _ in axes]
 
 
-def _options(kind: str, category_order: str, gridlines: bool, bubble_scale: int | None) -> None:
+def check_options(kind: str, category_order: str, gridlines: bool, bubble_scale: int | None) -> None:
+    """Raise :class:`ChartDataError`, saying what to pass instead, for options ``kind`` cannot take."""
     if category_order not in ("normal", "reversed"):
         raise ChartDataError("category_order is 'normal' or 'reversed'")
     if category_order == "reversed" and kind == "pie":
@@ -683,6 +684,10 @@ def _options(kind: str, category_order: str, gridlines: bool, bubble_scale: int 
         if isinstance(bubble_scale, bool) or not isinstance(bubble_scale, int) \
                 or not 0 <= bubble_scale <= 300:
             raise ChartDataError("bubble_scale is a whole percentage, 0-300")
+
+
+#: The old name, kept for docx-agent until it moves.
+_options = check_options
 
 
 def chart_space(kind: str, categories: Sequence | None, series: Sequence, *,
@@ -698,7 +703,7 @@ def chart_space(kind: str, categories: Sequence | None, series: Sequence, *,
     if lang is DEFAULT_LANG:
         lang = fallback
     labels, data = chart_data(kind, categories, series)
-    _options(kind, category_order, gridlines, bubble_scale)
+    check_options(kind, category_order, gridlines, bubble_scale)
     plot_kind, direction, grouping = CHART_KINDS[kind]
     combo = any(entry["type"] == "line" for entry in data)
     format_code = number_format or "General"
@@ -1003,7 +1008,7 @@ def add_chart(package, part: str, kind: str, categories: Sequence | None, series
     is written.
     """
     labels, data = chart_data(kind, categories, series)
-    _options(kind, category_order, gridlines, bubble_scale)
+    check_options(kind, category_order, gridlines, bubble_scale)
     data = [{key: value for key, value in entry.items() if value is not None or key == "name"}
             for entry in data]
     for entry in data:
@@ -1034,5 +1039,5 @@ __all__ = ["ACCENTS", "CHART_KINDS", "COMBO_KINDS", "XY_KINDS", "data_columns", 
            "DateCategory", "DEFAULT_LANG", "DEFAULT_LEGEND", "category_format",
            "LEGEND_POSITIONS", "locale_language",
            "NewChart", "POWERPOINT_LOOK", "VARIATIONS", "WORD_LOOK", "add_chart", "chart_data",
-           "chart_space", "chart_workbook", "default_legend", "series_color",
+           "chart_space", "chart_workbook", "check_options", "default_legend", "series_color",
            "text_properties", "title_element", "title_text"]

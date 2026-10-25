@@ -26,7 +26,7 @@ from lxml import etree
 import charts_synthetic as cs
 from ooxml_edit.charts import ChartDataError, ChartDataWarning
 from ooxml_edit.charts.workbook import Cell, Workbook
-from ooxml_edit.xml import _ranks, prefixed_name
+from ooxml_edit.xml import child_ranks, prefixed_name
 from xlsx import Book, check_chart_against_workbook
 
 C = "{%s}" % cs.C
@@ -58,7 +58,7 @@ def chart_order_violations(data: bytes) -> set[tuple[str, str]]:
     """``(parent, child)`` pairs out of their schema order in a chart part."""
     found = set()
     for parent in etree.fromstring(data).iter():
-        ranks = _ranks(prefixed_name(parent))
+        ranks = child_ranks(prefixed_name(parent))
         if not ranks:
             continue
         last = -1

@@ -537,7 +537,7 @@ class Chart(ChartStyling):
         return find(self._root() if root is None else root, "c:chart/c:plotArea")
 
     def _series(self, root: Element | None = None) -> list[_Series]:
-        return _series_of(self._root() if root is None else root)
+        return series_of(self._root() if root is None else root)
 
     # -- reading -----------------------------------------------------------------------------
 
@@ -1330,12 +1330,17 @@ class Series:
 # ------------------------------------------------------------------------------------------
 
 
-def _series_of(root: Element) -> list[_Series]:
+def series_of(root: Element) -> list[_Series]:
+    """Every ``c:ser`` of the chart part ``root``, plot by plot in the plot area's order."""
     plot_area = find(root, "c:chart/c:plotArea")
     if plot_area is None:
         return []
     plots = [child for child in plot_area if child.tag in {qn(t) for t in PLOT_TAGS}]
     return [_Series(ser) for plot in plots for ser in plot.findall(qn("c:ser"))]
+
+
+#: The old name, kept for pptx-agent until it moves.
+_series_of = series_of
 
 
 def _axis_of(root: Element, axis: str) -> Element | None:
@@ -1362,7 +1367,7 @@ def chart_model(root: Element) -> dict[str, Any]:
     ``category_format`` where the categories are dates kept as serials
     (:attr:`Chart.category_dates`)."""
     plot_area = find(root, "c:chart/c:plotArea")
-    series = _series_of(root)
+    series = series_of(root)
     categories: list = []
     for ser in series:
         if ser.categories.ref is not None:
@@ -1838,5 +1843,5 @@ def default_title_text(vertical: bool, *, lang: str | None = None) -> Element:
 
 
 __all__ = ["AXIS_TAGS", "Chart", "ChartDataError", "ChartDataWarning", "PLOT_TAGS", "PLOT_TYPES",
-           "Series", "chart_model", "chart_part", "decode_number", "default_title_text",
+           "Series", "chart_model", "series_of", "chart_part", "decode_number", "default_title_text",
            "workbook_part"]

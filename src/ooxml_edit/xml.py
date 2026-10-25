@@ -227,7 +227,9 @@ def replace_choice(parent: Element, choices: Iterable[str], new: Element | None)
     return new
 
 
-def _ranks(parent_name: str) -> dict[str, int] | None:
+def child_ranks(parent_name: str) -> dict[str, int] | None:
+    """Each child name's position in ``parent_name``'s schema sequence (``CHILD_ORDER``),
+    names in one choice sharing a rank; ``None`` for a parent with no sequence entry."""
     ranks = _RANKS.get(parent_name)
     if ranks is not None:
         return ranks
@@ -240,6 +242,10 @@ def _ranks(parent_name: str) -> dict[str, int] | None:
             ranks[name] = rank
     _RANKS[parent_name] = ranks
     return ranks
+
+
+#: The old name, kept for pptx-agent's validate.py until it moves.
+_ranks = child_ranks
 
 
 def insert_in_order(parent: Element, child: Element) -> None:
@@ -255,7 +261,7 @@ def insert_in_order(parent: Element, child: Element) -> None:
     """
     if child.getparent() is not parent:
         parent.append(child)
-    ranks = _ranks(prefixed_name(parent))
+    ranks = child_ranks(prefixed_name(parent))
     if ranks is None:
         return
 
@@ -304,7 +310,7 @@ def prefixed_name(element: Element) -> str:
     return local
 
 
-#: Kept for callers of the earlier, private name.
+#: The old name, kept for pptx-agent until it moves.
 _prefixed_name = prefixed_name
 
 

@@ -128,7 +128,7 @@ class OpcPackage:
             raise KeyError(f"part {path!r} was never parsed, so it cannot be dirty")
         self._dirty.add(path)
         # A rels part that changed invalidates its cached relationships.
-        self._rels_cache.pop(_part_for_rels(path), None)
+        self._rels_cache.pop(part_for_rels(path), None)
 
     @property
     def dirty_parts(self) -> frozenset[str]:
@@ -154,7 +154,7 @@ class OpcPackage:
         self._parts[path] = data
         self._trees.pop(path, None)
         self._dirty.discard(path)
-        self._rels_cache.pop(_part_for_rels(path), None)
+        self._rels_cache.pop(part_for_rels(path), None)
         self._raw_changes[path] = None
         if new:
             self._ensure_entry(path)
@@ -199,7 +199,7 @@ class OpcPackage:
         del self._parts[path]
         self._trees.pop(path, None)
         self._dirty.discard(path)
-        self._rels_cache.pop(_part_for_rels(path), None)
+        self._rels_cache.pop(part_for_rels(path), None)
         self._rels_cache.pop(path, None)
         self._raw_changes[path] = None
         self._remove_override(path)
@@ -646,7 +646,7 @@ class OpcPackage:
         return {
             path for path in self._parts
             if path != CONTENT_TYPES_PART and path not in reached
-            and not (_part_for_rels(path) != path and _part_for_rels(path) in reached)
+            and not (part_for_rels(path) != path and part_for_rels(path) in reached)
         }
 
     def orphaned_parts(self) -> list[str]:
@@ -660,11 +660,11 @@ class OpcPackage:
         targets = {rel.target_part for owner in self._relationship_owners()
                    for rel in self.relationships(owner).values() if rel.target_part is not None}
         for path in self._parts:
-            if (path != CONTENT_TYPES_PART and path not in targets and _part_for_rels(path) == path
+            if (path != CONTENT_TYPES_PART and path not in targets and part_for_rels(path) == path
                     and self.content_type(path) is None):
                 found.add(path)
         return sorted(path for path in found
-                      if not (_part_for_rels(path) != path and _part_for_rels(path) in found))
+                      if not (part_for_rels(path) != path and part_for_rels(path) in found))
 
     def drop_orphans(self) -> list[tuple[str, int]]:
         """Remove :meth:`orphaned_parts` -- each with its relationships part and its
@@ -683,8 +683,8 @@ class OpcPackage:
         return sorted(removed)
 
     def _relationship_owners(self) -> list[str]:
-        return [_part_for_rels(path) for path in self._parts
-                if _part_for_rels(path) != path or path == "_rels/.rels"]
+        return [part_for_rels(path) for path in self._parts
+                if part_for_rels(path) != path or path == "_rels/.rels"]
 
     def _relationship_list(self, part_path: str) -> list[Relationship | None]:
         """The part's relationships in document order, ``None`` for a malformed node."""
@@ -756,17 +756,17 @@ class OpcPackage:
                     self._entries = [e for e in self._entries
                                      if normalize_part_path(e.filename) != path]
             self._trees.pop(path, None)
-            self._rels_cache.pop(_part_for_rels(path), None)
+            self._rels_cache.pop(part_for_rels(path), None)
         self._raw_changes = dict.fromkeys(snapshot.raw)
 
         for path in self._dirty - set(snapshot.trees):
             self._trees.pop(path, None)
-            self._rels_cache.pop(_part_for_rels(path), None)
+            self._rels_cache.pop(part_for_rels(path), None)
         self._dirty = set()
         for path, data in snapshot.trees.items():
             self._trees[path] = parse_xml(data)
             self._dirty.add(path)
-            self._rels_cache.pop(_part_for_rels(path), None)
+            self._rels_cache.pop(part_for_rels(path), None)
 
     # -- snapshots part by part (scoped undo) ----------------------------------------------
 
@@ -940,7 +940,7 @@ def rels_path_for(part_path: str) -> str:
     return f"{directory}/_rels/{name}.rels" if directory else f"_rels/{name}.rels"
 
 
-def _part_for_rels(rels_path: str) -> str:
+def part_for_rels(rels_path: str) -> str:
     """Inverse of :func:`rels_path_for`; returns ``rels_path`` unchanged if it is not one."""
     directory, _, name = rels_path.rpartition("/")
     if not directory.endswith("_rels") or not name.endswith(".rels"):
@@ -948,6 +948,10 @@ def _part_for_rels(rels_path: str) -> str:
     owner_dir = directory[: -len("_rels")].rstrip("/")
     owner = name[: -len(".rels")]
     return f"{owner_dir}/{owner}" if owner_dir else owner
+
+
+#: The old name, kept for pptx-agent until it moves.
+_part_for_rels = part_for_rels
 
 
 def numbered_template(path: str) -> str:
