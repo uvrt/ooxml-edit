@@ -4,6 +4,29 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet. Each vers
 reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
 earlier ones were never tagged.
 
+## 0.65.0 -- unreleased
+- **`ooxml_edit.tools.render`: one render pipeline for every format** (review, S5). The
+  agents' render plumbing was written twice, in pptx-agent and docx-agent, and the copies
+  differed. Now a format brings a `Renderer` adapter (a protocol; `RendererBase` has the
+  defaults): `name`, `whole_document`, `lay_out` (a `Layout` of `View`s: each view's SVG,
+  the raster fingerprint, the raster arguments, the format's facts), `key_text`,
+  `rasterise`, `facts`, `rasterise_tiles`, `warm_up`, `code_stamp`. The rest is here, the
+  same for each: `draw` (images this version already has, the snapshot, the chunks over the
+  workers with the locks let go, what came back kept by content key and by version, what
+  one chunk drew kept when another fails), `draw_tiles` (a contact image), the worker tasks
+  (`worker_task`) `render_views` (views that stand alone: laid out and drawn per chunk),
+  `lay_out_views` and `rasterise_views` (a document laid out whole, once; its views
+  rasterised over the workers at once) and `rasterise_tiles`, the keys (`fingerprint`,
+  `raster_key`, `system_fonts`), `warm_up`, and the PNG checks: `png_size` refuses bytes
+  that are not a PNG (signature and header), and every image a renderer returns is checked
+  (`checked_png`; a renderer's non-PNG is an internal error naming it). The module imports
+  no renderer: the format passes its adapter, an argument the tasks pickle, so subprocess
+  workers run it too. Contact images' and warm-up warnings are left out in the worker for
+  every format (the worker's stderr is nobody's to read). Public: `tests/test_public_api.py`
+  and docs/USED-BY.md list what the agents import; `tests/test_tools_render.py` holds the
+  pipeline with a toy renderer, both shapes, in-process and in worker and subprocess pools.
+  docs/TOOLS.md says how a format plugs in.
+
 ## 0.64.0 -- unreleased
 - **Dependencies: ooxml-edit now requires ooxml-common** (`ooxml-common>=0.29.0`, beside
   lxml; review, S2). ooxml-common is standard library only and never imports ooxml-edit;

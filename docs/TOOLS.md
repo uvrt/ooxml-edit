@@ -17,6 +17,7 @@ standard library only, and no provider SDK. The plan it implements is
 | `tools.sources` | `Rows` (a source's `Dataset`, where it came from, `stale`) and the helpers that qualify, resolve and report sources: rows a tool takes from a dataset or another open document's table (below) |
 | `tools.limits` | size limits, magic-byte checks, image sizes read from headers, and a zip-bomb guard |
 | `tools.worker` | worker processes for rendering and layout whose deadlines are kept: a worker past its deadline is killed and the call reports `timeout`; multiprocessing workers by default, subprocess workers where multiprocessing may not start children, in-process on request (below) |
+| `tools.render` | one render pipeline for every format (review, S5, 0.65.0): a format brings a `Renderer` adapter -- how its bytes become each view's SVG (`lay_out`), what the pixels depend on besides the SVG (`fingerprint`), how an SVG becomes a PNG (`rasterise`, `rasterise_tiles`), what a new worker warms (`warm_up`) -- and the rest is shared: `draw` (the images a version already has, the snapshot, the chunks over the workers with the locks let go, what came back kept by content key and by version), the worker tasks (`worker_task`), the keys (`fingerprint`, `raster_key`), and every PNG checked (`png_size`, `checked_png`). Imports no renderer: the format passes its adapter |
 | `tools.tiles` | contact sheets, format-neutral: `render`'s `sheet` options checked and narrowed to fit (`tiling_of`, `fit`, `check_size`) and the SVG that tiles rendered PNGs with their labels (`tiled_svg`), which a format rasterises |
 | `tools.logs`, `tools.prompts` | call records with argument digests, not content; the shared system-prompt fragment (mechanics only, no house style) and a reviewer's role line |
 | `tools.shared` | the one definition of each tool every format shares (open, new, save, close, undo, find, replace, render, check, charts, SmartArt, properties, reading an input's text) and the generic `batch`; a library adds its handler with `@shared.handler("render", kind=...)`, and lists `shared.SESSION_TOOLS`, whose handlers serve every kind. The one module that names formats, in its descriptions only |
@@ -165,6 +166,23 @@ tiles' shapes, that height (`tiles.fit`) -- and the result's `sheet.shrunk` (`{"
 standing in for the tile's is taken as 1,280, said the same way. A sheet is one image in the per-call and session image counts. The
 definition grows by 64 estimated tokens (`sheet`: two optional integers); the module
 `tools.tiles` is format-neutral and stdlib only.
+
+*One render pipeline* (review, S5, 0.65.0). pptx-agent and docx-agent each had their own
+copy of the plumbing around their renderer -- the worker tasks, the cache keys, the code
+stamp, the warm-up, the contact image's rasterising, the PNG size -- and the copies had
+drifted (one checked the PNG signature, the other did not). `tools.render` is the one copy;
+a format says only what is its own, in a `Renderer`: `name` (the keys' namespace),
+`whole_document`, `lay_out(data, items, width, font_dirs, locale, state)` returning a
+`Layout` (the views' SVGs, the raster fingerprint, the raster arguments, the format's
+facts), `key_text` (the part of an SVG the pixels depend on), `rasterise(views, raster)`,
+`facts(layout)`, `rasterise_tiles(svg, font_dirs)`, `warm_up()`; `RendererBase` has the
+defaults. The adapter is a module-level object handed to the worker tasks as an
+argument, so subprocess workers run it too. Two shapes of work: views that stand alone
+(a slide) are laid out and drawn per chunk, one chunk per worker (`render_views`); a
+document laid out whole (flowing text) is laid out once (`lay_out_views`) and its views
+rasterised over the workers at once (`rasterise_views`). What a format keeps between calls
+goes to the workers as `state` and comes back as each task's facts (`draw`'s `on_facts`):
+the decoded embedded fonts of a deck, the layout of a document. Another format's renderer plugs in the same way.
 
 **Datasets.** A call that derives figures from a document -- counts, sums, groups -- may
 keep them for the session as a `Dataset`: columns, rows, and beside every value its
