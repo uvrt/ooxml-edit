@@ -24,10 +24,22 @@ OOXML packages, and they do different jobs:
 | --- | --- | --- |
 | Does | **reads and renders**: the OPC container read, units, fonts and text metrics, DrawingML and charts drawn as SVG | **edits losslessly**: parts and relationships changed, written back byte for byte where untouched, every change undoable |
 | Used by | the renderers, [pptx2svg](https://github.com/uvrt/pptx2svg) and [docx2svg](https://github.com/uvrt/docx2svg) | the editors, pptx-agent and docx-agent |
-| Runtime dependencies | none: the standard library only | lxml |
+| Runtime dependencies | none: the standard library only | lxml, ooxml-common |
 
-Neither depends on the other. An editor that also renders installs both, through its
-renderer; a renderer never needs this package.
+**ooxml-common never imports ooxml-edit; ooxml-edit may import ooxml-common.** A renderer
+never needs this package (ooxml-common's `tests/test_independence.py` holds that), and an
+editor installs both. What a reader and an editor must answer the same way is written once,
+in ooxml-common, and read from there: whether a number format code shows a date
+(`ooxml_common.numfmt`, measured in Excel), the month and day names measured per locale
+(`ooxml_common.dates`), the locale itself (`ooxml_common.locales.Locale`; a session given
+none has `EN_US`), the package's part-path rule and relationship types
+(`ooxml_common.opc`), units. ooxml-edit re-exports those under the names it always had
+(`ooxml_edit.dates.NAMES`, `is_date_code`, `tools.DEFAULT_LOCALE`), so nothing that imports
+them changes. Until 0.64.0 neither depended on the other, and ooxml-edit kept copies, held
+to ooxml-common's by tests there; the copies had drifted (21 number format codes read
+otherwise than Excel), which is why there is now one.
+
+ooxml-common being standard library only, the dependency costs an install nothing more.
 
 ## Why lxml
 
@@ -37,7 +49,7 @@ namespace prefixes to `ns0`, `ns1`... and drops declarations it believes unused.
 prefixes are load-bearing -- `mc:Ignorable="a14 p14"` names *prefixes*, not URIs -- so a
 part rewritten that way is silently corrupt. lxml writes back what it parsed, prefixes and
 declarations included, apart from CRLF line ends becoming LF, which the XML specification
-requires. That is the whole reason for the dependency.
+requires. That is the whole reason for lxml.
 
 ## What is deliberately not in it
 

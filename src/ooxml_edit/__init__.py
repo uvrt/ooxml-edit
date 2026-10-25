@@ -24,6 +24,10 @@ register their namespaces and child-order tables with :mod:`.xml` and subclass t
 ``tests/test_neutrality.py`` enforces the rule, for the core and for :mod:`.tools`, and
 ``tests/test_charts_neutrality.py`` keeps the charts subpackage free of any one document
 format.
+
+Dependencies: lxml, and ooxml-common for what every library reads the same way (number
+format codes, the measured date names, the locale).  ooxml-common never imports this
+package; this package may import it.
 """
 
-__version__ = "0.63.0"
+__version__ = "0.64.0"

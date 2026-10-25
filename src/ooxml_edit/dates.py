@@ -22,7 +22,9 @@ written into a kept code by accident.
 each locale, measured on Office for Mac, 2026-10-16 (the application and the method:
 ``docs/TOOLS.md``, "Date patterns"), with an explicit locale code in the number format
 (``[$-413]mmmm``, one locale at a time; ``mmmmm`` is the full name's first letter there
-too).  en-US and en-GB show the same names, and nl-NL and nl-BE.
+too).  en-US and en-GB show the same names, and nl-NL and nl-BE.  The tables --
+:data:`NAMES`, :data:`LANGUAGES`, :data:`LCIDS` and :class:`DateNames` -- are
+:mod:`ooxml_common.dates`', the one copy every library reads, re-exported here.
 
 **A region shows its language's names.**  Measured in Office for Mac, 2026-10-17: en-BE
 and en-IE show en-US's names, fr-BE and fr-CH fr-FR's, de-BE and de-CH de-DE's -- Office
@@ -52,20 +54,26 @@ prefix changes the names only, never the separator or the order.  So a kept code
 the names and the order of a date, not its separators.
 
 **Reading a kept code back.**  :func:`is_date_code` tells a date code from a number one,
-so a chart's categories kept as serials read back as dates (``Chart.category_dates``).
-ooxml-common keeps a copy of :data:`NAMES`, :data:`LANGUAGES` and :data:`LCIDS` to draw
-such categories (``ooxml_common.dates``, which may not import this package); a test there
-checks the two agree.
+so a chart's categories kept as serials read back as dates (``Chart.category_dates``):
+it is :func:`ooxml_common.numfmt.is_date_code`, the reading measured in Office (its first
+section decides; ``e``, ``g``, ``b``, the Thai letters, ``A/P`` alone and the system's
+formats are dates or times), re-exported here.
 
-Standard library only; nothing here reads the operating system's locale.
+The standard library and ooxml-common only; nothing here reads the operating system's
+locale.
 """
 
 from __future__ import annotations
 
 import datetime as _dt
 import re
-from types import MappingProxyType
-from typing import Any, Mapping, NamedTuple
+from typing import Any
+
+# The measured tables and the reading of a kept code are ooxml-common's, one copy for
+# every library: re-exported here under the names ooxml-edit has always had.
+from ooxml_common.dates import LANGUAGES, LCIDS, NAMES, DateNames
+from ooxml_common.dates import names_tag as _names_tag
+from ooxml_common.numfmt import is_date_code
 
 __all__ = ["LANGUAGES", "LCIDS", "NAMES", "NAME_TOKENS", "TOKENS", "TOKENS_TEXT", "DateCategory",
            "DateNames", "PatternError", "date_of", "format_code", "format_date", "from_serial",
@@ -75,95 +83,6 @@ __all__ = ["LANGUAGES", "LCIDS", "NAMES", "NAME_TOKENS", "TOKENS", "TOKENS_TEXT"
 TOKENS = ("d", "dd", "ddd", "dddd", "m", "mm", "mmm", "mmmm", "mmmmm", "yy", "yyyy")
 #: The tokens that write a name, which need the locale's measured :data:`NAMES`.
 NAME_TOKENS = frozenset({"ddd", "dddd", "mmm", "mmmm", "mmmmm"})
-
-
-class DateNames(NamedTuple):
-    """A locale's month names and abbreviations (January first) and day names and
-    abbreviations (Monday first, as Python's ``date.weekday()`` counts)."""
-
-    months: tuple[str, ...]
-    short_months: tuple[str, ...]
-    days: tuple[str, ...]
-    short_days: tuple[str, ...]
-
-
-def _names(months: str, short_months: str, days: str, short_days: str) -> DateNames:
-    return DateNames(tuple(months.split()), tuple(short_months.split()), tuple(days.split()),
-                     tuple(short_days.split()))
-
-
-# Measured on Office for Mac, 2026-10-16: each name as Office showed it under [$-LCID]mmmm,
-# mmm, dddd and ddd (round 6, R9; docs/TOOLS.md says which application).  Not taken from
-# any other source.
-_ENGLISH = _names(
-    "January February March April May June July August September October November December",
-    "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec",
-    "Monday Tuesday Wednesday Thursday Friday Saturday Sunday",
-    "Mon Tue Wed Thu Fri Sat Sun")
-_DUTCH = _names(
-    "januari februari maart april mei juni juli augustus september oktober november december",
-    "jan feb mrt apr mei jun jul aug sep okt nov dec",
-    "maandag dinsdag woensdag donderdag vrijdag zaterdag zondag",
-    "ma di wo do vr za zo")
-_GERMAN = _names(
-    "Januar Februar März April Mai Juni Juli August September Oktober November Dezember",
-    "Jan Feb Mär Apr Mai Jun Jul Aug Sep Okt Nov Dez",
-    "Montag Dienstag Mittwoch Donnerstag Freitag Samstag Sonntag",
-    "Mo Di Mi Do Fr Sa So")
-_FRENCH = _names(
-    "janvier février mars avril mai juin juillet août septembre octobre novembre décembre",
-    "janv. févr. mars avr. mai juin juil. août sept. oct. nov. déc.",
-    "lundi mardi mercredi jeudi vendredi samedi dimanche",
-    "lun. mar. mer. jeu. ven. sam. dim.")
-_SPANISH = _names(
-    "enero febrero marzo abril mayo junio julio agosto septiembre octubre noviembre diciembre",
-    "ene. feb. mar. abr. may. jun. jul. ago. sep. oct. nov. dic.",
-    "lunes martes miércoles jueves viernes sábado domingo",
-    "lu. ma. mi. ju. vi. sá. do.")
-# Measured on Office for Mac's charts, 2026-10-17, under [$-80A] and [$-A] (what Office
-# stores for [$-es-MX] and [$-es]): the months and days of es-ES, other abbreviations.
-_SPANISH_MEXICO = _SPANISH._replace(
-    short_days=tuple("lun. mar. mié. jue. vie. sáb. dom.".split()))
-_SPANISH_ANY = _SPANISH._replace(
-    short_months=tuple("ene feb mar abr may jun jul ago set oct nov dic".split()),
-    short_days=tuple("lun mar mié jue vie sáb dom".split()))
-_ITALIAN = _names(
-    "gennaio febbraio marzo aprile maggio giugno luglio agosto settembre ottobre novembre "
-    "dicembre",
-    "gen feb mar apr mag giu lug ago set ott nov dic",
-    "lunedì martedì mercoledì giovedì venerdì sabato domenica",
-    "lun mar mer gio ven sab dom")
-
-#: Month and day names per language tag, measured on Office for Mac, 2026-10-16.
-NAMES: Mapping[str, DateNames] = MappingProxyType({
-    "en-US": _ENGLISH, "en-GB": _ENGLISH, "nl-NL": _DUTCH, "nl-BE": _DUTCH,
-    "de-DE": _GERMAN, "fr-FR": _FRENCH, "es-ES": _SPANISH, "it-IT": _ITALIAN,
-    "es-MX": _SPANISH_MEXICO, "es": _SPANISH_ANY,
-})
-
-#: The tag in :data:`NAMES` whose names every region of a language shows, by language
-#: subtag.  Measured in Office for Mac, 2026-10-17: en-BE and en-IE named a date as en-US,
-#: fr-BE and fr-CH as fr-FR, de-BE and de-CH as de-DE (and nl-BE as nl-NL, 2026-10-16);
-#: it-CH ([$-810]) and it ([$-10]) as it-IT, 2026-10-17.  Not Spanish: es-MX and es
-#: abbreviate otherwise than es-ES (:data:`NAMES` has each), so another Spanish region is
-#: not guessed.
-LANGUAGES: Mapping[str, str] = MappingProxyType({
-    "en": "en-US", "nl": "nl-NL", "de": "de-DE", "fr": "fr-FR", "it": "it-IT",
-})
-
-#: The locale id Office stores in a code's ``[$-LCID]`` prefix, per language tag: each
-#: accepted and honoured (names in that language) on Office for Mac, 2026-10-16; the
-#: regional and language-only ones are what Office for Mac stored for a ``[$-fr-BE]``,
-#: ``[$-en]`` ... prefix, 2026-10-17, each showing its language's names.
-LCIDS: Mapping[str, int] = MappingProxyType({
-    "en-US": 0x409, "en-GB": 0x809, "nl-NL": 0x413, "nl-BE": 0x813,
-    "de-DE": 0x407, "fr-FR": 0x40C, "es-ES": 0xC0A, "it-IT": 0x410,
-    "en-IE": 0x1809, "fr-BE": 0x80C, "fr-CH": 0x100C,
-    "en": 0x9, "nl": 0x13, "de": 0x7, "fr": 0xC,
-    # What Office stored for [$-es-MX], [$-it-CH] on re-saving, 2026-10-17; [$-A] and
-    # [$-10] honoured (es's and it-IT's names).
-    "es-MX": 0x80A, "it-CH": 0x810, "es": 0xA, "it": 0x10,
-})
 
 
 class PatternError(ValueError):
@@ -189,8 +108,7 @@ def names_tag(locale: Any) -> str | None:
     """The tag in :data:`NAMES` whose names ``locale`` shows: its own tag when listed, else
     its language's (:data:`LANGUAGES`: fr-BE shows fr-FR's); ``None`` for a language with
     no measured names."""
-    tag = _language(locale)
-    return tag if tag in NAMES else LANGUAGES.get(tag.split("-", 1)[0])
+    return _names_tag(_language(locale))
 
 
 def names_for(locale: Any) -> DateNames | None:
@@ -341,36 +259,6 @@ def format_code(pattern: str, locale: Any = None) -> str:
         else:
             out.append("\\" + text)
     return "".join(out)
-
-
-def is_date_code(code: Any) -> bool:
-    """Whether a number format code shows a number as a date or a time: a ``d``, ``m``,
-    ``y``, ``h`` or ``s`` outside quotes, brackets and escapes, in any section
-    (``[$-413]d\\ mmmm\\ yyyy``, ``m/d/yyyy``, ``h:mm``).  ``General``, ``@``, a number
-    code (``#,##0.0``, ``"days" 0``) and anything not text are not."""
-    if not isinstance(code, str) or code in ("", "General", "@"):
-        return False
-    index = 0
-    while index < len(code):
-        char = code[index]
-        if char == '"':
-            close = code.find('"', index + 1)
-            index = len(code) if close < 0 else close + 1
-            continue
-        if char == "[":
-            close = code.find("]", index)
-            inner = code[index + 1:close if close >= 0 else len(code)].lower()
-            if inner and inner[0] in "hms" and inner == inner[0] * len(inner):
-                return True   # elapsed time: [h], [mm], [ss]
-            index = len(code) if close < 0 else close + 1
-            continue
-        if char in "\\_*":
-            index += 2
-            continue
-        if char.lower() in "dmyhs":
-            return True
-        index += 1
-    return False
 
 
 # -- serial numbers ------------------------------------------------------------------------------

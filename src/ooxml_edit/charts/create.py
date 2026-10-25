@@ -62,6 +62,8 @@ from typing import Any, Sequence
 from xml.sax.saxutils import escape, quoteattr
 
 from lxml import etree
+from ooxml_common.opc import REL_CHART
+from ooxml_common.xmlutil import NS_R as R_NS
 
 from .. import dates as _dates
 from ..dates import DateCategory
@@ -73,13 +75,11 @@ from .dmltext import replace_body_text
 from .namespaces import A_NS, C_NS
 from .workbook import column_letters, number_text
 
-R_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 MC_NS = "http://schemas.openxmlformats.org/markup-compatibility/2006"
 C14_NS = "http://schemas.microsoft.com/office/drawing/2007/8/2/chart"
 C16_NS = "http://schemas.microsoft.com/office/drawing/2014/chart"
 C16R3_NS = "http://schemas.microsoft.com/office/drawing/2017/03/chart"
 
-REL_CHART = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart"
 REL_PACKAGE = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/package"
 CT_CHART = "application/vnd.openxmlformats-officedocument.drawingml.chart+xml"
 CT_XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"

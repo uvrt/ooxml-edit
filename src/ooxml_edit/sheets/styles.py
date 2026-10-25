@@ -17,7 +17,8 @@ import copy
 from dataclasses import dataclass
 
 from lxml import etree
-from ..dates import is_date_code
+from ooxml_common.numfmt import is_date_code
+
 from ..opc import OpcPackage
 from ..xml import Element
 
@@ -83,8 +84,8 @@ class Styles:
 
     def is_date(self, index: int) -> bool | None:
         """Whether cell format ``index`` shows a number as a date or a time: its own code
-        read by its tokens (:func:`ooxml_edit.dates.is_date_code`), or a built-in id of the
-        all-languages table.  ``None`` for a built-in id whose code depends on the
+        read as Excel reads it (:func:`ooxml_common.numfmt.is_date_code`: its first section
+        decides), or a built-in id of the all-languages table.  ``None`` for a built-in id whose code depends on the
         application's language: the caller, which knows the locale, decides."""
         fmt = self.number_format(index)
         if fmt.code is not None:

@@ -5,6 +5,8 @@ and in a Word document; the subpackage only works for both if neither creeps in.
 checks it mechanically: no PresentationML or WordprocessingML vocabulary in the source, no
 import of an editor built on it, imports only of the standard library, lxml and ooxml-edit,
 and on import only the DrawingML and SpreadsheetML vocabulary registered.
+
+ooxml-common (format-neutral, standard library only) is allowed beside lxml.
 """
 
 from __future__ import annotations
@@ -28,7 +30,7 @@ FORBIDDEN = (
     "pptx_agent", "docx_agent",
 )
 
-ALLOWED_THIRD_PARTY = {"lxml"}
+ALLOWED_THIRD_PARTY = {"lxml", "ooxml_common"}
 
 #: What importing the subpackage may register: the packaging namespaces, and its own.
 NAMESPACES = {"r", "mc", "ct", "pr", "a", "c", "dgm", "dsp", "x"}
@@ -52,7 +54,7 @@ def test_no_document_format_vocabulary(module):
 
 
 @pytest.mark.parametrize("module", _modules(), ids=lambda path: path.stem)
-def test_imports_only_the_standard_library_lxml_and_ooxml_edit(module):
+def test_imports_only_the_standard_library_lxml_ooxml_common_and_ooxml_edit(module):
     tree = ast.parse(module.read_text(encoding="utf-8"))
     stdlib = set(sys.stdlib_module_names)
     for node in ast.walk(tree):

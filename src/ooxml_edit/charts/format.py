@@ -20,6 +20,8 @@ from __future__ import annotations
 import re
 from typing import Any, Sequence
 
+from ooxml_common.units import EMU_PER_POINT
+
 from ..xml import Element, local_name, make, qn, remove
 from .errors import FormatError
 from .namespaces import A_NS, C_NS
@@ -298,7 +300,7 @@ def points_to_emu(points: float) -> int:
     if isinstance(points, bool) or not isinstance(points, (int, float)) \
             or not 0 <= points <= 1584:
         raise FormatError(f"a line width is in points, 0-1584 (got {points!r})")
-    return round(points * 12700)
+    return round(points * EMU_PER_POINT)
 
 
 def dash_value(dash: str) -> str:
@@ -321,7 +323,7 @@ def line_text(shape: Element | None) -> dict[str, Any]:
         out["line"] = color
     if line.get("w"):
         try:
-            out["line_width"] = round(int(line.get("w")) / 12700, 2)
+            out["line_width"] = round(int(line.get("w")) / EMU_PER_POINT, 2)
         except ValueError:
             pass
     dash = line.find(qn("a:prstDash"))

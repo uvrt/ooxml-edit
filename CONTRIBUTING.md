@@ -3,9 +3,13 @@
 ## Running the tests
 
 ```sh
+pip install "ooxml-common @ git+https://github.com/uvrt/ooxml-common@main"
 pip install -e '.[dev]'
 python -m pytest -q
 ```
+
+ooxml-common is a dependency and is not on PyPI, so it goes in first (from its repository
+or a checkout, `pip install -e ../ooxml-common`).
 
 CI runs the suite on Linux, macOS and Windows with Python 3.10 to 3.15. The online checks
 (`-m provider`) call a model provider's API and skip without its key; they never run on CI.
@@ -19,6 +23,11 @@ the change (the `downstream` job), and the whole workflow nightly.
 - No third-party documents. Tests build the packages they need in code
   (`tests/synthetic.py`, `tests/charts_synthetic.py`).
 - No format vocabulary in the core: `tests/test_neutrality.py` must keep passing.
+- No copy of ooxml-common's logic. ooxml-edit may import ooxml-common; ooxml-common never
+  imports ooxml-edit (its `tests/test_independence.py`). What both need read the same way
+  -- a number format code, the measured date names, the locale, the package's path rule
+  -- is ooxml-common's, and ooxml-edit re-exports it under its own names where siblings
+  import them. Nothing else third-party but lxml (`tests/test_neutrality.py`).
 
 ## Pull requests
 

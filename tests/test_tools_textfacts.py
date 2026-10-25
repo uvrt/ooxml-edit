@@ -13,9 +13,10 @@ import dataclasses
 import datetime as dt
 
 import pytest
+from ooxml_common.locales import Locale
 
 from ooxml_edit import dates, provenance
-from ooxml_edit.tools import (Dataset, DefaultLocale, DocumentFormat, Result, ToolError,
+from ooxml_edit.tools import (Dataset, DocumentFormat, Result, ToolError,
                               Toolbox, array, obj, shared, string, tool)
 from ooxml_edit.tools import textfacts
 
@@ -23,7 +24,7 @@ import synthetic
 import tools_toys
 
 CLOCK = lambda: dt.datetime(2026, 10, 15, 12, 0, tzinfo=dt.timezone.utc)  # noqa: E731
-NL_BE = dataclasses.replace(DefaultLocale(), decimal_separator=",", thousands_separator=".",
+NL_BE = dataclasses.replace(Locale(), decimal_separator=",", thousands_separator=".",
                             date_order="dmy", language="nl-BE", list_separator=";")
 
 
@@ -346,7 +347,7 @@ def test_a_quoted_column_or_a_plain_unknown_one_is_not_read_as_a_format(toolbox)
 # -- date patterns (round 6, R9) -----------------------------------------------------------------
 
 
-def _in(language: str) -> DefaultLocale:
+def _in(language: str) -> Locale:
     return dataclasses.replace(NL_BE, language=language)
 
 

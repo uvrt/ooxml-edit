@@ -4,6 +4,44 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet. Each vers
 reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
 earlier ones were never tagged.
 
+## 0.64.0 -- unreleased
+- **Dependencies: ooxml-edit now requires ooxml-common** (`ooxml-common>=0.29.0`, beside
+  lxml; review, S2). ooxml-common is standard library only and never imports ooxml-edit;
+  ooxml-edit may import it ([docs/DESIGN.md](docs/DESIGN.md)). Neither is on PyPI: install
+  ooxml-common from its repository first (README, "Install"). `tests/test_neutrality.py`
+  and `tests/test_charts_neutrality.py` allow it beside lxml; the format-neutral rules are
+  unchanged.
+- ooxml-edit's copies of ooxml-common's logic are gone, and the names stay, re-exported:
+  `dates.NAMES`, `LANGUAGES`, `LCIDS` and `DateNames` are `ooxml_common.dates`' (the same
+  measured tables), `dates.names_tag` reads `ooxml_common.dates.names_tag`,
+  `dates.is_date_code` is `ooxml_common.numfmt.is_date_code` (which `sheets.Styles.is_date`
+  and `Chart.category_dates` now read), `tools.DEFAULT_LOCALE` is
+  `ooxml_common.locales.EN_US` itself, and `tools.DefaultLocale`, the copy's class, is an
+  alias of `ooxml_common.locales.Locale` for one release. `opc.CONTENT_TYPES_PART`,
+  `REL_OFFICE_DOCUMENT`, `REL_IMAGE` and `normalize_part_path`, `charts.create.REL_CHART`
+  and `R_NS`, and the chart line widths' points-to-EMU factor are ooxml-common's too (the
+  same values and rule). A session still keeps any object with a locale's five fields as
+  given (`tools.locale_of`).
+- What changes: a number format code is read as Excel reads it (measured in Excel for Mac
+  16.106, 2026-10-25, `ooxml_common.numfmt.MEASURED`). **Its first section decides**:
+  `0;[Red]d`, `0;0;d` and `0.00E+00;d` were dates and are not (Excel showed 46027.5 as
+  `46028`, `46028` and `4,60E+04`). **Dates and times it did not know** are now:
+  `bbbb` (Excel: `2569`), `e` and `ggge` (`2026`), `[$-411]e` (`8`), `[$-ja-JP]ggge`
+  (`令和8`), the Thai `ว/ด/ปปปป` (`๕/๑/๒๕๖๙`), `[$-th-TH]ว/ด/ปปปป` and `[$-41E]ว/ด/ปปปป`
+  (`5/1/2026`), `ช:นน` (`๑๒:๐๐`), `[$-th-TH]ช:นน` (`12:00`), `[ช]:นน:ทท`
+  (`๑๑๐๔๖๖๐:๐๐:๐๐`), `上午/下午` (`下午`) and `a/p` (`p`) alone, and the system's formats
+  `[$-x-sysdate]`, `[$-F800]0.00` and `[$-F800]General` (`maandag 5 januari 2026`),
+  `[$-F400]` and `[$-x-systime]` (`12:00:00`). These 21 codes are all that changed in the
+  measured table, and every one now agrees with Excel; ooxml-common's
+  `tests/test_numfmt.py` checks the two agree on all of it. A chart whose categories are
+  kept in one of the new date codes now reads back as dates (`category_dates`), and
+  `Styles.is_date` follows the same reading. On 60,000 generated codes the old and new
+  readings differ only in those two ways: a date or time in a later section only, and the
+  letters, markers and system ids above.
+- Docs: README, CONTRIBUTING, DESIGN ("How it relates to ooxml-common") and TOOLS say the
+  rule; CI installs ooxml-common before ooxml-edit (it installed it for the tests since
+  0.61.0).
+
 ## 0.63.0 -- unreleased
 - One lookup for what `edit_chart`'s `series` and `category`, and `edit_smartart`'s `node`,
   name (review, N4): `charts.actions.resolve_series`, `resolve_category` and

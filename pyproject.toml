@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ooxml-edit"
-version = "0.63.0"
+version = "0.64.0"
 description = "Lossless, undoable editing of OOXML packages (docx, pptx, xlsx) over lxml"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -26,10 +26,13 @@ classifiers = [
   "Topic :: Office/Business :: Office Suites",
   "Topic :: Text Processing :: Markup :: XML",
 ]
-# lxml, and only lxml.  The standard library's xml.etree renames namespace prefixes and
-# drops declarations it thinks unused, which breaks mc:Ignorable; an editor that must write
-# back what it read cannot use it.  See README, "Why lxml".
-dependencies = ["lxml>=4.9"]
+# lxml: the standard library's xml.etree renames namespace prefixes and drops declarations
+# it thinks unused, which breaks mc:Ignorable; an editor that must write back what it read
+# cannot use it.  See docs/DESIGN.md, "Why lxml".  ooxml-common: the format-neutral reading
+# every library shares (number format codes, the measured date names, the locale), standard
+# library only and never importing this package.  Neither is on PyPI: install ooxml-common
+# from its repository first (README, "Install").
+dependencies = ["lxml>=4.9", "ooxml-common>=0.29.0"]
 
 [project.optional-dependencies]
 # markdown-it-py: tests only, to check ooxml_edit.markdown against the parser the format

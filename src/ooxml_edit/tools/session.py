@@ -28,9 +28,8 @@ for every render and every measurement, as :attr:`~Session.font_dirs` is: applic
 configuration (per user or per client), never a tool argument, and never read from the
 operating system.  The session keeps the object it was given -- an
 :class:`ooxml_common.locales.Locale`, which the application imports -- and checks only that
-it has a locale's attributes (:func:`locale_of`): this package imports nothing of
-ooxml-common, so it stays lxml-only.  Not given, it is :data:`DEFAULT_LOCALE`, en-US with
-:data:`ooxml_common.locales.EN_US`'s values.
+it has a locale's attributes (:func:`locale_of`).  Not given, it is
+:data:`DEFAULT_LOCALE`, which is :data:`ooxml_common.locales.EN_US`.
 
 Views.  Several agents may work in one session at once -- the same documents, undo
 history, refs, datasets and outputs -- each with roles of its own: :meth:`Session.view`
@@ -67,6 +66,8 @@ from dataclasses import dataclass, field
 from os import PathLike, fspath
 from types import MappingProxyType
 from typing import Any, Callable, Hashable, Iterable, Iterator, Mapping, Sequence
+
+from ooxml_common.locales import EN_US, Locale
 
 from .datasets import DATASET_PREFIX, DatasetEntry, dataset_id
 from .limits import LimitError, Limits, check_declared_type, check_image, check_package
@@ -529,33 +530,13 @@ def font_dirs_of(font_dirs: Any) -> tuple[str, ...] | None:
 LOCALE_FIELDS = ("decimal_separator", "thousands_separator", "date_order", "language",
                  "list_separator")
 
-
-@dataclass(frozen=True)
-class DefaultLocale:
-    """en-US, the locale of a session given none, without importing ooxml-common: the
-    values of :data:`ooxml_common.locales.EN_US` and the part of its interface a renderer
-    reads (the fields, :attr:`primary_language`, :meth:`number_text`).  Frozen, hashable
-    and picklable.  An application that has ooxml-common passes its ``EN_US`` or any other
-    :class:`~ooxml_common.locales.Locale` instead; this is only the default."""
-
-    decimal_separator: str = "."
-    thousands_separator: str = ","
-    date_order: str = "mdy"
-    language: str = "en-US"
-    list_separator: str = ","
-
-    @property
-    def primary_language(self) -> str:
-        """The language subtag alone: ``en``."""
-        return self.language.split("-", 1)[0]
-
-    def number_text(self, text: str) -> str:
-        """``text`` as written: en-US separators are Python's own (``1,234.5``)."""
-        return text
-
+#: The old name of the default's class, kept for one release: the default is now
+#: :data:`ooxml_common.locales.EN_US` itself, a :class:`~ooxml_common.locales.Locale`.
+DefaultLocale = Locale
 
 #: The locale of every session given none: en-US, always -- never the operating system's.
-DEFAULT_LOCALE = DefaultLocale()
+#: :data:`ooxml_common.locales.EN_US` itself.
+DEFAULT_LOCALE = EN_US
 
 
 def locale_of(locale: Any) -> Any:

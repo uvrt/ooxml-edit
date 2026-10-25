@@ -14,8 +14,9 @@ import dataclasses
 import datetime as dt
 
 import pytest
+from ooxml_common.locales import Locale
 
-from ooxml_edit.tools import (Dataset, DatasetEntry, DefaultLocale, DocumentFormat, Limits,
+from ooxml_edit.tools import (Dataset, DatasetEntry, DocumentFormat, Limits,
                               Result, ToolError, Toolbox, shared, string, strict_problems,
                               tool)
 from ooxml_edit.tools.datasets import row_range
@@ -350,7 +351,7 @@ def test_several_series_and_a_scatter_charts_x_column(toolbox, session):
 
 
 def test_number_categories_are_written_in_the_sessions_locale(toolbox):
-    nl = DefaultLocale(decimal_separator=",", thousands_separator=".", date_order="dmy",
+    nl = Locale(decimal_separator=",", thousands_separator=".", date_order="dmy",
                        language="nl-NL", list_separator=";")
     session = _session(toolbox, locale=nl)
     ok(add(toolbox, session, **{"from": "t:sales", "columns": ["units", "year"]}))
@@ -675,7 +676,7 @@ def test_runs_merging_and_labels():
 
 # -- dates -----------------------------------------------------------------------------------------
 
-DUTCH = DefaultLocale(decimal_separator=",", thousands_separator=".", date_order="dmy",
+DUTCH = Locale(decimal_separator=",", thousands_separator=".", date_order="dmy",
                       language="nl-BE", list_separator=";")
 #: Made-up days: March the first, and a day whose day number is over 12.
 DAYS = (dt.date(2026, 3, 1), dt.date(2026, 4, 15))
