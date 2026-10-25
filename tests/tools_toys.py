@@ -464,3 +464,111 @@ def sleep_then(seconds: float, value: object) -> object:
 @worker_task
 def failing_warm_up() -> None:
     raise RuntimeError("this warm-up fails")
+
+
+# -- a renderer for the shared render pipeline (ooxml_edit.tools.render) ----------------------
+
+from ooxml_edit.tools import render as pipeline  # noqa: E402
+
+
+class ToyRenderer(pipeline.RendererBase):
+    """Views that stand alone: each page laid out by itself, its title in its SVG.  The
+    state a task is handed comes back in its facts, beside the pages it drew."""
+
+    name = "toy"
+    modules = ("ooxml_edit",)
+
+    def lay_out(self, data, items, width, font_dirs, locale, state):
+        document = ToyDocument(data)
+        count = len(document.pages)
+        views = [pipeline.View(n, f'<svg width="{width}" data-toy-id="{os.getpid()}">'
+                                  f'{document.title(n)}</svg>', n)
+                 for n in items if 1 <= n <= count]
+        return pipeline.Layout(views, pipeline.fingerprint(self, list(font_dirs)),
+                               raster=width, facts={"state": state, "count": count,
+                                                    "pid": os.getpid()})
+
+    def key_text(self, svg):
+        import re
+        return re.sub(r' data-toy-id="[^"]*"', "", svg)
+
+    def rasterise(self, views, raster):
+        if any(view.info == FAILING_PAGE for view in views):
+            raise RuntimeError(f"page {FAILING_PAGE} does not draw")
+        return [(png(raster, raster * 9 // 16), {"page": view.info}) for view in views]
+
+    def rasterise_tiles(self, svg, font_dirs):
+        warnings.warn("a label the fonts lack", ToyWarning)
+        return png(8, 8)
+
+    def warm_up(self):
+        warnings.warn("warming up", ToyWarning)
+
+
+class WholeToyRenderer(ToyRenderer):
+    """The same pages, laid out with the whole document: once, then rasterised in chunks."""
+
+    name = "toy-whole"
+    whole_document = True
+
+
+class BrokenToyRenderer(ToyRenderer):
+    """A renderer whose images are not PNGs."""
+
+    name = "toy-broken"
+
+    def rasterise(self, views, raster):
+        return [(b"GIF89a" + bytes(40), None) for _ in views]
+
+
+#: A page whose rasterising fails (``None``: none), set by a test; in-process runs only.
+FAILING_PAGE = None
+RENDERERS = {"alone": ToyRenderer(), "whole": WholeToyRenderer(), "broken": BrokenToyRenderer()}
+
+
+@tool("toy_draw", "Test only: draw pages with the shared render pipeline.",
+      {"doc": string("Document id, e.g. d1."),
+       "pages": array(integer("Page number.", minimum=1), "Pages to draw."),
+       "width": integer("Width in pixels.", minimum=16, maximum=2576, optional=True),
+       "shape": string("Which renderer.", enum=["alone", "whole", "broken"], optional=True),
+       "first_alone": boolean("One chunk first, by itself.", optional=True)},
+      kind="pptx", group="toy_render")
+def toy_draw(call, doc, pages, width=64, shape="alone", first_alone=False):
+    seen = []
+
+    def on_facts(facts, alone):
+        seen.append((facts["state"], alone))
+        return "handed" if alone else None
+
+    drawn, facts = pipeline.draw(call, RENDERERS[shape], pages, width,
+                                 ids={n: f"p{n}" for n in pages}, fonts=(), locale=None,
+                                 state=lambda data: "kept", first_alone=first_alone,
+                                 on_facts=on_facts)
+    for n in pages:
+        if n in drawn:
+            call.image(drawn[n][0], *pipeline.png_size(drawn[n][0]), label=f"page {n}")
+    return Result(summary="Drew", data={"drawn": sorted(drawn), "cached": sorted(
+        n for n in drawn if drawn[n][2]), "meta": {n: drawn[n][1] for n in sorted(drawn)},
+        "facts": [f["state"] for f in facts], "seen": seen})
+
+
+@tool("toy_tiles", "Test only: a contact image of pages with the shared render pipeline.",
+      {"doc": string("Document id, e.g. d1."),
+       "pages": array(integer("Page number.", minimum=1), "Pages to tile.")},
+      kind="pptx", group="toy_render")
+def toy_tiles(call, doc, pages):
+    from ooxml_edit.tools import tiles
+
+    drawn, _ = pipeline.draw(call, RENDERERS["alone"], pages, 160,
+                             ids={n: f"p{n}" for n in pages}, fonts=(), locale=None)
+    tiling = tiles.tiling_of({"width": 160}, len(pages), name="tiles", what="pages")
+    image, w, h = pipeline.draw_tiles(call, RENDERERS["alone"],
+                                      [(drawn[n][0], f"page {n}") for n in pages], tiling,
+                                      name="tiles", what="pages", fonts=())
+    call.image(image, w, h, label="tiles")
+    return Result(summary="Tiled", data={"size": [w, h]})
+
+
+@worker_task
+def toy_warm_up() -> None:
+    pipeline.warm_up(RENDERERS["alone"])

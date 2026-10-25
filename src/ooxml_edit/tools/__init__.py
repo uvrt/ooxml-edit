@@ -49,6 +49,8 @@ What is here:
   memory, sized in bytes (:class:`ContentStore`);
 * :mod:`.logs` -- call records with argument digests, not content;
 * :mod:`.hints` -- what a name that is no tool means: a tool, and an action of it;
+* :mod:`.render` -- one render pipeline for every format: a format's :class:`~.render.Renderer`
+  adapter, and the rest shared -- the cache keys, the worker tasks, the PNG checks;
 * :mod:`.tiles` -- contact images: many rendered views tiled into one labelled image
   (``render``'s option), the options, layout and SVG; a format rasterises it;
 * :mod:`.prompts` -- the shared system-prompt fragment: mechanics, no house style;
@@ -65,7 +67,7 @@ out as bytes to the application, and no tool may take a path.  Like :mod:`ooxml_
 this subpackage is optional, and the core never imports it.
 """
 
-from . import assets, hints, rendercache, shared, textfacts, tiles
+from . import assets, hints, render, rendercache, shared, textfacts, tiles
 from .assets import Asset, AssetCatalogue, FolderCatalogue
 from .adapters import StrictProblem, strict_problems
 from .datasets import (CACHE_EXTERNAL, CACHE_STATUSES, DATASET_ID, DATASET_PREFIX,
@@ -96,7 +98,7 @@ __all__ = [
     "Result", "Rows", "SYSTEM", "TYPE_LABELS",
     "InProcess", "Session", "SessionView", "StepOwner", "StrictProblem", "SubprocessPool", "SubsetError", "Tool", "ToolError", "ToolGroup", "Toolbox",
     "WorkerPool", "ContentStore", "available_cpus", "content_key", "default_workers",
-    "rendercache", "run_all",
+    "render", "rendercache", "run_all",
     "anthropic_image_tokens", "array", "boolean", "build_schema", "canonical", "check_subset",
     "collect_warnings", "dataset_id", "doc_order", "free_object", "integer", "locale_of",
     "row_range",
