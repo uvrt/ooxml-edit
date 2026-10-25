@@ -244,7 +244,7 @@ def child_ranks(parent_name: str) -> dict[str, int] | None:
     return ranks
 
 
-#: The old name, kept for pptx-agent's validate.py until it moves.
+#: The old name, kept one release for the sibling that imports it (tests/test_public_api.py).
 _ranks = child_ranks
 
 
@@ -310,7 +310,7 @@ def prefixed_name(element: Element) -> str:
     return local
 
 
-#: The old name, kept for pptx-agent until it moves.
+#: The old name, kept one release for the sibling that imports it (tests/test_public_api.py).
 _prefixed_name = prefixed_name
 
 

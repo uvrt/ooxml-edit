@@ -686,7 +686,7 @@ def check_options(kind: str, category_order: str, gridlines: bool, bubble_scale:
             raise ChartDataError("bubble_scale is a whole percentage, 0-300")
 
 
-#: The old name, kept for docx-agent until it moves.
+#: The old name, kept one release for the sibling that imports it (tests/test_public_api.py).
 _options = check_options
 
 

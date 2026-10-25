@@ -1339,7 +1339,7 @@ def series_of(root: Element) -> list[_Series]:
     return [_Series(ser) for plot in plots for ser in plot.findall(qn("c:ser"))]
 
 
-#: The old name, kept for pptx-agent until it moves.
+#: The old name, kept one release for the sibling that imports it (tests/test_public_api.py).
 _series_of = series_of
 
 

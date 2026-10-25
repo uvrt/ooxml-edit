@@ -950,7 +950,7 @@ def part_for_rels(rels_path: str) -> str:
     return f"{owner_dir}/{owner}" if owner_dir else owner
 
 
-#: The old name, kept for pptx-agent until it moves.
+#: The old name, kept one release for the sibling that imports it (tests/test_public_api.py).
 _part_for_rels = part_for_rels
 
 

@@ -171,7 +171,7 @@ class DiagramModel:
             remove(extensions)
 
 
-#: The old name, kept for docx-agent's tools/charts_probe.py until it moves.
+#: The old name, kept one release for the sibling that imports it (tests/test_public_api.py).
 _Model = DiagramModel
 
 

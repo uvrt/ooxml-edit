@@ -9,8 +9,8 @@ a sibling at its next run, not on the pull request that made the change.
 `tests/test_public_api.py` lists the same names, each with the siblings that use it, and
 fails when one is gone -- or when this page and that list disagree.
 
-To rename one, keep the old name as an alias for one release, with a comment saying who it
-is kept for, and move the sibling to the new name. A sibling that starts importing a name
+To rename one, keep the old name as an alias for one release (the test says who it is kept
+for), and move the sibling to the new name. A sibling that starts importing a name
 adds it here and to the test.
 
 Each line is a module, then which siblings import what from it.
