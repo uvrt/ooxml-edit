@@ -32,12 +32,12 @@ Each line is a module, then which siblings import what from it.
 - `ooxml_edit.provenance` -- docx-agent, pptx-agent: `RecordError`, `dumps`, `loads`; pptx-agent: `VERSION`, `facts_after_edit`, `facts_found`, `offset`, `place`, `record`
 - `ooxml_edit.sheets` -- xlsx-agent: `Area`, `Cell`, `Formula`, `MAX_COLUMN`, `MAX_ROW`, `MAX_TEXT`, `RichText`, `column_index`, `column_letters`, `date_serial`, `number_text`, `outside_footprint`, `rich_runs`
 - `ooxml_edit.stamp` -- pptx-agent: `ExtensionStamp`
-- `ooxml_edit.tools` -- docx-agent, pptx-agent, xlsx-agent: `CORE`, `Dataset`, `DatasetEntry`, `DocumentFormat`, `ROLES`, `Result`, `ToolError`, `ToolGroup`, `Toolbox`, `array`, `boolean`, `integer`, `number`, `obj`, `strict_problems`, `string`, `tool`; docx-agent, pptx-agent: `InProcess`, `REVIEW`, `SubprocessPool`, `content_key`, `names_as`, `page_list`, `page_text`, `worker`, `worker_task`; docx-agent: `ACCEPT`; pptx-agent: `FolderCatalogue`, `Param`, `collect_warnings`; xlsx-agent: `CACHE_EXTERNAL`, `CACHE_STATUSES`, `DATASET_ID`, `DATASET_PREFIX`, `REF`
+- `ooxml_edit.tools` -- docx-agent, pptx-agent, xlsx-agent: `CORE`, `Dataset`, `DatasetEntry`, `DocumentFormat`, `ROLES`, `Result`, `ToolError`, `ToolGroup`, `Toolbox`, `array`, `boolean`, `integer`, `number`, `obj`, `strict_problems`, `string`, `tool`; docx-agent, pptx-agent: `InProcess`, `REVIEW`, `SubprocessPool`, `names_as`, `page_list`, `page_text`, `render`, `worker`, `worker_task`; docx-agent: `ACCEPT`, `content_key`; pptx-agent: `FolderCatalogue`, `Param`, `collect_warnings`; xlsx-agent: `CACHE_EXTERNAL`, `CACHE_STATUSES`, `DATASET_ID`, `DATASET_PREFIX`, `REF`
 - `ooxml_edit.tools.adapters` -- docx-agent, pptx-agent, xlsx-agent: `anthropic_problems`, `openai_problems`; docx-agent, pptx-agent: `definitions_for`; xlsx-agent: `free_strings`
 - `ooxml_edit.tools.assets` -- pptx-agent: `MAX_RESULTS`, `fetch`, `find`
 - `ooxml_edit.tools.hints` -- docx-agent, pptx-agent, xlsx-agent: `tool_hints`
 - `ooxml_edit.tools.limits` -- xlsx-agent: `LimitError`, `Limits`, `check_package`
-- `ooxml_edit.tools.rendercache` -- docx-agent, pptx-agent: `code_stamp`
+- `ooxml_edit.tools.render` -- docx-agent, pptx-agent: `Layout`, `RendererBase`, `View`, `draw`, `draw_tiles`, `fingerprint`, `png_size`, `system_fonts`, `warm_up`; docx-agent: `lay_out_views`; pptx-agent: `raster_key`, `render_views`
 - `ooxml_edit.tools.results` -- pptx-agent: `page_list`
 - `ooxml_edit.tools.schema` -- docx-agent, pptx-agent, xlsx-agent: `example_arguments`, `is_path_name`, `walk_properties`; docx-agent, xlsx-agent: `subset_problems`; xlsx-agent: `close_match`
 - `ooxml_edit.tools.shared` -- docx-agent, pptx-agent, xlsx-agent: `GROUPS`, `SESSION_TOOLS`, `handler`; docx-agent, pptx-agent: `CHART_TYPES`, `COMMENT_ACTION_ROLES`, `comment_role`; pptx-agent, xlsx-agent: `definition`; pptx-agent: `SPECS`
