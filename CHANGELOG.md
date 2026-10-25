@@ -15,7 +15,8 @@ earlier ones were never tagged.
   given, `label_not_found` for a name nothing has or two share, `not_found` for a
   position past the end, each with `field` and the names (`valid_options`, at most 50);
   a date category's refusal says they are named as YYYY-MM-DD. Listed in
-  [docs/USED-BY.md](docs/USED-BY.md) and `tests/test_public_api.py`.
+  [docs/USED-BY.md](docs/USED-BY.md) and `tests/test_public_api.py`; `choices` leaves
+  both lists, since no agent imports it any more (it stays, used here).
 
 ## 0.62.0 -- unreleased
 - Each version is tagged (review, N3): a tag workflow (`.github/workflows/tag.yml`)
