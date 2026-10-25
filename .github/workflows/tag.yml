@@ -1,0 +1,41 @@
+name: Tag
+
+# Each version that reaches main is tagged `v<version>`, the version pyproject.toml names,
+# on the commit that brought it.  A version that already has its tag is left alone, so
+# every push to main after the first with that version does nothing; no other tag is ever
+# touched.  CI's `build` job (.github/check_version.py) holds the version to CHANGELOG.md's
+# top section, so a tag names a version the changelog describes.
+#
+# The tag is pushed with this run's GITHUB_TOKEN, and pushes made with it start no other
+# workflow, so the tag itself runs nothing.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: tag
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tag this version if it has no tag yet
+        run: |
+          version=$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+          tag="v$version"
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" > /dev/null; then
+            echo "$tag exists; nothing to do"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$tag" -m "ooxml-edit $version" "$GITHUB_SHA"
+          git push origin "refs/tags/$tag"
+          echo "tagged $GITHUB_SHA as $tag"
