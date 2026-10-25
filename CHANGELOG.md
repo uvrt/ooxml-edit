@@ -5,7 +5,7 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet.
 ## 0.62.0 -- unreleased
 - The names the siblings import are declared and held (review, N2):
   [docs/USED-BY.md](docs/USED-BY.md) lists every name the agents and ooxml-common's tests
-  import from here (226 names in 30 modules, from an AST scan of their `src`, `tests` and
+  import from here (228 names in 30 modules, from an AST scan of their `src`, `tests` and
   `tools`), and `tests/test_public_api.py` imports each one, so a rename fails this
   repository's own CI rather than a sibling's next run; the test also holds the page and
   its list to the same names, and no listed name may start with an underscore. The private
