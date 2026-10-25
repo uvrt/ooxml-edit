@@ -788,3 +788,76 @@ def test_a_format_says_what_changed_in_its_own_addresses_and_parts_stand_in_if_i
         own.open(synthetic.outer_package(), "deck.pptx")
         result = box.dispatch(own, "t_title", {"doc": "d1", "page": "1", "text": "One"})
         assert result.ok and result.touched == [{"doc": "d1", "part": synthetic.PAGE1}]
+
+
+# -- N4: one lookup for edit_chart's series and categories, name first --------------------------
+
+
+def _toy_chart(series, categories, dates=None):
+    from types import SimpleNamespace
+
+    made = SimpleNamespace(categories=categories, category_dates=dates)
+    made.series = [SimpleNamespace(name=name, index=k) for k, name in enumerate(series)]
+    return made
+
+
+def test_a_series_name_wins_over_a_position():
+    from ooxml_edit.charts.actions import resolve_series
+
+    named = _toy_chart(["1", "0"], ["Q1", "Q2"])
+    assert resolve_series(named, "1").index == 0           # the series called "1"
+    assert resolve_series(named, "0").index == 1
+    plain = _toy_chart(["North", "South"], ["Q1", "Q2"])
+    assert resolve_series(plain, "1").index == 1           # no "1": position 1
+    assert resolve_series(plain, " south ").index == 1     # whitespace and case ignored
+    assert resolve_series(_toy_chart(["Ｎｏｒｔｈ"], []), "north").index == 0
+
+
+@pytest.mark.parametrize("which, code, words", [
+    (None, "invalid_arguments", "set_value needs series: 'North' or 'South'"),
+    ("East", "label_not_found", "no series 'East'"),
+    ("2", "not_found", "no series 2; there are 2"),
+])
+def test_a_series_that_is_not_there_says_what_is(which, code, words):
+    from ooxml_edit.charts.actions import resolve_series
+
+    with pytest.raises(ToolError) as caught:
+        resolve_series(_toy_chart(["North", "South"], []), which, "set_value")
+    error = caught.value
+    assert (error.code, error.field) == (code, "series") and words in error.message
+    assert error.valid_options == ["North", "South"]
+
+
+def test_a_name_two_series_share_asks_for_the_position():
+    from ooxml_edit.charts.actions import resolve_series
+
+    with pytest.raises(ToolError) as caught:
+        resolve_series(_toy_chart(["1", "1", "x"], []), "1")
+    assert caught.value.code == "label_not_found" and "give the position" in caught.value.message
+
+
+def test_a_category_is_found_the_same_way_and_dates_by_their_iso_date():
+    from ooxml_edit.charts.actions import resolve_category
+
+    assert resolve_category(_toy_chart([], ["2", "1"]), "1") == 1
+    assert resolve_category(_toy_chart([], ["Q1", "Q2"]), "1") == 1
+    dated = _toy_chart([], [46027, 46063], dates=["2026-01-05", "2026-02-10"])
+    assert resolve_category(dated, "2026-02-10") == 1
+    for which, code in (("46063", "not_found"), ("2026-02-11", "label_not_found")):
+        with pytest.raises(ToolError) as caught:
+            resolve_category(dated, which)
+        assert caught.value.code == code and "named as YYYY-MM-DD" in caught.value.message
+        assert caught.value.valid_options == ["2026-01-05", "2026-02-10"]
+
+
+def test_a_node_is_numbered_from_0():
+    from types import SimpleNamespace
+
+    from ooxml_edit.charts.actions import resolve_node
+
+    diagram = SimpleNamespace(nodes=["a", "b"])
+    assert resolve_node(diagram, 1) == "b"
+    for node, code in ((None, "invalid_arguments"), (2, "not_found")):
+        with pytest.raises(ToolError) as caught:
+            resolve_node(diagram, node, "set_text")
+        assert caught.value.code == code and caught.value.valid_options == [0, 1]

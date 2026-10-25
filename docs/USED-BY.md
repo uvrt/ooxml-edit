@@ -16,7 +16,7 @@ adds it here and to the test.
 Each line is a module, then which siblings import what from it.
 
 - `ooxml_edit.charts` -- docx-agent, pptx-agent: `add_chart`; docx-agent: `ChartDataError`, `ChartDataWarning`, `WORD_LOOK`; pptx-agent: `POWERPOINT_LOOK`, `provenance`
-- `ooxml_edit.charts.actions` -- docx-agent, pptx-agent: `STYLE_ACTIONS`, `add_style_actions`, `apply_add_style`, `apply_style_action`, `category_labels`, `chart_style_json`, `choices`, `scale_axis`
+- `ooxml_edit.charts.actions` -- docx-agent, pptx-agent: `STYLE_ACTIONS`, `add_style_actions`, `apply_add_style`, `apply_style_action`, `category_labels`, `chart_style_json`, `choices`, `resolve_category`, `resolve_node`, `resolve_series`, `scale_axis`
 - `ooxml_edit.charts.chart` -- docx-agent, pptx-agent: `Chart`, `ChartDataError`, `ChartDataWarning`, `chart_model`; pptx-agent: `AXIS_TAGS`, `C_NS`, `PLOT_TAGS`, `PLOT_TYPES`, `REL_PACKAGE`, `Series`, `decode_number`, `series_of`, `workbook_part`
 - `ooxml_edit.charts.create` -- docx-agent: `WORD_LOOK`, `chart_data`, `check_options`; pptx-agent: `POWERPOINT_LOOK`
 - `ooxml_edit.charts.diagram` -- docx-agent, pptx-agent: `Diagram`, `diagram_model`; docx-agent: `DiagramDrawingError`, `DiagramModel`; pptx-agent: `DATA_MODEL_EXT_URI`, `DGM_NS`, `DSP_NS`, `DiagramNode`, `REL_DIAGRAM_DRAWING`, `TEXT_TYPES`, `new_model_id`
