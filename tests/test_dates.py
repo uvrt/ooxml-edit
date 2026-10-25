@@ -336,6 +336,23 @@ def test_a_date_code_is_told_from_a_number_code(code, is_date):
     assert dates.is_date_code(code) is is_date
 
 
+def test_the_tables_and_the_reading_are_ooxml_commons():
+    # One copy for every library: the measured names and the reading of a kept code.
+    from ooxml_common import dates as common_dates, numfmt
+    assert dates.is_date_code is numfmt.is_date_code
+    assert dates.NAMES is common_dates.NAMES and dates.LANGUAGES is common_dates.LANGUAGES
+    assert dates.LCIDS is common_dates.LCIDS and dates.DateNames is common_dates.DateNames
+
+
+def test_a_kept_code_reads_as_excel_showed_it():
+    # numfmt.MEASURED: what Excel for Mac showed each code as (2026-10-25).  Its first
+    # section decides: 0;[Red]d shows a positive serial as a number.
+    from ooxml_common import numfmt
+    for code, kind, shown in numfmt.MEASURED:
+        assert dates.is_date_code(code) is (kind in numfmt.DATE_KINDS), (code, shown)
+    assert not dates.is_date_code("0;[Red]d") and dates.is_date_code("0;[Red]d", 1)
+
+
 def test_text_and_number_categories_are_no_dates():
     document = cs.Opened(cs.package())
     with document.history.batch():

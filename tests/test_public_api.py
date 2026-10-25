@@ -132,7 +132,7 @@ USED_BY: dict[str, dict[str, str]] = {
         "NAMES": "ooxml-common",
         "format_code": "ooxml-common",
         "format_date": "ooxml-common",
-        "is_date_code": "xlsx-agent",
+        "is_date_code": "ooxml-common",
         "serial": "ooxml-common",
     },
     "ooxml_edit.history": {

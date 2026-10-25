@@ -4,6 +4,7 @@ An optional part of ooxml-edit, imported explicitly (``import ooxml_edit.sheets`
 never imports it, it imports nothing but the core and lxml, and importing it registers
 nothing.  :mod:`ooxml_edit.charts` writes a chart's embedded workbook through it (and keeps
 ``charts.workbook`` as the old name); a workbook edited for its own sake uses it directly.
+Besides those it reads number format codes with ooxml-common (:mod:`ooxml_common.numfmt`).
 
 * :mod:`.workbook` -- :class:`Workbook` and :class:`Worksheet`: cells written by position
   (:meth:`Worksheet.write`: text, :class:`RichText` -- runs with the cell's font, bold,

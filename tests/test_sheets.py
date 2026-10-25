@@ -281,6 +281,15 @@ def test_strings_are_inline_without_a_shared_table():
 # -- styles ------------------------------------------------------------------------------------
 
 
+def test_a_format_code_is_read_as_excel_reads_it():
+    # ooxml_common.numfmt (measured in Excel for Mac, 2026-10-25): the first section
+    # decides, and a Buddhist year or A/P alone is a date or a time.
+    _, book = _open()
+    styles = book.styles
+    for code, is_date in (("0;[Red]d", False), ("bbbb", True), ("a/p", True), ("h:mm", True)):
+        assert styles.is_date(styles.with_number_format(0, code)) is is_date, code
+
+
 def test_the_style_index_reuses_and_appends_cell_formats():
     data, book = _open()
     styles = book.styles
