@@ -87,7 +87,9 @@ The tests build the small packages they need (`tests/synthetic.py`, and
 `tests/charts_synthetic.py` for charts of every kind, their workbooks and SmartArt, and
 `tests/sheets_synthetic.py`, a made-up shop's stock-list template, for `sheets`); no
 Office document is committed here. Chart edits are checked against the embedded workbook
-by an independent reader, `tests/xlsx.py`. See [CONTRIBUTING.md](CONTRIBUTING.md).
+by an independent reader, `tests/xlsx.py`. `tests/test_public_api.py` holds the names the
+agents import from here ([docs/USED-BY.md](docs/USED-BY.md)), so a rename fails here
+first. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Family
 
