@@ -337,7 +337,7 @@ def test_without_a_locale_a_new_chart_is_byte_identical():
 
 
 def test_ooxml_commons_en_us_writes_the_same_bytes():
-    locales = pytest.importorskip("ooxml_common.locales")
+    from ooxml_common import locales
     assert _space(locale=locales.EN_US) == _space(lang="en-US")
 
 

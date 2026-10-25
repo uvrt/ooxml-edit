@@ -720,8 +720,9 @@ class Toolbox:
         :class:`ooxml_common.locales.Locale` (decimal and thousands separators, date order,
         language, list separator) -- is likewise the default of the sessions this toolbox
         makes, forwarded to every format and to the work run in worker processes.  ``None``
-        is en-US (:data:`~.session.DEFAULT_LOCALE`, :data:`ooxml_common.locales.EN_US`'s
-        values), always: never the operating system's.  Not a tool argument either.
+        is en-US (:data:`~.session.DEFAULT_LOCALE`, which is
+        :data:`ooxml_common.locales.EN_US`), always: never the operating system's.  Not a
+        tool argument either.
 
         ``roles`` -- what the model may do: any of ``review`` (read, find, render, check,
         compare; add and reply to comments), ``resolve`` (resolve, reopen and delete

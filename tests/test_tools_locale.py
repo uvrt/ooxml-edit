@@ -1,6 +1,6 @@
 """The application's locale: a toolbox default, a session's own, on every document and into
 the worker processes -- en-US when not given, never the machine's, and never in a tool's
-definition.  ooxml-edit imports nothing of ooxml-common: it keeps the object it is given."""
+definition.  The default is ooxml-common's EN_US; any other locale is kept as given."""
 
 from __future__ import annotations
 
@@ -11,9 +11,10 @@ import pickle
 from types import SimpleNamespace
 
 import pytest
+from ooxml_common import locales
 
-from ooxml_edit.tools import (DEFAULT_LOCALE, LOCALE_FIELDS, DocumentFormat, InProcess, Result,
-                              Session, Toolbox, locale_of, string, tool)
+from ooxml_edit.tools import (DEFAULT_LOCALE, LOCALE_FIELDS, DefaultLocale, DocumentFormat,
+                              InProcess, Result, Session, Toolbox, locale_of, string, tool)
 
 import synthetic
 import tools_toys
@@ -72,13 +73,11 @@ def test_the_default_is_en_us_whatever_the_machine(monkeypatch):
     assert Session().locale is DEFAULT_LOCALE
 
 
-def test_the_default_matches_ooxml_commons_en_us():
-    locales = pytest.importorskip("ooxml_common.locales")
-    for name in LOCALE_FIELDS:
-        assert getattr(DEFAULT_LOCALE, name) == getattr(locales.EN_US, name)
-    assert DEFAULT_LOCALE.primary_language == locales.EN_US.primary_language
-    for text in ("1,234.5", "0.25", "12.5%", "-3"):
-        assert DEFAULT_LOCALE.number_text(text) == locales.EN_US.number_text(text)
+def test_the_default_is_ooxml_commons_en_us():
+    assert DEFAULT_LOCALE is locales.EN_US
+    assert LOCALE_FIELDS == tuple(field.name for field in dataclasses.fields(locales.Locale))
+    # The old name of the default's class, kept for one release.
+    assert DefaultLocale is locales.Locale and DefaultLocale() == DEFAULT_LOCALE
 
 
 def test_the_toolbox_default_reaches_a_worker_process():
@@ -97,7 +96,6 @@ def test_the_default_crosses_into_a_worker_too():
 
 
 def test_an_ooxml_common_locale_is_kept_as_given():
-    locales = pytest.importorskip("ooxml_common.locales")
     dutch = locales.Locale(decimal_separator=",", thousands_separator=".", date_order="dmy",
                            language="nl-NL", list_separator=";")
     with Toolbox([toy_locale], formats=[FORMAT], workers=1, locale=dutch) as box:
