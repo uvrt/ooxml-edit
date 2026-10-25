@@ -7,15 +7,19 @@ back losslessly, parts added, copied, removed and reaped, schema-ordered inserti
 redo with batches, and durable ids stamped into an extension list. What a `.pptx`, a
 `.docx` and an `.xlsx` editor all need, and nothing any one of them needs alone.
 
-Depends on **lxml**, and only on lxml. Python 3.10+.
+Depends on **lxml** and **[ooxml-common](https://github.com/uvrt/ooxml-common)** (standard
+library only: the reading of number format codes, the measured date names and the locale
+that every library shares). Python 3.10+.
 
 > A part that was never parsed is written back as the exact bytes that were read.
 
 ## Install
 
-Not on PyPI yet. From GitHub or a checkout:
+Not on PyPI yet, nor is ooxml-common: install it from GitHub first, then this package from
+GitHub or a checkout:
 
 ```sh
+pip install "ooxml-common @ git+https://github.com/uvrt/ooxml-common@main"
 pip install "ooxml-edit @ git+https://github.com/uvrt/ooxml-edit@main"
 pip install -e '.[dev]'     # from a checkout, with pytest
 ```

@@ -508,7 +508,8 @@ Letters in either case; every other character is written as given, text in doubl
 (`d "de" mmmm "de" yyyy`) or one character after `\`; any other letter, or a run that is
 no token (`ddddd`, `yyy`), is refused with the tokens. Month and day names are measured
 in Excel for Mac, 2026-10-16, with an explicit locale code in the format (`[$-413]mmmm`),
-for en-US, en-GB, nl-NL, nl-BE, de-DE, fr-FR, es-ES and it-IT (`dates.NAMES`): en-US and
+for en-US, en-GB, nl-NL, nl-BE, de-DE, fr-FR, es-ES and it-IT (`dates.NAMES`, which is
+`ooxml_common.dates.NAMES` from 0.64.0, as `LANGUAGES` and `LCIDS` are): en-US and
 en-GB alike (`Mar`, `Mon`), nl `mrt`/`ma`, de `Mär`/`Mo`, fr `mars`/`janv.`/`lun.`, es
 `mar.`/`lu.`, it `mar`/`lun`; `mmmmm` is the full name's first letter (lower case in nl,
 fr, es and it). **A region shows its language's names** (0.44.0, round 7, L5; measured in
@@ -549,7 +550,8 @@ locale.
   `02/03/2026` fr-FR, `2/3/26` es-ES, `02/03/26` it-IT, `3/2/26` en-US), so no pattern
   stands for "the locale's short date" and none is offered. A chart read back
   (`action: "read"`) lists such categories as ISO dates (`2026-03-02`) with the code in
-  `category_format` (0.39.0, round 6; `Chart.category_dates`, `dates.is_date_code`): a
+  `category_format` (0.39.0, round 6; `Chart.category_dates`, `dates.is_date_code`, which
+  is `ooxml_common.numfmt.is_date_code` from 0.64.0: the code's first section decides): a
   model reads the date without decoding a serial or a viewer's separator, and names a
   category by it (`category: "2026-03-02"`). pptx2svg and docx2svg draw them as Office
   does (ooxml-common 0.17.0: `5 januari 2026` for `[$-413]d\ mmmm\ yyyy`).
@@ -839,12 +841,12 @@ token budget is unchanged. The session keeps it as `session.locale`, copies it t
 document's entry (`entry.locale`), gives it to `DocumentFormat.configure(document,
 session)`, and offers it to handlers as `call.locale`, which a format passes to the work
 it runs in a worker process -- a renderer's `ConvertOptions(locale=call.locale)` -- and
-keys its caches with. ooxml-edit stays lxml-only: it imports nothing of ooxml-common, keeps
-the object it is given (a `Locale` is frozen and pickles into a worker), and checks only
-that it has the five fields as strings (`tools.locale_of`, `tools.LOCALE_FIELDS`;
-`TypeError` otherwise -- a bare language tag is not a locale). The default is
-`tools.DEFAULT_LOCALE`, an object with `ooxml_common.locales.EN_US`'s values and the part
-of its interface a renderer reads (`primary_language`, `number_text`). A new chart's
+keys its caches with. ooxml-edit keeps the object it is given (a `Locale` is frozen and
+pickles into a worker), and checks only that it has the five fields as strings
+(`tools.locale_of`, `tools.LOCALE_FIELDS`; `TypeError` otherwise -- a bare language tag is
+not a locale). The default is `tools.DEFAULT_LOCALE`, which is `ooxml_common.locales.EN_US`
+itself (0.64.0; before, ooxml-edit kept a copy of its values, `tools.DefaultLocale`, now an
+alias of `Locale` for one release). A new chart's
 language falls back to the locale's (`add_chart(..., locale=call.locale)`) when the
 format names none; with the default the chart is byte-identical to before.
 
