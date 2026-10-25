@@ -1,8 +1,16 @@
 # Changelog
 
-Versions are those in `pyproject.toml`; none is published to PyPI yet.
+Versions are those in `pyproject.toml`; none is published to PyPI yet. Each version that
+reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
+earlier ones were never tagged.
 
 ## 0.62.0 -- unreleased
+- Each version is tagged (review, N3): a tag workflow (`.github/workflows/tag.yml`)
+  tags the commit that brings a version to `main` `v<version>`, this one first, and
+  never touches another tag; CI's `build` job checks that `pyproject.toml`'s version is
+  the one this file's top section names, and `ooxml_edit.__version__` the same
+  (`.github/check_version.py`), so a sibling's floor on this package names a tag. No
+  code change.
 - The names the siblings import are declared and held (review, N2):
   [docs/USED-BY.md](docs/USED-BY.md) lists every name the agents and ooxml-common's tests
   import from here (228 names in 30 modules, from an AST scan of their `src`, `tests` and

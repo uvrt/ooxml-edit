@@ -24,6 +24,10 @@ the change (the `downstream` job), and the whole workflow nightly.
 
 Open pull requests against `main`. Keep a change to one subject, add tests for it, and
 note user-visible changes in [CHANGELOG.md](CHANGELOG.md).
+Raise the version with its CHANGELOG section: CI's `build` job checks that
+`pyproject.toml`'s version is the one its top section names, and `__version__` the same
+(`.github/check_version.py`). Each version that reaches `main` is tagged `v<version>` on
+that commit by the tag workflow (`.github/workflows/tag.yml`).
 
 ## Names the siblings import
 
