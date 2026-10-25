@@ -3,6 +3,11 @@
 Versions are those in `pyproject.toml`; none is published to PyPI yet.
 
 ## 0.61.0 -- unreleased
+- CI runs pptx-agent's, docx-agent's and xlsx-agent's suites (their main) against
+  every change here, in a `downstream` job (Linux, Python 3.12), so a change that breaks
+  an agent fails on its own pull request; installs ooxml-common (test only) so the tests
+  that hold the en-US defaults to `ooxml_common.locales` run instead of skipping; and
+  runs nightly (02:17 UTC) and on demand. No code change.
 - The shared `check` takes `layout` in `include`, and `min_size` and `styles` (round 16,
   F8): a document's layout facts, measured from the layout the document is drawn with
   (docx-agent's handler) -- text below `min_size` points by kind, direct formatting over
