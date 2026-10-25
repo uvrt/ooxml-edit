@@ -303,6 +303,8 @@ USED_BY: dict[str, dict[str, str]] = {
         "parse_xml": "docx-agent, pptx-agent, xlsx-agent",
         "prefixed_name": "docx-agent, pptx-agent",
         "qn": "docx-agent, pptx-agent",
+        "register_child_order": "docx-agent, pptx-agent",
+        "register_namespaces": "docx-agent, pptx-agent",
         "remove": "docx-agent, pptx-agent",
         "replace_choice": "pptx-agent",
         "serialize": "docx-agent, pptx-agent",
