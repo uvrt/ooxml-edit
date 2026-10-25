@@ -31,18 +31,17 @@ from typing import BinaryIO, Callable, Iterable
 
 from lxml import etree
 
+# The package's names and path rule are ooxml-common's, the reader's: one spelling for both.
+from ooxml_common.opc import (CONTENT_TYPES_PART, REL_IMAGE, REL_OFFICE_DOCUMENT,
+                              normalize_part_path)
+
 from .xml import Element, parse_xml, serialize
 
-CONTENT_TYPES_PART = "[Content_Types].xml"
 CONTENT_TYPES_NS = "http://schemas.openxmlformats.org/package/2006/content-types"
 #: The declaration Office writes ``[Content_Types].xml`` with, line end included.
 CONTENT_TYPES_DECLARATION = b'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n'
 
 RELS_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
-REL_OFFICE_DOCUMENT = (
-    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument"
-)
-REL_IMAGE = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image"
 
 
 @dataclass(frozen=True)
@@ -927,11 +926,6 @@ def _match_tail(node: Element) -> None:
 
 
 # -- path helpers ------------------------------------------------------------------------
-
-
-def normalize_part_path(path: str) -> str:
-    path = path.replace("\\", "/").lstrip("/")
-    return posixpath.normpath(path) if path else path
 
 
 def rels_path_for(part_path: str) -> str:
