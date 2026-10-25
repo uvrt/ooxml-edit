@@ -4,6 +4,14 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+  # Nightly, so a sibling's change that breaks this repository shows the next morning
+  # rather than at the next push here (and the downstream job below runs against the
+  # agents' newest main).  The seven repositories' crons are staggered: ooxml-common
+  # 02:07, ooxml-edit 02:17, pptx2svg 02:37, docx2svg 02:47, pptx-agent 03:07, docx-agent
+  # 03:17, xlsx-agent 03:27 (UTC).  The whole matrix, as a push runs it.
+  schedule:
+    - cron: "17 2 * * *"
 
 jobs:
   test:
@@ -26,12 +34,95 @@ jobs:
           allow-prereleases: true
 
       - name: Install
+        # ooxml-common is test only, never a dependency (ooxml-edit needs lxml alone): with it
+        # installed, the tests that hold ooxml-edit's defaults to ooxml-common's (the en-US
+        # locale in tests/test_tools_locale.py and tests/test_chart_create.py) run instead
+        # of skipping.
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e .[dev]
+          python -m pip install "ooxml-common @ git+https://github.com/uvrt/ooxml-common@main"
 
       - name: Test
         run: python -m pytest -q
+
+  # The agents' suites against this change.  ooxml-edit's tool layer, history and package
+  # are what pptx-agent, docx-agent and xlsx-agent are built on, so a change that breaks
+  # one of them fails here, on its own pull request, instead of at the agent's next push.
+  # Each agent is its main, with this checkout installed (editable) before it so its
+  # `ooxml-edit` requirement is already met, and its other siblings from their main as its
+  # own CI installs them; one Linux leg on one Python, the agent's default run.  A change
+  # an agent must follow is red here until the agent's matching pull request is merged
+  # right after this one.
+  downstream:
+    name: downstream (${{ matrix.agent }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - agent: pptx-agent
+            siblings: >-
+              "pptx2svg[png] @ git+https://github.com/uvrt/pptx2svg@main"
+              "pptx2svg-fonts @ git+https://github.com/uvrt/pptx2svg@main#subdirectory=packages/pptx2svg-fonts"
+            extras: dev,png
+            pytest-args: ""
+          - agent: docx-agent
+            siblings: >-
+              "docx2svg[png] @ git+https://github.com/uvrt/docx2svg@main"
+            extras: dev,png
+            pytest-args: -n auto
+          - agent: xlsx-agent
+            siblings: >-
+              "pptx2svg @ git+https://github.com/uvrt/pptx2svg@main"
+              "pptx-agent @ git+https://github.com/uvrt/pptx-agent@main"
+            extras: test
+            pytest-args: ""
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: ooxml-edit
+
+      - uses: actions/checkout@v4
+        with:
+          repository: uvrt/${{ matrix.agent }}
+          ref: main
+          path: ${{ matrix.agent }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "ooxml-common @ git+https://github.com/uvrt/ooxml-common@main"
+          python -m pip install -e ./ooxml-edit
+          python -m pip install ${{ matrix.siblings }}
+          python -m pip install -e "./${{ matrix.agent }}[${{ matrix.extras }}]"
+
+      # As docx-agent's own CI installs them, so its render, reflow and field tests run.
+      - name: Install the open substitute fonts (docx-agent)
+        if: matrix.agent == 'docx-agent'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends fonts-crosextra-carlito fonts-crosextra-caladea fonts-liberation
+
+      - name: The ooxml-edit under test is this checkout
+        run: |
+          python - <<'PY'
+          import pathlib, sys
+          import ooxml_edit
+          here = pathlib.Path("ooxml-edit/src").resolve()
+          path = pathlib.Path(ooxml_edit.__file__).resolve()
+          print("ooxml-edit from", path)
+          sys.exit(0 if here in path.parents else f"expected ooxml-edit from {here}")
+          PY
+
+      - name: Test ${{ matrix.agent }}
+        working-directory: ${{ matrix.agent }}
+        run: python -m pytest -q ${{ matrix.pytest-args }}
 
   build:
     runs-on: ubuntu-latest

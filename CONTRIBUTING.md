@@ -9,6 +9,8 @@ python -m pytest -q
 
 CI runs the suite on Linux, macOS and Windows with Python 3.10 to 3.15. The online checks
 (`-m provider`) call a model provider's API and skip without its key; they never run on CI.
+CI also runs pptx-agent's, docx-agent's and xlsx-agent's suites, at their `main`, against
+the change (the `downstream` job), and the whole workflow nightly.
 
 ## What does not go in the repository
 
