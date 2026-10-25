@@ -6,6 +6,11 @@ format's knowledge creeps in.  This checks the core -- the modules directly in
 no imports beyond the standard library, lxml and the core itself, and nothing registered on
 import beyond the packaging namespaces every format shares.
 
+ooxml-common counts with lxml, here and for the subpackages below: it is format-neutral and
+standard library only, and never imports this package (its own
+``tests/test_independence.py`` holds that).  ooxml-edit may import it; it may not import
+ooxml-edit.
+
 The optional :mod:`ooxml_edit.charts` subpackage speaks DrawingML, which every format
 embeds; the core never imports it, and ``test_charts_neutrality.py`` keeps it free of any
 one document format.
@@ -44,8 +49,9 @@ FORBIDDEN = (
     "``p:", "``a:", "``w:", "``x:", "``c:",
 )
 
-#: What the package may import besides the standard library and itself.
-ALLOWED_THIRD_PARTY = {"lxml"}
+#: What the package may import besides the standard library and itself: lxml, and
+#: ooxml-common (format-neutral, standard library only, and never importing ooxml-edit).
+ALLOWED_THIRD_PARTY = {"lxml", "ooxml_common"}
 
 
 def _modules() -> list[Path]:
@@ -65,7 +71,7 @@ def test_no_format_vocabulary(module):
 
 
 @pytest.mark.parametrize("module", _modules(), ids=lambda path: path.stem)
-def test_imports_only_the_standard_library_lxml_and_itself(module):
+def test_imports_only_the_standard_library_lxml_ooxml_common_and_itself(module):
     tree = ast.parse(module.read_text(encoding="utf-8"))
     stdlib = set(sys.stdlib_module_names)
     for node in ast.walk(tree):
@@ -188,7 +194,7 @@ def test_the_tools_have_no_format_vocabulary(module):
 
 
 @pytest.mark.parametrize("module", _tool_modules(), ids=lambda path: path.stem)
-def test_the_tools_import_only_the_standard_library_lxml_and_the_core(module):
+def test_the_tools_import_only_the_standard_library_lxml_ooxml_common_and_the_core(module):
     tree = ast.parse(module.read_text(encoding="utf-8"))
     stdlib = set(sys.stdlib_module_names)
     for node in ast.walk(tree):
@@ -251,7 +257,7 @@ def test_the_sheets_subpackage_has_its_modules():
 
 
 @pytest.mark.parametrize("module", sorted(SHEETS.glob("*.py")), ids=lambda path: path.stem)
-def test_sheets_import_only_the_standard_library_lxml_and_the_core(module):
+def test_sheets_import_only_the_standard_library_lxml_ooxml_common_and_the_core(module):
     """SpreadsheetML is its vocabulary; charts, tools and the format libraries are not."""
     tree = ast.parse(module.read_text(encoding="utf-8"))
     stdlib = set(sys.stdlib_module_names)
