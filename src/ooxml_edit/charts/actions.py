@@ -1,9 +1,11 @@
 """The formatting actions of the shared ``edit_chart`` tool, on a :class:`~.chart.Chart`.
 
-Both format libraries' handlers resolve the chart, the series and the category their own
-way, then call :func:`apply_style_action`; what the tool's arguments mean is decided here
-once.  Refusals are :class:`~.errors.ChartDataError` (the handlers answer
-``invalid_arguments``).
+Both format libraries' handlers resolve the chart their own way, and the series, category
+or SmartArt node a call names with :func:`resolve_series`, :func:`resolve_category` and
+:func:`resolve_node` (one lookup, a name first); then they call :func:`apply_style_action`.
+What the tool's arguments mean is decided here once.  Refusals are
+:class:`~.errors.ChartDataError` (the handlers answer ``invalid_arguments``), but for the
+lookups': the tool layer's errors, with their codes.
 """
 
 from __future__ import annotations
@@ -77,6 +79,88 @@ def choices(names: list, *, limit: int = 12) -> str:
     else:
         listed = shown[0] if len(shown) == 1 else ", ".join(shown[:-1]) + " or " + shown[-1]
     return listed + (" (or 0)" if len(names) == 1 else f" (or a number from 0 to {len(names) - 1})")
+
+
+# -- what edit_chart's series and category, and edit_smartart's node, name (review, N4) -------
+#
+# Each format's handler finds the series, category or node a call names here, so that a
+# chart whose series are called "1" and "2" means the same in a deck and a document.  A
+# NAME wins; a number from 0 is a position only when nothing has that name.  The refusals
+# are the tool layer's errors (``ToolError``), with the code each case is.
+
+
+def _loose(text: str) -> str:
+    """``text`` compared loosely: whitespace collapsed, full-width forms and case ignored."""
+    import unicodedata
+
+    return unicodedata.normalize("NFKC", " ".join(text.split())).casefold()
+
+
+def _resolve(names: list[str], which: Any, what: str, action: str, hint: str = "") -> int:
+    from ..tools.results import ToolError  # here, not at import: charts stand alone
+
+    offered = names[:50]
+    if which is None:
+        raise ToolError("invalid_arguments", f"{action} needs {what}: {choices(names)}",
+                        field=what, valid_options=offered)
+    which = str(which)
+    for same in (lambda text: " ".join(text.split()), _loose):
+        wanted = same(which)
+        hits = [k for k, name in enumerate(names) if name and same(name) == wanted]
+        if len(hits) == 1:
+            return hits[0]
+        if hits:
+            plural = "series" if what == "series" else "categories"
+            raise ToolError("label_not_found", f"{which!r} names {len(hits)} {plural} "
+                            f"({', '.join(map(str, hits))}); give the position instead",
+                            field=what, valid_options=offered)
+    if which.isdigit():
+        if int(which) < len(names):
+            return int(which)
+        raise ToolError("not_found", f"no {what} {which}; there are {len(names)}{hint}",
+                        field=what, valid_options=offered)
+    raise ToolError("label_not_found", f"no {what} {which!r}{hint}; give {choices(names)}",
+                    field=what, valid_options=offered)
+
+
+def resolve_series(chart: Any, which: Any, action: str = "this action") -> Any:
+    """The series of ``chart`` that ``edit_chart``'s ``series`` names: by name (whitespace
+    collapsed; failing that, full-width forms and case ignored too), or -- only when no
+    series has that name -- by position from 0.  ``invalid_arguments`` when ``action`` is
+    given none, ``label_not_found`` for a name no series has or two share, ``not_found`` for
+    a position past the end; each lists the names (``valid_options``)::
+
+        resolve_series(chart, "1", "set_value")   # the series named "1", else series 1
+    """
+    names = ["" if series.name is None else str(series.name) for series in chart.series]
+    return chart.series[_resolve(names, which, "series", action)]
+
+
+def resolve_category(chart: Any, which: Any, action: str = "this action") -> int:
+    """The position of the category of ``chart`` that ``edit_chart``'s ``category`` names,
+    found as :func:`resolve_series` finds a series.  Categories are named as a read lists
+    them (:func:`category_labels`): dates kept as serials by their ISO
+    date, which a refusal then says."""
+    hint = ("; its categories are dates, named as YYYY-MM-DD"
+            if chart.category_dates is not None else "")
+    return _resolve(category_labels(chart), which, "category", action, hint)
+
+
+def resolve_node(diagram: Any, node: Any, action: str = "this action") -> Any:
+    """The node of a SmartArt ``diagram`` that ``edit_smartart``'s ``node`` numbers (depth
+    first, from 0): ``invalid_arguments`` when ``action`` is given none, ``not_found`` past
+    the end, each with the numbers there are."""
+    nodes = diagram.nodes
+    numbers = list(range(len(nodes)))
+    from ..tools.results import ToolError
+
+    if node is None:
+        raise ToolError("invalid_arguments", f"{action} needs node", field="node",
+                        valid_options=numbers)
+    if isinstance(node, bool) or not isinstance(node, int) or not 0 <= node < len(nodes):
+        raise ToolError("not_found", f"no node {node}; there are {len(nodes)}", field="node",
+                        valid_options=numbers)
+    return nodes[node]
 
 
 def _either(names: list[str]) -> str:
@@ -302,4 +386,5 @@ def chart_style_json(chart) -> dict[str, Any]:
 
 
 __all__ = ["STYLE_ACTIONS", "add_style_actions", "apply_add_style", "apply_style_action",
-           "chart_style_json", "gridline_arguments", "scale_arguments"]
+           "chart_style_json", "gridline_arguments", "resolve_category", "resolve_node",
+           "resolve_series", "scale_arguments"]

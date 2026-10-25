@@ -26,4 +26,4 @@ register their namespaces and child-order tables with :mod:`.xml` and subclass t
 format.
 """
 
-__version__ = "0.62.0"
+__version__ = "0.63.0"

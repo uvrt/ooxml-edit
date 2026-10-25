@@ -4,6 +4,20 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet. Each vers
 reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
 earlier ones were never tagged.
 
+## 0.63.0 -- unreleased
+- One lookup for what `edit_chart`'s `series` and `category`, and `edit_smartart`'s `node`,
+  name (review, N4): `charts.actions.resolve_series`, `resolve_category` and
+  `resolve_node`, which both agents' handlers now call instead of their own. A name wins
+  (exactly, whitespace collapsed; failing that, full-width forms and case ignored); a
+  number from 0 is a position only when nothing has that name, so a chart whose series
+  are called "1" and "2" means the same in a deck and a document (docx-agent's took the
+  position first). Refusals: `invalid_arguments` when the action needs one and none is
+  given, `label_not_found` for a name nothing has or two share, `not_found` for a
+  position past the end, each with `field` and the names (`valid_options`, at most 50);
+  a date category's refusal says they are named as YYYY-MM-DD. Listed in
+  [docs/USED-BY.md](docs/USED-BY.md) and `tests/test_public_api.py`; `choices` leaves
+  both lists, since no agent imports it any more (it stays, used here).
+
 ## 0.62.0 -- unreleased
 - Each version is tagged (review, N3): a tag workflow (`.github/workflows/tag.yml`)
   tags the commit that brings a version to `main` `v<version>`, this one first, and

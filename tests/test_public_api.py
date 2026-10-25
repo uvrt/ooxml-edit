@@ -39,7 +39,9 @@ USED_BY: dict[str, dict[str, str]] = {
         "apply_style_action": "docx-agent, pptx-agent",
         "category_labels": "docx-agent, pptx-agent",
         "chart_style_json": "docx-agent, pptx-agent",
-        "choices": "docx-agent, pptx-agent",
+        "resolve_category": "docx-agent, pptx-agent",
+        "resolve_node": "docx-agent, pptx-agent",
+        "resolve_series": "docx-agent, pptx-agent",
         "scale_axis": "docx-agent, pptx-agent",
     },
     "ooxml_edit.charts.chart": {
