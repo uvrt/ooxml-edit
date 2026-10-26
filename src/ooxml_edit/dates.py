@@ -201,6 +201,7 @@ def format_date(value: "_dt.date", pattern: str, locale: Any = None) -> str:
     or a name token in a locale without measured names (see the module's notes)."""
     parts = parse(pattern)
     names = _check_names(pattern, parts, locale)
+    # (names is None only for a pattern without name tokens, so the name branches have it.)
     out: list[str] = []
     for kind, text in parts:
         if kind == "literal":
@@ -210,18 +211,23 @@ def format_date(value: "_dt.date", pattern: str, locale: Any = None) -> str:
         elif text == "dd":
             out.append(f"{value.day:02d}")
         elif text == "ddd":
+            assert names is not None
             out.append(names.short_days[value.weekday()])
         elif text == "dddd":
+            assert names is not None
             out.append(names.days[value.weekday()])
         elif text == "m":
             out.append(str(value.month))
         elif text == "mm":
             out.append(f"{value.month:02d}")
         elif text == "mmm":
+            assert names is not None
             out.append(names.short_months[value.month - 1])
         elif text == "mmmm":
+            assert names is not None
             out.append(names.months[value.month - 1])
         elif text == "mmmmm":
+            assert names is not None
             out.append(names.months[value.month - 1][0])
         elif text == "yy":
             out.append(f"{value.year % 100:02d}")

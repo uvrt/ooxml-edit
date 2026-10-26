@@ -40,7 +40,7 @@ def _many(count: int, optional: int, *, mutates: bool = True, prefix: str = "w")
 def _late_required():
     """A tool written with an optional property before a required one, at the top and in
     its items, as word_insert_markdown was (doc, markdown, blob, at)."""
-    from ooxml_edit.tools import Tool, array
+    from ooxml_edit.tools import Tool
 
     schema = {"type": "object", "properties": {
         "doc": {"type": "string", "description": "Doc."},

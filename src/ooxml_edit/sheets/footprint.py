@@ -122,6 +122,7 @@ def _rows(part: str, a: Element, b: Element, allowed: set[tuple[int, int]] | Non
         cells_y = _cells(y) if y is not None else {}
         if x is None or y is None:
             row = y if x is None else x
+            assert row is not None  # the number is one of the two parts' rows
             if set(row.attrib) - {"r", "spans"} or any(k.tag != _X + "c" for k in row):
                 found.append(f"{part}: row {number} {'added' if x is None else 'removed'} "
                              "with more than cells")

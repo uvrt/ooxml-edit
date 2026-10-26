@@ -152,6 +152,7 @@ class _Data:
     def points(self) -> list:
         """The points in index order, ``None`` where the cache has none (a blank)."""
         if self.kind == "v":
+            assert self.ref is not None  # the kind is the reference's
             return [self.ref.text or ""]
         values: list = [None] * self.count
         parent = self._points_parent()
@@ -186,6 +187,7 @@ class _Data:
     def set_point(self, index: int, value) -> bool:
         """Write one point; returns whether the cache changed."""
         if self.kind == "v":
+            assert self.ref is not None  # the kind is the reference's
             text = self._encode(value if value is not None else "")
             if self.ref.text == text:
                 return False
@@ -231,6 +233,7 @@ class _Data:
 
     def _set_count(self, count: int) -> None:
         cache = self.cache
+        assert cache is not None  # only a source with points is counted
         node = cache.find(qn("c:ptCount"))
         if node is None:
             node = subelement(cache, "c:ptCount")
@@ -705,7 +708,7 @@ class Chart(ChartStyling):
             text = formula.text if formula is not None else None
             sheet_range = source.range
             sheet = None if sheet_range is None else workbook.sheet(sheet_range.sheet)
-            if sheet is None:
+            if sheet_range is None or sheet is None:
                 return {"ref": text, key: None}
             area = sheet_range.area
             if single:
@@ -878,6 +881,7 @@ class Chart(ChartStyling):
             return self
         with self._edit() as editor:
             chart = find(editor.root, "c:chart")
+            assert chart is not None  # a chart part's root holds its c:chart
             _write_title(editor, chart, text, vertical=False)
             deleted = chart.find(qn("c:autoTitleDeleted"))
             wanted = "1" if text is None else "0"
@@ -893,8 +897,10 @@ class Chart(ChartStyling):
             return self
         with self._edit() as editor:
             node = self._axis(editor.root, axis)
-            _write_title(editor, node, text, vertical=node.find(qn("c:axPos")) is not None
-                         and node.find(qn("c:axPos")).get("val") in {"l", "r"})
+            assert node is not None  # axis_title above raised for a missing axis
+            position = node.find(qn("c:axPos"))
+            _write_title(editor, node, text, vertical=position is not None
+                         and position.get("val") in {"l", "r"})
             editor.changed = True
         return self
 
@@ -906,6 +912,7 @@ class Chart(ChartStyling):
             raise ValueError("legend position is r, l, t, b or tr")
         with self._edit() as editor:
             chart = find(editor.root, "c:chart")
+            assert chart is not None  # a chart part's root holds its c:chart
             if visible:
                 legend = make("c:legend")
                 legend.append(make("c:legendPos", val=position))
@@ -1048,11 +1055,14 @@ class Chart(ChartStyling):
                    if source.formula is not None]
         if not sources:
             return None
-        ranges = [source.range for source in sources]
-        if any(r is None for r in ranges):
-            bad = next(s for s, r in zip(sources, ranges) if r is None)
-            raise ChartDataError(f"{self.address}: the formula {bad.formula.text!r} is not a "
+        maybe = [source.range for source in sources]
+        if any(r is None for r in maybe):
+            bad = next(s for s, r in zip(sources, maybe) if r is None)
+            formula = bad.formula
+            raise ChartDataError(f"{self.address}: the formula "
+                                 f"{None if formula is None else formula.text!r} is not a "
                                  f"single range, so the workbook cannot be kept in step")
+        ranges = [r for r in maybe if r is not None]
         sheets = {r.sheet for r in ranges}
         if len(sheets) != 1:
             raise ChartDataError(f"{self.address}: the chart's data spans several sheets")
@@ -1102,7 +1112,7 @@ class Chart(ChartStyling):
         target = block.start + position
         last = block.start + block.count - 1
         lines = self._lines(block, series)
-        values = {}
+        values: dict[int, tuple[_Data, Any]] = {}
         for ser, value in zip(series, per_series):
             for source in ser.point_sources:
                 sheet_range = source.range
@@ -1761,6 +1771,7 @@ def _to_literal(source: _Data) -> None:
     if cache is not None:
         for child in list(cache):
             literal.append(child)
+    assert source.ref is not None  # a strRef or numRef, so a reference
     source.ref.addprevious(literal)
     remove(source.ref)
     source.ref = literal
@@ -1768,6 +1779,7 @@ def _to_literal(source: _Data) -> None:
 
 def _name_to_literal(ser: _Series, name) -> None:
     if ser.name.kind == "v" and name is not None:
+        assert ser.name.ref is not None  # the kind is the reference's
         ser.name.ref.text = name
         return
     if name is None:

@@ -142,11 +142,11 @@ def tool_hints(name: Any, tools: Mapping[str, Any], table: Mapping[str, str] | N
             tiers[0].append(((0,), Hint(tool_name, action or None)))
 
     for tool_name, tool in known.items():
-        key = _key(_core(tool_name, prefix))
-        if any(key == want for want in wanted):
+        tool_key = _key(_core(tool_name, prefix))
+        if any(tool_key == want for want in wanted):
             tiers[1].append(((0,), Hint(tool_name)))
-        elif any(len(want) > len(key) and want[:len(key)] == key for want in wanted):
-            tiers[4].append(((len(key),), Hint(tool_name)))
+        elif any(len(want) > len(tool_key) and want[:len(tool_key)] == tool_key for want in wanted):
+            tiers[4].append(((len(tool_key),), Hint(tool_name)))
 
     given = _core(name, prefix)
     verbs = [verb(word) for word in given]

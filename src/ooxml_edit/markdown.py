@@ -389,6 +389,7 @@ def parse(text: str) -> tuple[Line, ...]:
             if current is not None and current[:2] == (kind, symbol) and kind == "number":
                 number = current[2]
             if kind == "number":
+                assert number is not None  # read from the marker, or the list's
                 lists[depth] = (kind, symbol, number + 1)
             else:
                 lists[depth] = (kind, symbol, 0)
@@ -633,12 +634,12 @@ def _normalised(lines: Sequence[Line]) -> tuple[Line, ...]:
         if runs:
             runs[0] = replace(runs[0], text=runs[0].text.lstrip(" \t"))
             runs[-1] = replace(runs[-1], text=runs[-1].text.rstrip(" \t"))
-        runs = merge(runs)
-        if line.kind == "blank" or (not runs and line.kind in ("text", "more")):
+        merged = merge(runs)
+        if line.kind == "blank" or (not merged and line.kind in ("text", "more")):
             if out and out[-1].kind != "blank":
                 out.append(Line((), "blank"))
             continue
-        out.append(replace(line, runs=runs))
+        out.append(replace(line, runs=merged))
     while out and out[-1].kind == "blank":
         out.pop()
     return tuple(out)

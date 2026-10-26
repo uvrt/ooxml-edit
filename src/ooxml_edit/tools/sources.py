@@ -414,6 +414,7 @@ def _clock(parts: Sequence[str | None]) -> _dt.time:
     """A time of day of regex groups: hour, minute, second, fraction (the last two may be
     ``None``); ``ValueError`` when there is no such time."""
     hour, minute, second, fraction = parts
+    assert hour is not None and minute is not None  # the patterns' required groups
     micro = int((fraction or "0").ljust(6, "0"))
     return _dt.time(int(hour), int(minute), int(second or 0), micro)
 

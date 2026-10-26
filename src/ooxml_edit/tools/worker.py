@@ -166,10 +166,10 @@ def cgroup_cpu_quota(root: str = "/sys/fs/cgroup") -> float | None:
         bases = [os.path.join(root, name) for name in ("cpu", "cpu,cpuacct", "cpuacct,cpu")]
         for base in bases:
             for path in _ancestors(v1 or "/"):
-                quota = _read(os.path.join(base, path.lstrip("/"), "cpu.cfs_quota_us"))
-                period = _read(os.path.join(base, path.lstrip("/"), "cpu.cfs_period_us"))
+                quota_text = _read(os.path.join(base, path.lstrip("/"), "cpu.cfs_quota_us"))
+                period_text = _read(os.path.join(base, path.lstrip("/"), "cpu.cfs_period_us"))
                 try:
-                    q, p = float(quota or "-1"), float(period or "0")
+                    q, p = float(quota_text or "-1"), float(period_text or "0")
                 except ValueError:
                     continue
                 if q > 0 and p > 0:
@@ -836,7 +836,9 @@ class _Subprocess:
     def ask_to_stop(self) -> None:
         try:
             self.send(("bye",))
-            self.process.stdin.close()
+            stdin = self.process.stdin
+            assert stdin is not None  # started with stdin=PIPE
+            stdin.close()
         except (_Gone, OSError, ValueError):
             pass
 

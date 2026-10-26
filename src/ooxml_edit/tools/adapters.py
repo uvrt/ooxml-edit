@@ -40,13 +40,12 @@ Provider facts, from the official documentation as of 2026-10-06:
 from __future__ import annotations
 
 import base64
-import copy
 import json
 import re
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping, Sequence
 
-from .registry import CORE, Tool, ToolGroup
+from .registry import Tool, ToolGroup
 from .results import Result
 from .schema import required_after_optional, required_first
 

@@ -236,6 +236,7 @@ def parse_formula(text: str | None) -> SheetRange | None:
         return None  # another workbook
     sheet = sheet_text[1:-1].replace("''", "'") if sheet_text.startswith("'") else sheet_text
     first_match, last_match = _CELL.fullmatch(head), _CELL.fullmatch(tail)
+    assert first_match is not None and last_match is not None  # the formula pattern's cells
     flags = ((bool(first_match.group(1)), bool(first_match.group(3))),
              (bool(last_match.group(1)), bool(last_match.group(3))))
     first, last = Cell.parse(head), Cell.parse(tail)
@@ -428,7 +429,7 @@ class Workbook:
         self._strings: tuple[Element, int, list[str], dict[str, int], list[Element]] | None \
             = None
         #: The first index of each rich item, by its canonical form; built when first needed.
-        self._rich_index: dict[bytes, int] | None = None
+        self._rich_index: dict[tuple, int] | None = None
         self._styles: Styles | None = None
         #: Cells counted ``t="s"`` per sheet, by the tree they were counted in.
         self._string_uses: dict[str, tuple[Element, int]] = {}
@@ -445,17 +446,24 @@ class Workbook:
         self.finish()
         return self.package.to_bytes()
 
+    def _part_tree(self, part: str) -> Element:
+        """The tree of a part that is there: the workbook's (checked when it was opened), a
+        sheet's or the shared strings' it found."""
+        root = self.package.tree(part)
+        assert root is not None, part
+        return root
+
     # -- sheets ------------------------------------------------------------------------------
 
     @property
     def sheet_names(self) -> list[str]:
-        root = self.package.tree(self.part)
+        root = self._part_tree(self.part)
         return [node.get("name", "") for node in root.iter(_X + "sheet")]
 
     def sheet(self, name: str) -> "Worksheet | None":
         if name in self._sheets and self.package.has_part(self._sheets[name].part):
             return self._sheets[name]
-        root = self.package.tree(self.part)
+        root = self._part_tree(self.part)
         for node in root.iter(_X + "sheet"):
             if node.get("name") == name:
                 part = self.package.related_part(self.part, node.get(qn("r:id")))
@@ -473,7 +481,7 @@ class Workbook:
     @property
     def date1904(self) -> bool:
         """Whether dates count from 1904 (``workbookPr date1904``) rather than 1900."""
-        node = self.package.tree(self.part).find(_X + "workbookPr")
+        node = self._part_tree(self.part).find(_X + "workbookPr")
         return node is not None and node.get("date1904", "").strip().lower() in {"1", "true"}
 
     # -- shared strings ----------------------------------------------------------------------
@@ -556,13 +564,16 @@ class Workbook:
         return index
 
     def _append_item(self, item: Element, text: str) -> int:
-        root, _, texts, plain, items = self._string_table()
+        table = self._string_table()
+        part = self._shared_strings_part()
+        assert table is not None and part is not None  # the callers checked there is one
+        root, _, texts, plain, items = table
         extensions = root.find(_X + "extLst")
         if extensions is not None:
             extensions.addprevious(item)
         else:
             root.append(item)
-        self.package.mark_dirty(self._shared_strings_part())
+        self.package.mark_dirty(part)
         texts.append(text)
         items.append(item)
         self._strings = (root, len(root), texts, plain, items)
@@ -600,7 +611,7 @@ class Workbook:
         """Ask the application to recalculate every formula when it opens the workbook
         (``calcPr fullCalcOnLoad="1"``), keeping the rest of ``calcPr``; whether it changed.
         Cached values written before then are what readers without a calculator see."""
-        root = self.package.tree(self.part)
+        root = self._part_tree(self.part)
         node = root.find(_X + "calcPr")
         if node is None:
             node = etree.Element(_X + "calcPr")
@@ -621,7 +632,7 @@ class Workbook:
         dirty = self.package.dirty_parts
         part = self._shared_strings_part()
         if part is not None and (part in dirty or self._touched_sheets()):
-            root = self.package.tree(part)
+            root = self._part_tree(part)
             unique = str(sum(1 for _ in root.iterchildren(_X + "si")))
             total = sum(self._uses(sheet) for sheet in self._worksheet_parts())
             if root.get("count") is not None and root.get("count") != str(total):
@@ -637,7 +648,7 @@ class Workbook:
     def _uses(self, part: str) -> int:
         """How many cells of a sheet use a shared string, counted again only when the sheet
         was written or its tree replaced."""
-        tree = self.package.tree(part)
+        tree = self._part_tree(part)
         cached = self._string_uses.get(part)
         if cached is not None and cached[0] is tree and part not in self.package.dirty_parts:
             return cached[1]
@@ -675,6 +686,7 @@ class Worksheet:
         """The live tree: the same object until an undo replaces it, when the row index goes
         with it."""
         root = self.workbook.package.tree(self.part)
+        assert root is not None, self.part  # the sheet was found with its part there
         if root is not self._tree:
             self._tree = root
             self._sheet_data = root.find(_X + "sheetData")
@@ -826,15 +838,20 @@ class Worksheet:
                 moved = {member: translate(group.text, member.row - cell.row,
                                            member.column - cell.column) for member in others}
         changed = [cell]
-        self._plain(self._find(cell).find(_X + "f"), group.text)
+        master, first = self._find(cell), self._find(others[0]) if others else None
+        assert master is not None  # the group's master, as every member, is a cell there
+        self._plain(master.find(_X + "f"), group.text)
         if others and regular:
-            formula = self._find(others[0]).find(_X + "f")
+            assert first is not None
+            formula = first.find(_X + "f")
             formula.text = moved[others[0]]
             formula.set("ref", Area(top, bottom).ref)
             changed.append(others[0])
         else:
             for member, text in moved.items():
-                self._plain(self._find(member).find(_X + "f"), text)
+                node = self._find(member)
+                assert node is not None
+                self._plain(node.find(_X + "f"), text)
                 changed.append(member)
         self.workbook.drop_calc_chain()
         self.workbook.package.mark_dirty(self.part)
@@ -1188,6 +1205,7 @@ class Worksheet:
             by_number: dict[int, Element] = {}
             number = 0
             ascending = True
+            assert self._sheet_data is not None  # (a sheet with rows has its sheetData)
             for row in self._sheet_data.iterchildren(_X + "row"):
                 given = row.get("r")
                 following = int(given) if given else number + 1
@@ -1238,6 +1256,7 @@ class Worksheet:
             if last is not None:
                 last.addnext(row)
             else:
+                assert self._sheet_data is not None  # (a sheet written to has its sheetData)
                 self._sheet_data.append(row)
         order.insert(position, (number, row))
         self._by_number[number] = row
@@ -1251,6 +1270,7 @@ class Worksheet:
 
     def _place(self, node: Element, cell: Cell) -> None:
         row = self._row(cell.row, create=True)
+        assert row is not None  # created
         for column, sibling in self._cells(row):
             if column > cell.column:
                 sibling.addprevious(node)
@@ -1313,17 +1333,16 @@ class Worksheet:
 
     def _measure(self) -> tuple[int, int, int, int] | None:
         """The rectangle every cell is in, or ``None`` for a sheet without cells."""
-        low_row = low_column = high_row = high_column = None
+        bounds: tuple[int, int, int, int] | None = None
         for number, row in self._index():
             for column, _ in self._cells(row):
-                if low_row is None:
-                    low_row = high_row = number
-                    low_column = high_column = column
+                if bounds is None:
+                    bounds = (number, column, number, column)
                 else:
-                    low_row, high_row = min(low_row, number), max(high_row, number)
-                    low_column = min(low_column, column)
-                    high_column = max(high_column, column)
-        return None if low_row is None else (low_row, low_column, high_row, high_column)
+                    low_row, low_column, high_row, high_column = bounds
+                    bounds = (min(low_row, number), min(low_column, column),
+                              max(high_row, number), max(high_column, column))
+        return bounds
 
 
 class Table:

@@ -16,6 +16,17 @@ CI runs the suite on Linux, macOS and Windows with Python 3.10 to 3.15. The onli
 CI also runs pptx-agent's, docx-agent's and xlsx-agent's suites, at their `main`, against
 the change (the `downstream` job), and the whole workflow nightly.
 
+The `build` job also lints and type checks; run both before a pull request (the `dev`
+extra pins them):
+
+```sh
+ruff check .
+mypy
+```
+
+ruff runs bug-finding rules only (no formatting, no import sorting); mypy is non-strict.
+A `# noqa` or `# type: ignore[code]` says why on its line.
+
 ## What does not go in the repository
 
 - No Microsoft fonts, and no output of Microsoft Office (PDFs, rendered images, saved

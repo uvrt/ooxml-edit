@@ -96,7 +96,7 @@ def canonical_chart(model: Any, what: str, max_points: int = 1_000_000) -> dict[
     for index, label in enumerate(categories):
         where = f"{what} category {index}"
         labels.append(_text(label, where) if isinstance(label, str) else _number(label, where))
-    canonical_series = []
+    canonical_series: list[dict[str, Any]] = []
     for index, entry in enumerate(series):
         where = f"{what} series {index}"
         if not isinstance(entry, dict) or set(entry) != {"name", "values"} \

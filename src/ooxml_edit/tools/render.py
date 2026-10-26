@@ -50,7 +50,7 @@ from .worker import worker_task
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
 
-def png_size(png: bytes) -> tuple[int, int]:
+def png_size(png: bytes | bytearray) -> tuple[int, int]:
     """A PNG's width and height, read from its header; ``ValueError`` when ``png`` is not
     one (no PNG signature, or no header chunk where the format puts it)."""
     if len(png) < 24 or png[:8] != PNG_SIGNATURE or png[12:16] != b"IHDR":

@@ -103,6 +103,6 @@ __all__ = [
     "collect_warnings", "dataset_id", "doc_order", "free_object", "integer", "locale_of",
     "row_range",
     "names_as", "number", "obj", "openai_image_tokens",
-    "page_list", "page_text", "part_entries", "hints", "shared", "textfacts", "strict_problems", "string", "system_prompt", "tool", "truncate", "validate_call",
+    "page_list", "page_text", "part_entries", "hints", "shared", "textfacts", "tiles", "strict_problems", "string", "system_prompt", "tool", "truncate", "validate_call",
     "worker_task",
 ]
