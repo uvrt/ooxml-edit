@@ -4,6 +4,24 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet. Each vers
 reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
 earlier ones were never tagged.
 
+## 0.65.1 -- unreleased
+- **ruff and mypy in CI; `py.typed` shipped** (review, S8). The package carries `py.typed`
+  (PEP 561, in the wheel and the sdist), so the agents' type checkers read its annotations.
+  CI's build job runs ruff (bug-finding rules only: pyflakes, syntax errors, mutable and
+  call defaults, `return` in `finally`, a comparison as a statement, pylint's errors; no
+  formatting) and mypy (non-strict; lxml untyped), both pinned in the `dev` extra
+  (`pyproject.toml` has the configuration). What they found is fixed: unused imports
+  (`ooxml_edit.opc.REL_IMAGE` and `ooxml_edit.tools.tiles` stay, re-exported explicitly),
+  `xml.Element` a type alias, `ChartStyling` declaring what it uses of `Chart`, a
+  `Workbook` rich-string index annotated with the key it has, `Holder.store` taking the
+  `None` that removes a record (as it was called), `png_size` taking a `bytearray` (as
+  `checked_png` passes one), the text-fact dataclass's `field` member no longer shadowing
+  `dataclasses.field` for readers, names reused for another type split in two, and
+  `Optional`s the code knew to be set made explicit (an `assert` where an invariant holds,
+  a check where it reads the same). Two paths that would have raised `AttributeError` or
+  `TypeError` now word their error instead: a chart text style asked of no part, and a
+  missing ref with no document. Behaviour is otherwise unchanged.
+
 ## 0.65.0 -- unreleased
 - **`ooxml_edit.tools.render`: one render pipeline for every format** (review, S5). The
   agents' render plumbing was written twice, in pptx-agent and docx-agent, and the copies

@@ -265,7 +265,7 @@ class Call:
         doc = doc or (self.entry.doc_id if self.entry else None)
         entry = self.entries.get(doc) if doc else None
         known = dict(entry.refs) if entry is not None else {}
-        known.update(self.context.refs.get(doc, {}))
+        known.update(self.context.refs.get(doc, {}) if doc is not None else {})
         return known
 
     def resolve_ref(self, value: str, *, doc: str | None = None, field: str | None = None) -> str:
@@ -279,10 +279,12 @@ class Call:
             self.result.warnings.append(f"{field + ' ' if field else ''}{value!r} read as "
                                        f"{folded!r}")
             match = _REF_USE.match(folded)
+            assert match is not None  # a folded use is a ref use
         name, rest = match.group(1), match.group(2) or ""
         if name not in known:
+            here = doc or (self.entry.doc_id if self.entry else None)
             raise self.context.missing_ref(name, field) or ToolError(
-                "not_found", f"no ref ${name} in {doc or self.entry.doc_id}",
+                "not_found", f"no ref ${name} in {here}",
                 field=field, valid_options=[f"${key}" for key in sorted(known)])
         return known[name] + rest
 
@@ -389,18 +391,18 @@ class Call:
                         merge=getattr(fmt, "merge_sources", None))
         doc, address = qualify(value, self.session.documents, self.session.formats,
                                field=field)
-        entry = self.entries.get(doc)
-        if entry is None:
+        held = self.entries.get(doc)
+        if held is None:
             raise ToolError("refused", f"{doc} is not held by this call: name it in an "
                             "argument the tool declares as a source", field=field)
-        fmt = self.session.formats[entry.kind]
-        dataset = resolve_rows(fmt, entry.document, address)
+        fmt = self.session.formats[held.kind]
+        dataset = resolve_rows(fmt, held.document, address)
         if dataset.cells > self.limits.max_dataset_cells:
             raise ToolError("limit", f"{doc}/{address} has {dataset.cells} values; at most "
                             f"{self.limits.max_dataset_cells}: derive a smaller dataset",
                             field=field)
-        return Rows(f"{doc}/{address}", dataset, doc=doc, kind=entry.kind, name=entry.name,
-                    version=entry.version, stale=dataset.invalidated,
+        return Rows(f"{doc}/{address}", dataset, doc=doc, kind=held.kind, name=held.name,
+                    version=held.version, stale=dataset.invalidated,
                     merge=fmt.merge_sources)
 
     def facts_at(self, field: str) -> list[textfacts.Fact]:
@@ -440,6 +442,7 @@ class Call:
                                     takers, field, said=resolve)
         if name.startswith("$"):
             name = self.resolve_ref(name, field=field)
+        assert entry is not None  # resolve is its format's
         try:
             text, fields = resolve(entry.document, name)
         except ToolError as error:
@@ -454,9 +457,9 @@ class Call:
         if source.startswith(DATASET_PREFIX):
             rows = self.source(source, field=field)
         elif len(segments) >= 2:
-            row, quoted = segments[0]
-            raw = textfacts.quote(row) if quoted or not re.fullmatch(r"#[1-9][0-9]*", row) \
-                else row
+            segment, quoted = segments[0]
+            numbered = re.fullmatch(r"#[1-9][0-9]*", segment)
+            raw = textfacts.quote(segment) if quoted or not numbered else segment
             rows = self.source(f"{source}/{raw}", field=field)
             segments, selected = segments[1:], True
         else:
@@ -1367,8 +1370,11 @@ class Toolbox:
 
         for path in (*tool.datasets, *tool.sources):
             hinted = path in sources
-            _walk(arguments, path.split("."), "",
-                  lambda value, where, hinted=hinted: resolve(value, where, hinted))
+
+            def each(value: Any, where: str, hinted: bool = hinted) -> Any:
+                return resolve(value, where, hinted)
+
+            _walk(arguments, path.split("."), "", each)
 
     @staticmethod
     def _with_facts(tool: Tool, arguments: dict[str, Any], call: Call) -> dict[str, Any]:
@@ -1443,6 +1449,7 @@ class Toolbox:
         hook = getattr(fmt, "source_hint", None)
         if hook is None:
             return None
+        assert entry is not None  # the hook is its format's
         try:
             with entry.lock:
                 said = hook(entry.document, value)
@@ -1918,8 +1925,10 @@ def _aliased(tool: Tool, arguments: Any, notes: list[str]) -> Any:
     for alias, name in tool.aliases.items():
         *path, key = alias.split(".")
         if path:
-            renamed = _walk(renamed, path, "", lambda node, where, key=key, name=name:
-                            _renamed(node, key, name, where, notes))
+            def rename(node: Any, where: str, key: str = key, name: Any = name) -> Any:
+                return _renamed(node, key, name, where, notes)
+
+            renamed = _walk(renamed, path, "", rename)
         else:
             renamed = _renamed(renamed, key, name, "", notes)
     return renamed
@@ -2150,8 +2159,9 @@ def _ref_names(node: Any) -> list[str]:
         item = stack.pop()
         if isinstance(item, Mapping):
             ref = item.get("ref")
-            if isinstance(ref, str) and (REF.match(ref) or fold_ref(ref)):
-                found.append(ref if REF.match(ref) else fold_ref(ref))
+            usable = (ref if REF.match(ref) else fold_ref(ref)) if isinstance(ref, str) else None
+            if usable:
+                found.append(usable)
             stack.extend(item.values())
         elif isinstance(item, list):
             stack.extend(item)
@@ -2169,7 +2179,7 @@ def _stale_warning(entry: DatasetEntry) -> str:
                 "for current values")
     if entry.dataset.invalidated:
         return (f"{entry.address} is stale: it was computed from formula values whose "
-                f"cache is invalidated ({entry.dataset.cache['invalidated']} cell(s)): "
+                f"cache is invalidated ({(entry.dataset.cache or {})['invalidated']} cell(s)): "
                 "they are as last saved, and nothing here recalculates; recalculate the "
                 "source in its application, then derive it again")
     return (f"{entry.address} is stale: {entry.doc} was changed after it was derived in "

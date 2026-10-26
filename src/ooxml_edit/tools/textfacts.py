@@ -70,7 +70,8 @@ formats that do (:func:`not_own`), rather than leaving the braces in its text.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from datetime import time as _dt_time
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Callable, Iterable, Mapping, Sequence
@@ -108,7 +109,7 @@ class Fact:
     end: int
     text: str
     address: str
-    record: dict[str, Any] = field(default_factory=dict)
+    record: dict[str, Any] = dataclass_field(default_factory=dict)  # (a member is named field)
 
     def brief(self) -> dict[str, Any]:
         """What a result says of it: the reference, the value written, its sources."""
@@ -269,6 +270,7 @@ def split(address: str) -> tuple[str, list[tuple[str, bool]], str | None]:
     document handle (``d2/t:x``), the segments after it (row, column) each unquoted and
     whether it was quoted, the number format or date pattern (:func:`is_date_pattern`)."""
     pattern = date_suffix(address)
+    fmt: str | None
     if pattern is not None:
         body, fmt = pattern
     else:
@@ -456,8 +458,8 @@ def _row(rows: Rows, part: str, base: str, field: str | None, locale: Any, *,
     found = [i for i in range(count) if part in (keys[i], plain[i])]
     if not found:
         folded = part.casefold()
-        found = [i for i in range(count) if keys[i] is not None
-                 and keys[i].casefold() == folded]
+        found = [i for i, key in enumerate(keys) if key is not None
+                 and key.casefold() == folded]
     if len(found) == 1:
         return found[0]
     if len(found) > 1:
@@ -482,7 +484,7 @@ def value_text(value: Any, locale: Any = None, *, type: str | None = None,
     if value is None or value == "":
         raise ToolError("invalid_arguments", f"{where} is blank: a reference writes a value",
                         field=field)
-    if is_date_pattern(format):
+    if format is not None and is_date_pattern(format):
         day = _date_value(value, type)
         if day is None:
             other = (" -- for a number write :0, :0.0 or :#,##0 --" if number(value) else "")

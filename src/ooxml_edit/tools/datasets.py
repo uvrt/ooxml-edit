@@ -216,7 +216,7 @@ class Dataset:
     @property
     def invalidated(self) -> bool:
         """Whether any value was read from a formula whose cached value is invalidated."""
-        return bool(self.cache) and self.cache.get("invalidated", 0) > 0
+        return bool(self.cache and self.cache.get("invalidated", 0) > 0)
 
     @classmethod
     def from_records(cls, rows: Iterable[Any], types: Any = None,
@@ -267,7 +267,7 @@ class Dataset:
                                  f"{sorted({str(n) for row in mappings for n in row})[:50]}")
         values = [tuple(row.get(name) for name in columns) if isinstance(row, Mapping)
                   else row for row in rows]
-        return cls(columns, values, keys=keys, types=_labels(types, columns))
+        return cls(columns, tuple(values), keys=keys, types=_labels(types, columns))
 
     @property
     def cells(self) -> int:

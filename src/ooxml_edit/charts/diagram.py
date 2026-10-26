@@ -37,7 +37,7 @@ from __future__ import annotations
 import copy
 import uuid
 from contextlib import contextmanager
-from typing import Callable
+from typing import Any, Callable
 
 from ..xml import Element, append_in_order, local_name, make, qn, remove
 from .dmltext import paragraph_text, replace_body_text
@@ -404,6 +404,7 @@ class Diagram:
 
     def _drawing_root(self, model: DiagramModel) -> tuple[str | None, Element | None]:
         host = model.host
+        assert host is not None  # the SmartArt's own model, built with its host
         rel_id = model.drawing_rel_id()
         package = host.package
         rel = None if rel_id is None else package.relationships(host.part).get(rel_id)
@@ -445,6 +446,7 @@ class Diagram:
             if start is None or [paragraph_text(p) for p in paragraphs] != expected:
                 return False
             edits.append((paragraphs[start:start + count]))
+        assert model.host is not None  # the SmartArt's own model, built with its host
         package = model.host.package
         for paragraphs in edits:
             holder = make("dsp:txBody")
@@ -467,6 +469,7 @@ class Diagram:
         if rel_id is None:
             return
         host = model.host
+        assert host is not None  # the SmartArt's own model, built with its host
         if self.on_inexact_drawing == "refuse":
             raise DiagramDrawingError(f"{host.address}: the edit cannot keep the cached "
                                       f"drawing exactly in step, and the drawing is kept")
@@ -482,6 +485,7 @@ class Diagram:
         """Forget the cached drawing, which an application that lays diagrams out again
         regenerates (measured)."""
         host = model.host
+        assert host is not None  # the SmartArt's own model, built with its host
         rel_id = model.drawing_rel_id()
         if rel_id is None:
             return
@@ -556,7 +560,8 @@ class DiagramNode:
 
 def diagram_model(root: Element, layout: str | None = None) -> dict:
     """``{"layout": ..., "nodes": [{"id": "{...}", "lvl": 0, "t": "Plan"}]}``."""
-    model = {"nodes": [{"id": point.get("modelId"), "lvl": level, "t": _text(point)}
+    model: dict[str, Any] = {"nodes": [{"id": point.get
+("modelId"), "lvl": level, "t": _text(point)}
                        for point, level, _ in DiagramModel(root).walk()]}
     if layout is not None:
         model = {"layout": layout, **model}

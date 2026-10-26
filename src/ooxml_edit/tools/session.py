@@ -738,8 +738,10 @@ class Session:
             if history is None or not hasattr(history, "steps"):
                 raise ToolError("refused", f"{doc_id} keeps no history to {direction} "
                                 "one caller's changes")
+            # (fmt and its undo_scope are there whenever scope is: checked above.)
             scope_parts = (frozenset(fmt.undo_scope(entry.document, scope))
-                           if scope is not None else None)
+                           if scope is not None and fmt is not None
+                           and fmt.undo_scope is not None else None)
             own = _OwnUndoing(self, entry, fmt, history, caller, scope_parts, doc_id)
             done = 0
             try:

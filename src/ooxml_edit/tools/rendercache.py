@@ -74,8 +74,9 @@ def code_stamp(*modules: str) -> list:
             stamp.append([name, None])
             continue
         roots = list(getattr(module, "__path__", None) or [])
-        if not roots and getattr(module, "__file__", None):
-            roots = [os.path.dirname(module.__file__)]
+        file = getattr(module, "__file__", None)
+        if not roots and file:
+            roots = [os.path.dirname(file)]
         entries = []
         for root in roots:
             for folder, _, names in os.walk(root):

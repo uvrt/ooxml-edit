@@ -15,13 +15,16 @@ from __future__ import annotations
 import copy
 import hashlib
 import math
-from typing import Any, Sequence
+from typing import TYPE_CHECKING, Any, ContextManager, Sequence
 
 from lxml import etree
 
 from ..xml import Element, append_in_order, find, local_name, make, qn, remove, subelement
 from . import format as _fmt
 from .errors import ChartDataError, FormatError
+
+if TYPE_CHECKING:
+    from .chart import _Block, _Data, _Editor, _Series
 
 
 class _Keep:
@@ -92,6 +95,30 @@ def _guid(seed: str) -> str:
 class ChartStyling:
     """The formatting half of :class:`~.chart.Chart` (see the module)."""
 
+    if TYPE_CHECKING:
+        # What the methods below use of their host, :class:`~.chart.Chart`, which defines
+        # them: declared for the type checker only.
+        @property
+        def address(self) -> str: ...
+        @property
+        def part(self) -> str: ...
+        @property
+        def chart_types(self) -> list[str]: ...
+        @property
+        def point_count(self) -> int: ...
+        @property
+        def number_format(self) -> str | None: ...
+        def _root(self) -> Element: ...
+        def _series(self, root: Element | None = None) -> list[_Series]: ...
+        def _edit(self) -> ContextManager[_Editor]: ...
+        def _series_position(self, which, series: list[_Series]) -> int: ...
+        def _block(self, editor: _Editor, series: list[_Series], count: int) -> _Block | None: ...
+        @staticmethod
+        def _lines(block: _Block, series: list[_Series]) -> list[tuple[_Data, int]]: ...
+        def _check_free(self, block: _Block, series: list[_Series], positions: list[int],
+                        across: list[int] | None = None) -> None: ...
+        def _header(self, block: _Block, series: list[_Series]) -> int | None: ...
+
     # -- axes --------------------------------------------------------------------------------
 
     def _axis_node(self, root: Element, axis: str) -> Element:
@@ -152,6 +179,7 @@ class ChartStyling:
         from .chart import AXIS_TAGS
 
         plot_area = find(root, "c:chart/c:plotArea")
+        assert plot_area is not None  # the axis it was given is in it
         return next((a for a in plot_area if a.tag in {qn(t) for t in AXIS_TAGS}
                      and _ax_id(a) == node.get("val")), None)
 
@@ -515,10 +543,11 @@ class ChartStyling:
     def _line_plot(self, root: Element, plot_area: Element, secondary: bool) -> Element:
         """The line plot on the primary or secondary axes, created when missing."""
         primary = self._primary_axes(root)
-        primary_ids = [_ax_id(a) for a in primary]
+        primary_ids: list[Any] = [_ax_id(a) for a in primary]  # c:axId@val is required
         for plot in plot_area.findall(qn("c:lineChart")):
             if self._on_secondary(root, plot) == secondary:
                 return plot
+        ids: list[Any]
         if secondary:
             ids = self._secondary_axes(root, plot_area, primary)
         else:
@@ -638,7 +667,8 @@ class ChartStyling:
         with self._edit() as editor:
             holders = self._text_holders(editor, part)
             if not holders:
-                raise FormatError(f"{self.address}: the chart shows no {part.replace('_', ' ')}")
+                raise FormatError(f"{self.address}: the chart shows no "
+                                  f"{(part or 'text').replace('_', ' ')}")
             for properties in holders:
                 _fmt.style_characters(properties, font=font, size=size, bold=bold, color=color,
                                       keep=KEEP)
@@ -662,6 +692,7 @@ class ChartStyling:
         from .create import text_properties
 
         root = editor.root if editor is not None else root
+        assert root is not None  # an editor's part, or the root the caller read
         look = editor.host.look if editor is not None else None
         lang = editor.host.lang if editor is not None else None
         chart = find(root, "c:chart")

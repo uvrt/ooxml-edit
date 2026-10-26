@@ -413,19 +413,19 @@ def definition_problems(tool: Tool) -> list[str]:
                 problems.append(f"exactly_one names {name!r}, which is not a parameter")
             elif name in required:
                 problems.append(f"exactly_one names {name!r}, which is required")
-    for alias, name in tool.aliases.items():
-        *path, key = alias.split(".")
-        container = _object_at(tool.schema, path)
+    for alias, target in tool.aliases.items():
+        *where, key = alias.split(".")
+        container = _object_at(tool.schema, where)
         if container is None:
             problems.append(f"aliases names {alias!r}, which is in no object parameter")
             continue
-        if callable(name):
+        if callable(target):
             continue
         names = container.get("properties", {})
         if key in names:
             problems.append(f"aliases names {alias!r}, which is a parameter")
-        if name not in names:
-            problems.append(f"aliases reads {alias!r} as {name!r}, which is not a parameter")
+        if target not in names:
+            problems.append(f"aliases reads {alias!r} as {target!r}, which is not a parameter")
     if tool.role is not None and tool.role not in (*ROLES, ANY_ROLE):
         problems.append(f"role {tool.role!r} is not one of {', '.join((*ROLES, ANY_ROLE))}")
     if tool.action_roles:

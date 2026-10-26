@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ooxml-edit"
-version = "0.65.0"
+version = "0.65.1"
 description = "Lossless, undoable editing of OOXML packages (docx, pptx, xlsx) over lxml"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -36,8 +36,10 @@ dependencies = ["lxml>=4.9", "ooxml-common>=0.29.0"]
 
 [project.optional-dependencies]
 # markdown-it-py: tests only, to check ooxml_edit.markdown against the parser the format
-# libraries use for whole documents (tests/test_markdown.py skips without it).
-dev = ["pytest>=7", "markdown-it-py>=3"]
+# libraries use for whole documents (tests/test_markdown.py skips without it).  ruff and
+# mypy: pinned, as the CI build job installs them, so a new release's rules never turn a
+# pull request red by themselves.
+dev = ["pytest>=7", "markdown-it-py>=3", "ruff==0.17.2", "mypy==2.4.0"]
 
 [project.urls]
 Repository = "https://github.com/uvrt/ooxml-edit"
@@ -45,6 +47,32 @@ Issues = "https://github.com/uvrt/ooxml-edit/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+# py.typed: the annotations are part of the package (PEP 561), for the agents' type checks.
+[tool.setuptools.package-data]
+ooxml_edit = ["py.typed"]
+
+# Bug-finding rules only, no style: pyflakes (F), syntax errors (E9), mutable or call
+# defaults (B006, B008), return/break in finally (B012), a comparison used as a statement
+# (B015), pylint's error class (PLE).  No formatting and no import sorting.
+[tool.ruff]
+target-version = "py310"
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["F", "E9", "B006", "B008", "B012", "B015", "PLE"]
+
+# Non-strict: the annotations as written are checked, unannotated functions are not.
+# lxml ships no annotations (its elements are Any here; no stub package is used), and the
+# siblings are typed only from their py.typed releases on, so both are ignored as missing.
+[tool.mypy]
+python_version = "3.10"
+files = ["src/ooxml_edit"]
+mypy_path = "src"
+
+[[tool.mypy.overrides]]
+module = ["lxml", "lxml.*", "ooxml_common", "ooxml_common.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

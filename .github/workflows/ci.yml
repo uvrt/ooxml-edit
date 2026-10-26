@@ -133,6 +133,21 @@ jobs:
       # version section names: the tag workflow tags that version when it reaches main.
       - name: The version agrees with CHANGELOG.md
         run: python .github/check_version.py
+      # Steps of this job, not jobs of their own (the required checks are the jobs).  The
+      # same pins as pyproject.toml's dev extra; its [tool.ruff] and [tool.mypy] say what
+      # is checked.
+      - name: Lint (ruff)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "ruff==0.17.2"
+          ruff check .
+      # mypy reads ooxml-common's annotations once it ships py.typed (ignored until then),
+      # so it is installed from its repository as the test job installs it.
+      - name: Type check (mypy)
+        run: |
+          python -m pip install "ooxml-common @ git+https://github.com/uvrt/ooxml-common@main"
+          python -m pip install "mypy==2.4.0"
+          mypy
       - name: Build distributions
         run: |
           python -m pip install --upgrade pip build twine

@@ -168,6 +168,7 @@ def facts_after_edit(facts: Any, old: str, new: str) -> list[dict[str, Any]]:
     out = []
     for found in facts_found(facts, old):
         first = offset(old, found["p"], found["at"])
+        assert first is not None  # facts_found kept only the facts that are where they say
         last = first + len(found["text"])
         if last < start:
             out.append(found)
@@ -182,12 +183,12 @@ def facts_after_edit(facts: Any, old: str, new: str) -> list[dict[str, Any]]:
 
 @dataclass(frozen=True)
 class Holder:
-    """An object that keeps a record inside itself: ``store(record)`` replaces it,
-    ``read()`` returns it (``None`` when there is none).  ``key`` tells one from another:
-    the same object noted twice is one holder."""
+    """An object that keeps a record inside itself: ``store(record)`` replaces it (``None``
+    removes it), ``read()`` returns it (``None`` when there is none).  ``key`` tells one
+    from another: the same object noted twice is one holder."""
 
     key: Hashable
-    store: Callable[[Mapping[str, Any]], None]
+    store: Callable[[Mapping[str, Any] | None], object]  # what it returns is not used
     read: Callable[[], "dict[str, Any] | None"]
 
 

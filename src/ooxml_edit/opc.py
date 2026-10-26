@@ -32,7 +32,8 @@ from typing import BinaryIO, Callable, Iterable
 from lxml import etree
 
 # The package's names and path rule are ooxml-common's, the reader's: one spelling for both.
-from ooxml_common.opc import (CONTENT_TYPES_PART, REL_IMAGE, REL_OFFICE_DOCUMENT,
+# REL_IMAGE is re-exported: ooxml_edit.opc.REL_IMAGE is public (tests/test_public_api.py).
+from ooxml_common.opc import (CONTENT_TYPES_PART, REL_IMAGE as REL_IMAGE, REL_OFFICE_DOCUMENT,
                               normalize_part_path)
 
 from .xml import Element, parse_xml, serialize

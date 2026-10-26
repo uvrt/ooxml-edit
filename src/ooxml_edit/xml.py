@@ -21,11 +21,11 @@ a format layer adds its own vocabulary with :func:`register_namespaces` and
 
 from __future__ import annotations
 
-from typing import Iterable, Iterator, Mapping, Sequence, Union
+from typing import Iterable, Iterator, Mapping, Sequence, TypeAlias, Union
 
 from lxml import etree
 
-Element = etree._Element
+Element: TypeAlias = etree._Element
 
 #: prefix -> namespace URI.  Seeded with the namespaces every OOXML package uses; format layers
 #: extend it.  Unknown namespaces in a document are preserved regardless, since nodes are never

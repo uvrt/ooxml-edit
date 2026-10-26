@@ -67,7 +67,7 @@ from ooxml_common.xmlutil import NS_R as R_NS
 
 from .. import dates as _dates
 from ..dates import DateCategory
-from ..xml import Element, make, qn, serialize
+from ..xml import Element, serialize
 from . import namespaces as _namespaces  # noqa: F401  (registers c: before qn is used)
 from . import record as _record
 from .chart import ChartDataError
@@ -257,7 +257,7 @@ def chart_data(kind: str, categories: Sequence | None, series: Sequence
             entry = {"name": name, "values": values}
         entries.append(entry)
     if kind == "bubble" and categories is None:
-        xs = [entry.get("x") for entry in entries]
+        xs: list[Any] = [entry.get("x") for entry in entries]
         if not entries or any(x is None for x in xs):
             raise ChartDataError("a bubble chart needs x values: categories, or x in each series")
         if any(list(x) != list(xs[0]) for x in xs):
@@ -568,6 +568,7 @@ def _series(kind: str, index: int, entry: dict, labels: list, format_code: str, 
         ser.append(_e("c:cat", None, _category_ref(labels, count)))
         ser.append(_e("c:val", None, _num_ref(values_formula, values, format_code)))
     if plot == "bubble":
+        assert size_column is not None  # a bubble series is given its sizes' column
         ser.append(_e("c:bubbleSize", None, _num_ref(_formula(size_column, 2, count + 1),
                                                      entry["size"], "General")))
         ser.append(_val("c:bubble3D", 0))
@@ -895,7 +896,7 @@ def chart_workbook(kind: str, categories: Sequence | None, series: Sequence, *,
                 cells.append(f'<c r="{column_letters(column)}{row}"{value_style}>'
                              f'<v>{number_text(value)}</v></c>')
             size = None if sizes is None else entry["size"][row - 2]
-            if size is not None:
+            if sizes is not None and size is not None:
                 cells.append(f'<c r="{column_letters(sizes)}{row}"><v>{number_text(size)}</v></c>')
         rows.append(f'<row r="{row}">{"".join(cells)}</row>')
     first_row = 1 if header else 2
@@ -910,7 +911,7 @@ def chart_workbook(kind: str, categories: Sequence | None, series: Sequence, *,
                   for s in strings)
     shared_strings = (f'<sst xmlns="{_SML}" count="{references[0]}" uniqueCount="{len(strings)}">'
                       f'{sst}</sst>')
-    codes = ([number_format] if custom else []) + ([dates_code] if dates_code else [])
+    codes = ([number_format] if custom and number_format is not None else []) + ([dates_code] if dates_code else [])
     formats = (f'<numFmts count="{len(codes)}">'
                + "".join(f'<numFmt numFmtId="{164 + i}" formatCode={quoteattr(code)}/>'
                          for i, code in enumerate(codes)) + '</numFmts>' if codes else "")

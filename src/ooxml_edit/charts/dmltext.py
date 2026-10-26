@@ -272,10 +272,11 @@ def rebuild_paragraph(paragraph: Element, new_text: str) -> None:
             end += 1
         piece = new_text[position:end]
         kept_span = [sources[k][1] for k in range(position, end)]
-        item = items[source] if source is not None else None
-        if (item is not None and item.kind == "fld" and None not in kept_span
-                and kept_span == list(range(item.start, item.start + len(item.text)))):
-            element = copy.deepcopy(item.element)  # an untouched field stays a field
+        field_item = items[source] if source is not None else None
+        if (field_item is not None and field_item.kind == "fld" and None not in kept_span
+                and kept_span == list(range(field_item.start,
+                                            field_item.start + len(field_item.text)))):
+            element = copy.deepcopy(field_item.element)  # an untouched field stays a field
         else:
             element = make_run(piece, text_source(source))
         built.append((position, element))

@@ -38,7 +38,7 @@ def _claim_stdio() -> tuple[int, int]:
             os.dup2(null, 1)
     finally:
         os.close(null)
-    if os.name == "nt":
+    if sys.platform == "win32":  # (os.name == "nt"; the spelling type checkers follow)
         import msvcrt
         msvcrt.setmode(proto_in, os.O_BINARY)
         msvcrt.setmode(proto_out, os.O_BINARY)
@@ -47,7 +47,7 @@ def _claim_stdio() -> tuple[int, int]:
 
 def _watch_parent(parent: int | None, original_ppid: int) -> None:
     """Exit when the parent is gone, even mid-task (an idle worker sees its input end)."""
-    if os.name == "nt":
+    if sys.platform == "win32":  # (os.name == "nt"; the spelling type checkers follow)
         if not parent:
             return
         import ctypes
