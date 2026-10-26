@@ -49,7 +49,7 @@ package.save("out.zip")
 ## What it covers
 
 - **Core** (`ooxml_edit.opc`, `.xml`, `.history`, `.stamp`, `.provenance`, `.dates`,
-  `.markdown`): lossless OPC
+  `.markdown`, `.errors`): lossless OPC
   packages, parts and relationships, safe removal (`release`/`reap`), embedded packages,
   schema-ordered insertion, undo/redo with batches and versions, durable ids, the
   record of where placed values came from, date patterns in measured month names, and a

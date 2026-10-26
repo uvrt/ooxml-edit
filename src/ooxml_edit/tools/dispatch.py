@@ -80,6 +80,7 @@ from contextlib import ExitStack, contextmanager
 from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 
 from .. import provenance
+from ..errors import ArgumentError, ArgumentTypeError, UnitError
 from . import adapters, prompts, textfacts
 from .hints import action_hints, tool_hints
 from .datasets import (DATASET_PREFIX, Dataset, DatasetEntry, check_dataset_id,
@@ -767,7 +768,9 @@ class Toolbox:
         #: Fonts a worker decoded from a document's embedded ones, by payload digest, for
         #: the next worker's task (:mod:`.rendercache`).
         self.decoded_fonts = ContentStore(self.limits.font_cache_bytes)
-        self._errors: dict[type[BaseException], Any] = {}
+        # The libraries' typed refusals first, so a format's map (and the application's)
+        # may name a subclass otherwise; the closest class in an exception's MRO wins.
+        self._errors: dict[type[BaseException], Any] = dict(BASE_ERRORS)
         for fmt in self.formats.values():
             self._errors.update(fmt.errors)
         self._errors.update(error_map or {})
@@ -878,7 +881,7 @@ class Toolbox:
         wanted = {CORE} | ({groups} if isinstance(groups, str) else set(groups))
         unknown = wanted - {tool.group for tool in self.tools.values()} - {CORE}
         if unknown:
-            raise ValueError(f"unknown group(s) {sorted(unknown)}")
+            raise ArgumentError(f"unknown group(s) {sorted(unknown)}")
         return [tool for tool in sent if tool.group in wanted]
 
     def definitions(self, provider: str = "anthropic", *,
@@ -944,8 +947,8 @@ class Toolbox:
         over the whole toolbox, as before."""
         roles = self.roles if roles is _TOOLBOX_DEFAULT else role_set(roles)
         if tools is not None and groups is not None:
-            raise ValueError("system_prompt takes tools or groups, not both: groups for the "
-                             "definitions(groups=...) sent, tools for any other set")
+            raise ArgumentError("system_prompt takes tools or groups, not both: groups for the "
+                                "definitions(groups=...) sent, tools for any other set")
         if groups is not None:
             sent = [self.tools[tool.name] for tool in self.select(groups, roles=roles)]
         elif tools is not None:
@@ -983,8 +986,8 @@ class Toolbox:
                 if not isinstance(item, str):
                     continue        # a definition of no tool of its own: a tool search
             if not isinstance(item, str):
-                raise TypeError(f"system_prompt's tools are names, Tool objects or "
-                                f"definitions, not {type(item).__name__}")
+                raise ArgumentTypeError(f"system_prompt's tools are names, Tool objects or "
+                                        f"definitions, not {type(item).__name__}")
             name = self.tool_named(item)
             if name in self.tools:
                 found.setdefault(name, self.tools[name])
@@ -1843,7 +1846,11 @@ class Toolbox:
                 combined.touched_by_op.setdefault(op, []).extend(found)
 
     def map_exception(self, exc: BaseException) -> ToolError:
-        """A library exception as an error code, with its valid options when known."""
+        """A library exception as an error code, with its valid options when known: the
+        closest class in its MRO that the formats' maps (or :data:`BASE_ERRORS`, or the
+        application's ``error_map``) name; else a :class:`LimitError` is ``limit``, a
+        ``TimeoutError`` ``timeout``, a ``KeyError`` or ``IndexError`` ``not_found``, any
+        other ``ValueError`` ``unit``, and anything else ``internal``, logged."""
         for cls in type(exc).__mro__:
             if cls in self._errors:
                 mapping = self._errors[cls]
@@ -1880,6 +1887,14 @@ class Toolbox:
         if logger.isEnabledFor(logging.INFO):
             log_call(record)
 
+
+#: The codes of the libraries' typed refusals (:mod:`ooxml_edit.errors`), in every format:
+#: a value the library refuses is ``invalid_arguments``, one out of its range or in the
+#: wrong unit ``unit``.  A format's ``DocumentFormat.errors`` may map a subclass otherwise.
+BASE_ERRORS: dict[type[BaseException], str] = {
+    ArgumentError: "invalid_arguments",
+    UnitError: "unit",
+}
 
 #: The keys of a batch op a model writes about the op, never run (round 9, N4).
 OP_COMMENTS = ("comment", "note")

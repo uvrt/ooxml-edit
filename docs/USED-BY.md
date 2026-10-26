@@ -26,6 +26,7 @@ Each line is a module, then which siblings import what from it.
 - `ooxml_edit.charts.model` -- docx-agent, pptx-agent: `ChartModelError`, `apply_chart_model`, `apply_diagram_model`, `canonical_chart`, `canonical_diagram`; pptx-agent: `CHART_KEYS`, `CHART_READ_ONLY`, `chart_model`, `diagram_model`
 - `ooxml_edit.charts.workbook` -- pptx-agent: `Area`, `Cell`, `MAX_COLUMN`, `MAX_ROW`, `SML_NS`, `SheetRange`, `Table`, `Workbook`, `Worksheet`, `column_index`, `column_letters`, `number_text`, `parse_formula`
 - `ooxml_edit.dates` -- ooxml-common: `LANGUAGES`, `LCIDS`, `NAMES`, `format_code`, `format_date`, `is_date_code`, `serial`
+- `ooxml_edit.errors` -- docx-agent, pptx-agent, xlsx-agent: `ArgumentError`, `UnitError`; pptx-agent: `ArgumentTypeError`
 - `ooxml_edit.history` -- docx-agent, pptx-agent, xlsx-agent: `History`; docx-agent, pptx-agent: `Snapshottable`
 - `ooxml_edit.markdown` -- xlsx-agent: `Line`, `Run`, `merge`, `parse`, `plain`, `to_markdown`
 - `ooxml_edit.opc` -- docx-agent, pptx-agent, xlsx-agent: `OpcPackage`, `REL_OFFICE_DOCUMENT`, `rels_path_for`; docx-agent, pptx-agent: `CONTENT_TYPES_PART`, `Relationship`, `normalize_part_path`; pptx-agent: `RELS_NS`, `REL_IMAGE`, `numbered_template`, `part_for_rels`, `resolve_target`

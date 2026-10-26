@@ -83,6 +83,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from .results import ToolError
+from ..errors import ArgumentError
 
 #: What every dataset address starts with: ``d:by_region``.  A document handle (``d1``) has
 #: no colon, so the two never meet.
@@ -192,24 +193,24 @@ class Dataset:
     def __post_init__(self) -> None:
         columns = tuple(self.columns)
         if not columns or not all(isinstance(name, str) and name for name in columns):
-            raise ValueError("a dataset has at least one column, each named by a string")
+            raise ArgumentError("a dataset has at least one column, each named by a string")
         if len(set(columns)) != len(columns):
-            raise ValueError("a dataset's column names are unique")
+            raise ArgumentError("a dataset's column names are unique")
         rows = tuple(_row(row, columns) for row in self.rows)
         object.__setattr__(self, "columns", columns)
         object.__setattr__(self, "rows", rows)
         if self.sources is not None:
             sources = tuple(tuple(tuple(_strings(cell)) for cell in row) for row in self.sources)
             if len(sources) != len(rows) or any(len(row) != len(columns) for row in sources):
-                raise ValueError("a dataset's sources have a row per row and a column per "
-                                 "column")
+                raise ArgumentError("a dataset's sources have a row per row and a column per "
+                                    "column")
             object.__setattr__(self, "sources", sources)
         if not isinstance(self.keys, int) or not 0 <= self.keys <= len(columns):
-            raise ValueError(f"keys is 0 to {len(columns)} (the leading columns)")
+            raise ArgumentError(f"keys is 0 to {len(columns)} (the leading columns)")
         if self.types is not None:
             types = tuple(self.types)
             if len(types) != len(columns):
-                raise ValueError("a dataset has a type label per column")
+                raise ArgumentError("a dataset has a type label per column")
             object.__setattr__(self, "types", types)
         object.__setattr__(self, "cache", _cache(self.cache))
 
@@ -248,23 +249,23 @@ class Dataset:
         rows = list(rows)
         if columns is None:
             if any(not isinstance(row, Mapping) for row in rows):
-                raise ValueError("rows that are not mappings need columns: "
-                                 "Dataset.from_records(rows, columns=[...])")
+                raise ArgumentError("rows that are not mappings need columns: "
+                                    "Dataset.from_records(rows, columns=[...])")
             names: dict[str, None] = {}
             for row in rows:
                 names.update(dict.fromkeys(row))
             columns = tuple(names)
             if not columns:
-                raise ValueError("records without names have no columns: give columns")
+                raise ArgumentError("records without names have no columns: give columns")
         columns = tuple(columns)
         if not all(isinstance(name, str) and name for name in columns):
-            raise ValueError("a dataset's columns are named by strings")
+            raise ArgumentError("a dataset's columns are named by strings")
         mappings = [row for row in rows if isinstance(row, Mapping)]
         if mappings:
             unused = [name for name in columns if not any(name in row for row in mappings)]
             if unused:
-                raise ValueError(f"no record has {unused[0]!r}; the records' names are "
-                                 f"{sorted({str(n) for row in mappings for n in row})[:50]}")
+                raise ArgumentError(f"no record has {unused[0]!r}; the records' names are "
+                                    f"{sorted({str(n) for row in mappings for n in row})[:50]}")
         values = [tuple(row.get(name) for name in columns) if isinstance(row, Mapping)
                   else row for row in rows]
         return cls(columns, tuple(values), keys=keys, types=_labels(types, columns))
@@ -302,9 +303,9 @@ class Dataset:
         count = len(self.rows)
         end = count if last is None else last
         if not 1 <= first <= end:
-            raise ValueError(f"rows run from 1 to the last, first to last: {first} to {end}")
+            raise ArgumentError(f"rows run from 1 to the last, first to last: {first} to {end}")
         if end > count:
-            raise ValueError(f"the dataset has {count} rows; there is no row {end}")
+            raise ArgumentError(f"the dataset has {count} rows; there is no row {end}")
         sources = None if self.sources is None else self.sources[first - 1:end]
         return Dataset(self.columns, self.rows[first - 1:end], sources=sources,
                        keys=self.keys, types=self.types, cache=self.cache)
@@ -316,17 +317,17 @@ def _cache(counts: Any) -> dict[str, int] | None:
     if counts is None:
         return None
     if not isinstance(counts, Mapping):
-        raise ValueError("a dataset's cache is a mapping of status to count")
+        raise ArgumentError("a dataset's cache is a mapping of status to count")
     known = (*CACHE_STATUSES, CACHE_EXTERNAL)
     unknown = [key for key in counts if key not in known]
     if unknown:
-        raise ValueError(f"a dataset's cache counts {', '.join(known)}; not "
-                         f"{', '.join(map(repr, unknown))}")
+        raise ArgumentError(f"a dataset's cache counts {', '.join(known)}; not "
+                            f"{', '.join(map(repr, unknown))}")
     out: dict[str, int] = {}
     for key in known:
         count = counts.get(key, 0)
         if isinstance(count, bool) or not isinstance(count, int) or count < 0:
-            raise ValueError(f"a dataset's cache count is a whole number from 0, not {count!r}")
+            raise ArgumentError(f"a dataset's cache count is a whole number from 0, not {count!r}")
         if count:
             out[key] = count
     return out or None
@@ -338,23 +339,23 @@ def _labels(types: Any, columns: tuple[str, ...]) -> tuple[str | None, ...] | No
     if types is None:
         return None
     if isinstance(types, str):
-        raise ValueError("types is a mapping of column names to labels, or a label per "
-                         "column: types={'opened': 'date'}")
+        raise ArgumentError("types is a mapping of column names to labels, or a label per "
+                            "column: types={'opened': 'date'}")
     if isinstance(types, Mapping):
         unknown = [name for name in types if name not in columns]
         if unknown:
-            raise ValueError(f"types names {unknown[0]!r}, which is no column; the columns "
-                             f"are {list(columns)}")
+            raise ArgumentError(f"types names {unknown[0]!r}, which is no column; the columns "
+                                f"are {list(columns)}")
         labels = tuple(types.get(name) for name in columns)
     else:
         labels = tuple(types)
         if len(labels) != len(columns):
-            raise ValueError(f"{len(labels)} type labels for {len(columns)} columns: give one "
-                             "per column (None for none), or a mapping by name")
+            raise ArgumentError(f"{len(labels)} type labels for {len(columns)} columns: give one "
+                                "per column (None for none), or a mapping by name")
     for label in labels:
         if label is not None and label not in TYPE_LABELS:
-            raise ValueError(f"{label!r} is not a type label: one of {', '.join(TYPE_LABELS)}"
-                             " (or None)")
+            raise ArgumentError(f"{label!r} is not a type label: one of {', '.join(TYPE_LABELS)}"
+                                " (or None)")
     return labels
 
 
@@ -362,18 +363,18 @@ def _row(row: Any, columns: tuple[str, ...]) -> tuple[Any, ...]:
     if isinstance(row, Mapping):
         missing = [name for name in columns if name not in row]
         if missing:
-            raise ValueError(f"a row has no {missing[0]!r}")
+            raise ArgumentError(f"a row has no {missing[0]!r}")
         return tuple(row[name] for name in columns)
     values = tuple(row)
     if len(values) != len(columns):
-        raise ValueError(f"a row has {len(values)} values for {len(columns)} columns")
+        raise ArgumentError(f"a row has {len(values)} values for {len(columns)} columns")
     return values
 
 
 def _strings(cell: Any) -> Sequence[str]:
     values = (cell,) if isinstance(cell, str) else tuple(cell)
     if not all(isinstance(value, str) for value in values):
-        raise ValueError("a value's sources are strings")
+        raise ArgumentError("a value's sources are strings")
     return values
 
 

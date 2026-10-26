@@ -68,6 +68,7 @@ from __future__ import annotations
 import datetime as _dt
 import re
 from typing import Any
+from .errors import ArgumentError, ArgumentTypeError, UnitError
 
 # The measured tables and the reading of a kept code are ooxml-common's, one copy for
 # every library: re-exported here under the names ooxml-edit has always had.
@@ -278,12 +279,13 @@ _FIRST = _dt.date(1900, 3, 1)
 
 def serial(value: "_dt.date") -> "int | float":
     """``value``'s serial number in the 1900 date system: whole days for a ``date``,
-    the time of day as the fraction for a ``datetime``.  Raises :class:`ValueError` before
-    1 March 1900, where that system counts a day that did not exist."""
+    the time of day as the fraction for a ``datetime``.  Raises :class:`~.errors.UnitError`
+    (a ``ValueError``) before 1 March 1900, where that system counts a day that did not
+    exist."""
     day = value.date() if isinstance(value, _dt.datetime) else value
     if day < _FIRST:
-        raise ValueError(f"{day.isoformat()} is before 1 March 1900, which a chart's dates "
-                         "do not reach")
+        raise UnitError(f"{day.isoformat()} is before 1 March 1900, which a chart's dates "
+                        "do not reach")
     if isinstance(value, _dt.datetime):
         delta = value.replace(tzinfo=None) - _EPOCH
         whole = delta.days + delta.seconds / 86400 + delta.microseconds / 86400e6
@@ -339,9 +341,9 @@ class DateCategory(_dt.date):
 
     def __new__(cls, value: _dt.date, format_code: str) -> "DateCategory":
         if not isinstance(value, _dt.date):
-            raise TypeError(f"a DateCategory is a date, not {type(value).__name__}")
+            raise ArgumentTypeError(f"a DateCategory is a date, not {type(value).__name__}")
         if not isinstance(format_code, str) or not format_code.strip():
-            raise ValueError("a DateCategory's format_code is a number format code")
+            raise ArgumentError("a DateCategory's format_code is a number format code")
         made = super().__new__(cls, value.year, value.month, value.day)
         made.format_code = format_code
         return made

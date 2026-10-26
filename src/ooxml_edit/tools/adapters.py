@@ -48,6 +48,7 @@ from typing import Any, Iterable, Mapping, Sequence
 from .registry import Tool, ToolGroup
 from .results import Result
 from .schema import required_after_optional, required_first
+from ..errors import ArgumentError
 
 # -- provider limits ---------------------------------------------------------------------------
 
@@ -359,9 +360,9 @@ OPENAI_DETAILS = ("auto", "low", "high", "original")
 
 def _check_image_options(images: str, detail: str) -> None:
     if images not in OPENAI_IMAGE_PLACEMENTS:
-        raise ValueError(f"images={images!r}; one of {', '.join(OPENAI_IMAGE_PLACEMENTS)}")
+        raise ArgumentError(f"images={images!r}; one of {', '.join(OPENAI_IMAGE_PLACEMENTS)}")
     if detail not in OPENAI_DETAILS:
-        raise ValueError(f"detail={detail!r}; one of {', '.join(OPENAI_DETAILS)}")
+        raise ArgumentError(f"detail={detail!r}; one of {', '.join(OPENAI_DETAILS)}")
 
 
 def openai_function_call_output(result: Result, call_id: str, *,
@@ -771,10 +772,10 @@ def definitions_for(provider: str, tools: Iterable[Tool], **options: Any) -> lis
         return to_openai_responses(tools, **options)
     if provider == "openai-chat":
         if options.get("defer") or options.get("namespaces"):
-            raise ValueError("Chat Completions has no tool search or namespaces; pick groups "
-                             "instead (definitions(groups=[...]))")
+            raise ArgumentError("Chat Completions has no tool search or namespaces; pick groups "
+                                "instead (definitions(groups=[...]))")
         return to_openai_chat(tools)
-    raise ValueError(f"unknown provider {provider!r}; one of {', '.join(PROVIDERS)}")
+    raise ArgumentError(f"unknown provider {provider!r}; one of {', '.join(PROVIDERS)}")
 
 
 def results_for(provider: str, results: Sequence[tuple[str, Result]], *,
@@ -786,14 +787,14 @@ def results_for(provider: str, results: Sequence[tuple[str, Result]], *,
     message, and Anthropic takes neither."""
     if provider == "anthropic":
         if images is not None or detail is not None:
-            raise ValueError("images and detail are OpenAI options")
+            raise ArgumentError("images and detail are OpenAI options")
         return anthropic_user_message(results, limit=limit)
     if provider == "openai-responses":
         return openai_responses_items(results, limit=limit, images=images or "output",
                                       detail=detail or "auto")
     if provider == "openai-chat":
         if images not in (None, "message"):
-            raise ValueError("Chat Completions puts images in a user message only")
+            raise ArgumentError("Chat Completions puts images in a user message only")
         return openai_chat_messages(results, limit=limit, detail=detail or "auto")
-    raise ValueError(f"unknown provider {provider!r}; one of {', '.join(PROVIDERS)}")
+    raise ArgumentError(f"unknown provider {provider!r}; one of {', '.join(PROVIDERS)}")
 

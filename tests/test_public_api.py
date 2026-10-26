@@ -135,6 +135,11 @@ USED_BY: dict[str, dict[str, str]] = {
         "is_date_code": "ooxml-common",
         "serial": "ooxml-common",
     },
+    "ooxml_edit.errors": {
+        "ArgumentError": "docx-agent, pptx-agent, xlsx-agent",
+        "ArgumentTypeError": "pptx-agent",
+        "UnitError": "docx-agent, pptx-agent, xlsx-agent",
+    },
     "ooxml_edit.history": {
         "History": "docx-agent, pptx-agent, xlsx-agent",
         "Snapshottable": "docx-agent, pptx-agent",

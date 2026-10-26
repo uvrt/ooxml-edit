@@ -375,8 +375,8 @@ DocumentEntry
    | `label_not_found` | `LabelError`, pptx | the labels; the library gives them only in the message: gap **LP14** |
    | `ambiguous` | `AmbiguousAnchor` | the candidates' addresses and context |
    | `refused` | `ChartDataError`, `EditError`, `FullStateError`; a layout that cannot fit its box | — (for layout: the space needed and the space available) |
-   | `unit` | `UnitWarning`/`ValueError` | — |
-   | `invalid_arguments` | schema miss, or an unknown preset name | the allowed values (for presets: the names from LP20) |
+   | `unit` | `UnitWarning`/`ValueError`; since 0.66.0 (S9) a library's typed refusals are `invalid_arguments` and only `ooxml_edit.errors.UnitError` (or a plain `ValueError`) is `unit` | — |
+   | `invalid_arguments` | schema miss, an unknown preset name, or an `ooxml_edit.errors.ArgumentError` | the allowed values (for presets: the names from LP20) |
    | `timeout` | deadline passed | — |
    | `limit` | a size limit | — |
    | `internal` | an unexpected exception (logged with its traceback for the app) | — |

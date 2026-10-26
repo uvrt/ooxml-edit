@@ -80,6 +80,7 @@ from .. import dates, provenance
 from .datasets import DATASET_PREFIX
 from .results import ToolError
 from .sources import QUALIFIED, Rows, label, merged, number, prefixes, what
+from ..errors import ArgumentError
 
 #: A reference in text, or one escaped (``\\{{``): group 1 the backslash, group 2 the inside.
 REFERENCE = re.compile(r"(\\?)\{\{([^{}]{1,500})\}\}")
@@ -527,7 +528,7 @@ def number_text(value: float, format: str, locale: Any = None) -> str:
     locale's."""
     found = FORMAT.match(":" + format)
     if found is None:
-        raise ValueError(f"not a number format a reference takes: {format!r}")
+        raise ArgumentError(f"not a number format a reference takes: {format!r}")
     decimals = len(found.group(2) or "")
     percent = bool(found.group(3))
     exact = Decimal(repr(value)) * (100 if percent else 1)

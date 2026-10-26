@@ -15,6 +15,7 @@ from lxml import etree
 
 import charts_synthetic as cs
 from ooxml_edit.charts import DiagramDrawingError, diagram_parts
+from ooxml_edit.errors import ArgumentError
 
 A = "{%s}" % cs.A
 DSP = "{%s}" % cs.DSP
@@ -238,8 +239,8 @@ def test_the_last_node_stays():
     diagram = opened().diagram("blocks")
     diagram.remove_node(0)
     diagram.remove_node(0)
-    with pytest.raises(ValueError, match="blocks: a diagram keeps at least one node"):
-        diagram.remove_node(0)
+    with pytest.raises(ArgumentError, match="blocks: a diagram keeps at least one node"):
+        diagram.remove_node(0)   # the caller's to change: invalid_arguments in every format
 
 
 def test_unchanged_text_changes_nothing():

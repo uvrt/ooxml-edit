@@ -41,6 +41,7 @@ from lxml import etree
 from .. import provenance as _provenance
 from ..xml import Element
 from .namespaces import C_NS
+from ..errors import ArgumentTypeError
 
 #: The extension's ``uri``, and the namespace of the element holding the record.
 PROVENANCE_URI = "urn:uvrt:ooxml-edit:provenance:v1"
@@ -150,8 +151,8 @@ def provenance(target: Any, part: str | None = None) -> Any:
         return _read_part(target._package(), target.part)
     package = target if hasattr(target, "tree") else getattr(target, "package", None)
     if package is None or not hasattr(package, "tree"):
-        raise TypeError(f"provenance takes a chart, a package or a document with a package, "
-                        f"not {type(target).__name__}")
+        raise ArgumentTypeError(f"provenance takes a chart, a package or a document with a "
+                                f"package, not {type(target).__name__}")
     if part is not None:
         return _read_part(package, part)
     found: dict[str, dict[str, Any]] = {}
