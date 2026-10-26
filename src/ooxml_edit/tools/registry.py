@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from .schema import NAME, SubsetError, canonical, subset_problems, walk_properties
+from ..errors import ArgumentError
 
 #: The group whose tools are always loaded, never deferred.
 CORE = "core"
@@ -55,10 +56,10 @@ def role_set(roles: str | Iterable[str] | None) -> tuple[str, ...]:
     wanted = {roles} if isinstance(roles, str) else set(roles)
     unknown = wanted - set(ROLES)
     if unknown:
-        raise ValueError(f"unknown role(s) {sorted(map(str, unknown))}; the roles are "
-                         f"{', '.join(ROLES)}")
+        raise ArgumentError(f"unknown role(s) {sorted(map(str, unknown))}; the roles are "
+                            f"{', '.join(ROLES)}")
     if not wanted:
-        raise ValueError(f"no roles: give one or more of {', '.join(ROLES)}, or None for all")
+        raise ArgumentError(f"no roles: give one or more of {', '.join(ROLES)}, or None for all")
     return tuple(role for role in ROLES if role in wanted)
 
 

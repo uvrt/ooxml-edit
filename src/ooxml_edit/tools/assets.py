@@ -51,6 +51,7 @@ from typing import Any, Mapping, Protocol, Sequence, runtime_checkable
 
 from .limits import Limits, check_image, sniff
 from .results import ToolError
+from ..errors import ArgumentError
 
 #: The most results one search returns, whatever the caller asks.
 MAX_RESULTS = 50
@@ -109,12 +110,12 @@ class FolderCatalogue:
                  index: "str | os.PathLike[str] | None" = None) -> None:
         self.folder = Path(folder).resolve()
         if not self.folder.is_dir():
-            raise ValueError(f"{folder}: not a folder")
+            raise ArgumentError(f"{folder}: not a folder")
         if index is None:
             found = [self.folder / name for name in ("index.json", "index.csv")
                      if (self.folder / name).is_file()]
             if not found:
-                raise ValueError(f"{folder}: no index.json or index.csv; pass index=")
+                raise ArgumentError(f"{folder}: no index.json or index.csv; pass index=")
             path = found[0]
         else:
             path = Path(index)
@@ -125,7 +126,8 @@ class FolderCatalogue:
         for number, row in enumerate(rows, 1):
             asset, file = _entry(row, f"{path.name} entry {number}")
             if asset.id in self._assets:
-                raise ValueError(f"{path.name} entry {number}: the id {asset.id!r} is used twice")
+                raise ArgumentError(f"{path.name} entry {number}: the id {asset.id!r} is used "
+                                    "twice")
             self._assets[asset.id] = (asset, file)
         self._words = {asset_id: (set(words(" ".join(asset.keywords))),
                                   set(words(asset.name)) | set(words(asset.id)))
@@ -158,7 +160,7 @@ class FolderCatalogue:
         file = self._assets[asset_id][1]
         path = (self.folder / file).resolve()
         if not path.is_relative_to(self.folder):
-            raise ValueError(f"asset {asset_id!r}: {file} is outside the catalogue's folder")
+            raise ArgumentError(f"asset {asset_id!r}: {file} is outside the catalogue's folder")
         data = path.read_bytes()
         return data, sniff(data, path.name)
 
@@ -177,31 +179,31 @@ def _json_rows(text: str, path: Path) -> list[Any]:
     try:
         data = json.loads(text)
     except json.JSONDecodeError as error:
-        raise ValueError(f"{path.name}: not JSON ({error})") from None
+        raise ArgumentError(f"{path.name}: not JSON ({error})") from None
     if isinstance(data, Mapping):
         data = data.get("assets")
     if not isinstance(data, list):
-        raise ValueError(f"{path.name}: a list of entries, or {{\"assets\": [...]}}, expected")
+        raise ArgumentError(f"{path.name}: a list of entries, or {{\"assets\": [...]}}, expected")
     return data
 
 
 def _csv_rows(text: str, path: Path) -> list[dict[str, str]]:
     reader = csv.DictReader(io.StringIO(text))
     if not reader.fieldnames or "file" not in [name.strip() for name in reader.fieldnames]:
-        raise ValueError(f"{path.name}: the header row names no 'file' column")
+        raise ArgumentError(f"{path.name}: the header row names no 'file' column")
     return [{(key or "").strip(): (value or "").strip() for key, value in row.items()}
             for row in reader]
 
 
 def _entry(row: Any, where: str) -> tuple[Asset, str]:
     if not isinstance(row, Mapping):
-        raise ValueError(f"{where}: an object with 'file' expected")
+        raise ArgumentError(f"{where}: an object with 'file' expected")
     file = row.get("file")
     if not isinstance(file, str) or not file.strip():
-        raise ValueError(f"{where}: no 'file'")
+        raise ArgumentError(f"{where}: no 'file'")
     file = file.strip().replace("\\", "/")
     if file.startswith("/") or re.match(r"^[A-Za-z]:", file) or ".." in file.split("/"):
-        raise ValueError(f"{where}: {file!r} must be a path inside the folder")
+        raise ArgumentError(f"{where}: {file!r} must be a path inside the folder")
     asset_id = row.get("id") or Path(file).stem
     name = row.get("name") or asset_id
     keywords = row.get("keywords") or ()
@@ -209,7 +211,7 @@ def _entry(row: Any, where: str) -> tuple[Asset, str]:
         keywords = [part for part in re.split(r"[;,]", keywords)]
     if not isinstance(asset_id, str) or not isinstance(name, str) or not all(
             isinstance(keyword, str) for keyword in keywords):
-        raise ValueError(f"{where}: id, name and keywords are text")
+        raise ArgumentError(f"{where}: id, name and keywords are text")
     keywords = tuple(keyword.strip() for keyword in keywords if keyword.strip())
     return Asset(asset_id.strip(), name.strip(), keywords), file
 

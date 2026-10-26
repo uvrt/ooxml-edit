@@ -74,6 +74,7 @@ from .limits import LimitError, Limits, check_declared_type, check_image, check_
 from .logs import CallRecord
 from .registry import role_set
 from .results import ToolError
+from ..errors import ArgumentError, ArgumentTypeError
 
 Clock = Callable[[], _dt.datetime]
 
@@ -106,6 +107,9 @@ class DocumentFormat:
     prompt: str = ""
     #: Exceptions the library raises, mapped to error codes: ``{type: code}`` or
     #: ``{type: (code, options)}`` where ``options(exception)`` lists the valid options.
+    #: The libraries' typed refusals need no entry (:mod:`ooxml_edit.errors`: an
+    #: ``ArgumentError`` is ``invalid_arguments``, a ``UnitError`` ``unit``); a subclass
+    #: listed here gets the code given instead.
     errors: dict[type[BaseException], Any] = field(default_factory=dict)
     #: A short summary of an open document (its page count and title), returned by the
     #: shared ``open_document`` tool.
@@ -520,7 +524,7 @@ def font_dirs_of(font_dirs: Any) -> tuple[str, ...] | None:
     out = []
     for path in font_dirs:
         if not isinstance(path, (str, PathLike)):
-            raise TypeError(f"font_dirs takes paths, not {type(path).__name__}")
+            raise ArgumentTypeError(f"font_dirs takes paths, not {type(path).__name__}")
         out.append(fspath(path))
     return tuple(out)
 
@@ -551,9 +555,9 @@ def locale_of(locale: Any) -> Any:
     missing = [name for name in LOCALE_FIELDS
                if not isinstance(getattr(locale, name, None), str)]
     if missing:
-        raise TypeError(f"locale takes an ooxml_common.locales.Locale (or an object with "
-                        f"string {', '.join(LOCALE_FIELDS)}), not {type(locale).__name__}: "
-                        f"no {', '.join(missing)}")
+        raise ArgumentTypeError(f"locale takes an ooxml_common.locales.Locale (or an object with "
+                                f"string {', '.join(LOCALE_FIELDS)}), not {type(locale).__name__}: "
+                                f"no {', '.join(missing)}")
     return locale
 
 
@@ -631,7 +635,7 @@ class Session:
               size: int = 0) -> str:
         """Add a document made in memory (a new one, or one opened from a blob)."""
         if kind not in self.formats:
-            raise ValueError(f"no format {kind!r} is registered; one of {sorted(self.formats)}")
+            raise ArgumentError(f"no format {kind!r} is registered; one of {sorted(self.formats)}")
         fmt = self.formats[kind]
         if fmt.configure is not None:
             fmt.configure(document, self)
@@ -1007,13 +1011,13 @@ class Session:
     def _format_for(self, data: bytes, name: str, kind: str | None) -> DocumentFormat:
         if kind is not None:
             if kind not in self.formats:
-                raise ValueError(f"no format {kind!r}; one of {sorted(self.formats)}")
+                raise ArgumentError(f"no format {kind!r}; one of {sorted(self.formats)}")
             return self.formats[kind]
         for fmt in self.formats.values():
             if fmt.detect(data, name):
                 return fmt
-        raise ValueError(f"{name} is not a document of any registered format "
-                         f"({', '.join(sorted(self.formats)) or 'none registered'})")
+        raise ArgumentError(f"{name} is not a document of any registered format "
+                            f"({', '.join(sorted(self.formats)) or 'none registered'})")
 
     def _room_for_document(self, size: int) -> None:
         with self._lock:
@@ -1197,7 +1201,7 @@ class SessionView:
                  context: Mapping[str, Any] | None = None) -> None:
         base = session.session if isinstance(session, SessionView) else session
         if not isinstance(base, Session):
-            raise TypeError(f"a view is of a Session, not {type(session).__name__}")
+            raise ArgumentTypeError(f"a view is of a Session, not {type(session).__name__}")
         given_roles, given_context = narrowed(session.roles, session.context, roles, context)
         object.__setattr__(self, "session", base)
         object.__setattr__(self, "roles", given_roles)
@@ -1241,15 +1245,15 @@ def narrowed(roles: Sequence[str], context: Mapping[str, Any], wanted: Any = Non
         found = role_set(wanted)
         extra = [role for role in found if role not in roles]
         if extra:
-            raise ValueError(f"{', '.join(extra)} is not among this session's roles "
-                             f"({', '.join(roles)}): a view or a call narrows the session's "
-                             "roles, never widens them -- make the session with every role "
-                             "its agents need (toolbox.session(roles=...)) and give each "
-                             "agent a view of some of them")
+            raise ArgumentError(f"{', '.join(extra)} is not among this session's roles "
+                                f"({', '.join(roles)}): a view or a call narrows the session's "
+                                "roles, never widens them -- make the session with every role "
+                                "its agents need (toolbox.session(roles=...)) and give each "
+                                "agent a view of some of them")
     if more is None:
         return found, context
     if not isinstance(more, Mapping):
-        raise TypeError(f"context takes a mapping (a dict), not {type(more).__name__}")
+        raise ArgumentTypeError(f"context takes a mapping (a dict), not {type(more).__name__}")
     return found, MappingProxyType({**context, **more})
 
 
@@ -1275,5 +1279,5 @@ def _require_bytes(data: Any, what: str) -> bytes:
         return bytes(data)
     if not isinstance(data, bytes):
         kind = "a path" if isinstance(data, (str, PathLike)) else type(data).__name__
-        raise TypeError(f"{what} takes bytes, not {kind}: the tool layer reads no files")
+        raise ArgumentTypeError(f"{what} takes bytes, not {kind}: the tool layer reads no files")
     return data

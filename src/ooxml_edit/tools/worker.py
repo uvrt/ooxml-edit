@@ -90,6 +90,7 @@ from multiprocessing.connection import wait as wait_for
 from typing import Any, Callable, Sequence
 
 from .results import ToolError
+from ..errors import ArgumentError
 
 logger = logging.getLogger("ooxml_edit.tools.worker")
 
@@ -917,7 +918,7 @@ class SubprocessPool(_Pool):
                  warm_up: Sequence[Callable[[], Any]] = (),
                  start_timeout: float = START_TIMEOUT) -> None:
         if size < 1:
-            raise ValueError("a subprocess pool has at least one worker")
+            raise ArgumentError("a subprocess pool has at least one worker")
         super().__init__(size, warm_up=warm_up, start_timeout=start_timeout)
         self.executable = executable or sys.executable
         self._inline: InProcess | None = None
@@ -1132,10 +1133,10 @@ class WorkerPool(_Pool):
                  fallback: bool | str = True, warm_up: Sequence[Callable[[], Any]] = (),
                  start_timeout: float = START_TIMEOUT) -> None:
         if size < 0:
-            raise ValueError("a pool's size is 0 (in-process) or more")
+            raise ArgumentError("a pool's size is 0 (in-process) or more")
         if not any(fallback is value or fallback == value and type(fallback) is type(value)
                    for value in FALLBACKS):
-            raise ValueError(f"fallback is one of {FALLBACKS}, not {fallback!r}")
+            raise ArgumentError(f"fallback is one of {FALLBACKS}, not {fallback!r}")
         super().__init__(size, warm_up=warm_up, start_timeout=start_timeout)
         self._context = multiprocessing.get_context(start_method)
         self._fallback = fallback

@@ -24,6 +24,7 @@ from __future__ import annotations
 from typing import Iterable, Iterator, Mapping, Sequence, TypeAlias, Union
 
 from lxml import etree
+from .errors import ArgumentError
 
 Element: TypeAlias = etree._Element
 
@@ -54,7 +55,7 @@ def register_namespaces(namespaces: Mapping[str, str]) -> None:
     for prefix, uri in namespaces.items():
         existing = NAMESPACES.get(prefix)
         if existing is not None and existing != uri:
-            raise ValueError(f"prefix {prefix!r} is already bound to {existing!r}")
+            raise ArgumentError(f"prefix {prefix!r} is already bound to {existing!r}")
         NAMESPACES[prefix] = uri
 
 

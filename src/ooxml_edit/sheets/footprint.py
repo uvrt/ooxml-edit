@@ -32,6 +32,7 @@ from typing import Iterable, Mapping
 
 from lxml import etree
 from ..xml import Element, parse_xml
+from ..errors import ArgumentError
 
 _X = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
 _PR = "{http://schemas.openxmlformats.org/package/2006/relationships}"
@@ -290,7 +291,7 @@ def _cells(row: Element) -> dict[int, Element]:
 def _position(ref: str) -> tuple[int, int]:
     match = _CELL.fullmatch(ref.strip())
     if match is None:
-        raise ValueError(f"{ref!r} is not a cell reference")
+        raise ArgumentError(f"{ref!r} is not a cell reference")
     column = 0
     for letter in match.group(1).upper():
         column = column * 26 + ord(letter) - 64

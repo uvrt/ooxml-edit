@@ -184,6 +184,20 @@ rasterised over the workers at once (`rasterise_views`). What a format keeps bet
 goes to the workers as `state` and comes back as each task's facts (`draw`'s `on_facts`):
 the decoded embedded fonts of a deck, the layout of a document. Another format's renderer plugs in the same way.
 
+**The libraries' refusals and their codes** (0.66.0, review S9; `ooxml_edit.errors`). A
+value a library refuses -- the last node of a diagram to remove, a cell reference that is
+not one, a legend position it has no word for -- raises an `ArgumentError` (a
+`ValueError`); a value of the wrong type an `ArgumentTypeError` (an `ArgumentError` and a
+`TypeError`); a number, date or length out of its range, or not finite, a `UnitError` (an
+`ArgumentError`). The dispatcher gives the model `invalid_arguments` for an
+`ArgumentError` and `unit` for a `UnitError` (`BASE_ERRORS`), in every format; a format's
+`DocumentFormat.errors`, or the application's `error_map`, may give one of their
+subclasses another code, the closest class in the exception's MRO winning. A format
+library derives its own refusals from these (pptx-agent's `ArgumentError` is one), so a
+refusal is one class family whichever library raised it. A plain `ValueError` -- Python's
+own, a broken document's, or a library subclass outside the family -- is still `unit`, as
+before: the formats' unmapped `ValueError` subclasses keep their code.
+
 **Datasets.** A call that derives figures from a document -- counts, sums, groups -- may
 keep them for the session as a `Dataset`: columns, rows, and beside every value its
 sources, opaque strings (cell addresses, say) that the tool layer stores and hands on but

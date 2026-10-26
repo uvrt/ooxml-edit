@@ -46,6 +46,7 @@ from .. import dates as _dates
 from .host import GraphicHost, chart_part
 from .namespaces import C_NS  # noqa: F401  (re-exported)
 from .workbook import Area, Cell, SheetRange, Workbook, Worksheet, number_text, parse_formula
+from ..errors import ArgumentError
 
 REL_PACKAGE = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/package"
 
@@ -909,7 +910,7 @@ class Chart(ChartStyling):
         if bool(visible) == self.has_legend:
             return self
         if position not in {"r", "l", "t", "b", "tr"}:
-            raise ValueError("legend position is r, l, t, b or tr")
+            raise ArgumentError("legend position is r, l, t, b or tr")
         with self._edit() as editor:
             chart = find(editor.root, "c:chart")
             assert chart is not None  # a chart part's root holds its c:chart
@@ -1356,7 +1357,7 @@ _series_of = series_of
 def _axis_of(root: Element, axis: str) -> Element | None:
     """The ``"category"`` (x) or ``"value"`` (y) axis element, if the chart has one."""
     if axis not in {"category", "value"}:
-        raise ValueError("axis is 'category' or 'value'")
+        raise ArgumentError("axis is 'category' or 'value'")
     plot_area = find(root, "c:chart/c:plotArea")
     if plot_area is None:
         return None

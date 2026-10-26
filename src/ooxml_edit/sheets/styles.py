@@ -21,6 +21,7 @@ from ooxml_common.numfmt import is_date_code
 
 from ..opc import OpcPackage
 from ..xml import Element
+from ..errors import ArgumentError, ArgumentTypeError
 
 _X = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
 
@@ -152,12 +153,12 @@ class Styles:
             raise IndexError(f"cell format {index} does not exist; the workbook has "
                              f"{len(xfs)}")
         if isinstance(number_format, bool) or not isinstance(number_format, (int, str)):
-            raise TypeError("a number format is a built-in id or a format code")
+            raise ArgumentTypeError("a number format is a built-in id or a format code")
         if isinstance(number_format, str):
             number = self._code_id(number_format)
         else:
             if number_format < 0:
-                raise ValueError(f"{number_format} is not a number format id")
+                raise ArgumentError(f"{number_format} is not a number format id")
             number = number_format
         base = xfs[index]
         if base.get("numFmtId", "0") == str(number):
@@ -197,7 +198,7 @@ class Styles:
     def _code_id(self, code: str) -> int:
         """The id of the workbook's own format ``code``, added when it has none."""
         if not code:
-            raise ValueError("a format code needs text")
+            raise ArgumentError("a format code needs text")
         codes = self._codes()
         for number, existing in codes.items():
             if existing == code:

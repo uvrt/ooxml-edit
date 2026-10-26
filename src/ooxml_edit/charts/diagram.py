@@ -43,6 +43,7 @@ from ..xml import Element, append_in_order, local_name, make, qn, remove
 from .dmltext import paragraph_text, replace_body_text
 from .host import GraphicHost
 from .namespaces import DGM_NS, DSP_NS  # noqa: F401  (re-exported)
+from ..errors import ArgumentError
 
 #: What to do with a cached drawing an edit cannot keep exactly in step.
 DRAWING_POLICIES = ("drop", "keep", "refuse")
@@ -186,7 +187,7 @@ class Diagram:
     def __init__(self, resolve: Callable[[], GraphicHost], on_inexact_drawing: str = "drop",
                  notify: Callable[[str], None] | None = None) -> None:
         if on_inexact_drawing not in DRAWING_POLICIES:
-            raise ValueError(f"on_inexact_drawing is one of {', '.join(DRAWING_POLICIES)}")
+            raise ArgumentError(f"on_inexact_drawing is one of {', '.join(DRAWING_POLICIES)}")
         self._resolve = resolve
         self.on_inexact_drawing = on_inexact_drawing
         self.notify = notify
@@ -353,7 +354,7 @@ class Diagram:
         layout moves, so the cached drawing goes as ``on_inexact_drawing`` says."""
         node = which if isinstance(which, DiagramNode) else self.node(which)
         if len(self.nodes) <= 1 + len(node.descendants):
-            raise ValueError(f"{self.address}: a diagram keeps at least one node")
+            raise ArgumentError(f"{self.address}: a diagram keeps at least one node")
         with self._edit() as model:
             doomed: set[str] = set()
             pending = [node.id]

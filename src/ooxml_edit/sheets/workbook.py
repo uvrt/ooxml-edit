@@ -53,6 +53,7 @@ from lxml import etree
 from ..markdown import Run, merge
 from ..opc import OpcPackage, normalize_part_path
 from ..xml import Element, qn, remove
+from ..errors import ArgumentError, ArgumentTypeError, UnitError
 
 SML_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 
@@ -84,7 +85,7 @@ CellValue = "str | float | int | bool | None"
 def column_letters(index: int) -> str:
     """1 -> ``A``, 27 -> ``AA``."""
     if not 1 <= index <= MAX_COLUMN:
-        raise ValueError(f"column {index} is outside the sheet")
+        raise UnitError(f"column {index} is outside the sheet")
     letters = ""
     while index:
         index, remainder = divmod(index - 1, 26)
@@ -118,7 +119,7 @@ class Cell:
     def parse(cls, text: str) -> "Cell":
         match = _CELL.fullmatch(text.strip())
         if match is None:
-            raise ValueError(f"{text!r} is not a cell reference")
+            raise ArgumentError(f"{text!r} is not a cell reference")
         return cls(int(match.group(4)), column_index(match.group(2)))
 
     def moved(self, rows: int = 0, columns: int = 0) -> "Cell":
@@ -162,7 +163,7 @@ class Area:
         pattern = r"\$?[A-Za-z]{1,3}\$?\d{1,7}(?::\$?[A-Za-z]{1,3}\$?\d{1,7})?"
         match = (re.match if lenient else re.fullmatch)(pattern, text.strip())
         if match is None:
-            raise ValueError(f"{text!r} is not a range")
+            raise ArgumentError(f"{text!r} is not a range")
         head, _, tail = match.group(0).partition(":")
         first = Cell.parse(head)
         last = Cell.parse(tail) if tail else first
@@ -210,7 +211,7 @@ class SheetRange:
     def cell(self, index: int) -> Cell:
         """The ``index``-th cell of a one-row or one-column range."""
         if not self.is_line:
-            raise ValueError(f"{self.formula} is not a single row or column")
+            raise ArgumentError(f"{self.formula} is not a single row or column")
         if not 0 <= index < self.length:
             raise IndexError(f"{self.formula} has no cell {index}")
         if self.area.columns == 1:
@@ -265,14 +266,14 @@ class Formula:
 
     def __post_init__(self) -> None:
         if not isinstance(self.text, str):
-            raise TypeError(f"a formula's text is a string, not {type(self.text).__name__}")
+            raise ArgumentTypeError(f"a formula's text is a string, not {type(self.text).__name__}")
         text = self.text[1:] if self.text.startswith("=") else self.text
         if not text.strip():
-            raise ValueError("a formula needs text; write None for a blank cell")
+            raise ArgumentError("a formula needs text; write None for a blank cell")
         object.__setattr__(self, "text", text)
         if self.value is not None and not isinstance(self.value, (str, bool, int, float)):
-            raise TypeError("a formula's cached value is text, a number, a boolean or None, "
-                            f"not {type(self.value).__name__}")
+            raise ArgumentTypeError("a formula's cached value is text, a number, a boolean or "
+                                    f"None, not {type(self.value).__name__}")
 
 
 @dataclass(frozen=True)
@@ -299,10 +300,10 @@ class RichText:
     def __post_init__(self) -> None:
         runs = tuple(self.runs)
         if not all(isinstance(run, Run) for run in runs):
-            raise TypeError("rich text is a sequence of ooxml_edit.markdown.Run")
+            raise ArgumentTypeError("rich text is a sequence of ooxml_edit.markdown.Run")
         runs = merge(runs)
         if not runs:
-            raise ValueError("rich text needs text; write None for a blank cell")
+            raise ArgumentError("rich text needs text; write None for a blank cell")
         object.__setattr__(self, "runs", runs)
 
     @property
@@ -377,23 +378,23 @@ def date_serial(value: "_dt.date | _dt.time", *, date1904: bool = False) -> "int
     """
     if isinstance(value, _dt.time):
         if value.tzinfo is not None:
-            raise ValueError("a cell's time has no time zone; drop its tzinfo")
+            raise ArgumentError("a cell's time has no time zone; drop its tzinfo")
         return _fraction(value)
     if not isinstance(value, _dt.date):
-        raise TypeError(f"{type(value).__name__} is not a date")
+        raise ArgumentTypeError(f"{type(value).__name__} is not a date")
     if isinstance(value, _dt.datetime) and value.tzinfo is not None:
-        raise ValueError("a cell's date has no time zone; convert the time to the one the "
-                         "workbook means and drop its tzinfo")
+        raise ArgumentError("a cell's date has no time zone; convert the time to the one the "
+                            "workbook means and drop its tzinfo")
     day = value.date() if isinstance(value, _dt.datetime) else value
     if date1904:
         if day < _dt.date(1904, 1, 1):
-            raise ValueError(f"{day.isoformat()} is before 1 January 1904, the first day "
-                             "of this workbook's date system; write it as text")
+            raise UnitError(f"{day.isoformat()} is before 1 January 1904, the first day "
+                            "of this workbook's date system; write it as text")
         whole = (day - _dt.date(1904, 1, 1)).days
     else:
         if day < _dt.date(1900, 1, 1):
-            raise ValueError(f"{day.isoformat()} is before 1 January 1900, the first day "
-                             "of this workbook's date system; write it as text")
+            raise UnitError(f"{day.isoformat()} is before 1 January 1900, the first day "
+                            "of this workbook's date system; write it as text")
         whole = (day - _dt.date(1899, 12, 31)).days
         if day >= _dt.date(1900, 3, 1):
             whole += 1  # the 29 February 1900 the system counts
@@ -933,11 +934,11 @@ class Worksheet:
         calculation chain.
         """
         if not (1 <= cell.row <= MAX_ROW and 1 <= cell.column <= MAX_COLUMN):
-            raise ValueError(f"row {cell.row}, column {cell.column} is outside the sheet")
+            raise UnitError(f"row {cell.row}, column {cell.column} is outside the sheet")
         stored = self._stored(value)
         if style is not None and (isinstance(style, bool) or not isinstance(style, int)
                                   or style < 0):
-            raise ValueError(f"style {style!r} is not a cell format index")
+            raise ArgumentError(f"style {style!r} is not a cell format index")
         node = self._find(cell)
         if isinstance(stored, RichText):
             effective = style if style is not None else (0 if node is None
@@ -987,9 +988,8 @@ class Worksheet:
             return value
         if isinstance(value, (_dt.date, _dt.time)):
             return date_serial(value, date1904=self.workbook.date1904)
-        raise TypeError(f"a cell holds text, RichText, a number, a boolean, a date, a Formula "
-                        f"or None, "
-                        f"not {type(value).__name__}")
+        raise ArgumentTypeError(f"a cell holds text, RichText, a number, a boolean, a date, a "
+                                f"Formula or None, not {type(value).__name__}")
 
     def _is(self, node: Element, value) -> bool:
         """Whether the cell holds exactly ``value`` (as :meth:`_stored` gives it), stored as
@@ -1084,7 +1084,7 @@ class Worksheet:
         :meth:`write` takes every kind of value.
         """
         if isinstance(value, bool):
-            raise TypeError("booleans are not chart values")
+            raise ArgumentTypeError("booleans are not chart values")
         node = self._find(cell)
         if node is None:
             if value is None:
@@ -1466,7 +1466,7 @@ def number_text(value: float | int) -> str:
     """A number the way Excel writes it: ``3``, not ``3.0``; shortest exact decimal otherwise."""
     number = float(value)
     if number != number or number in (float("inf"), float("-inf")):
-        raise ValueError(f"{value!r} is not a finite number")
+        raise UnitError(f"{value!r} is not a finite number")
     if number.is_integer() and abs(number) < 1e15:
         return str(int(number))
     return repr(number)
@@ -1474,13 +1474,13 @@ def number_text(value: float | int) -> str:
 
 def _check_number(value: float | int) -> None:
     if not math.isfinite(float(value)):
-        raise ValueError(f"{value!r} is not a finite number; a cell holds finite numbers only")
+        raise UnitError(f"{value!r} is not a finite number; a cell holds finite numbers only")
 
 
 def _check_text(text: str) -> None:
     if len(text) > MAX_TEXT:
-        raise ValueError(f"text of {len(text):,} characters is longer than a cell holds "
-                         f"({MAX_TEXT:,}); shorten it or split it over cells")
+        raise UnitError(f"text of {len(text):,} characters is longer than a cell holds "
+                        f"({MAX_TEXT:,}); shorten it or split it over cells")
 
 
 def _style_of(node: Element) -> int:

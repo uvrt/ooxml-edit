@@ -4,6 +4,45 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet. Each vers
 reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
 earlier ones were never tagged.
 
+## 0.66.0 -- unreleased
+- **Typed refusals: `unit` means a unit** (review, S9). The dispatcher gave every plain
+  `ValueError` the code `unit`, and the libraries' own refusals of an argument were plain
+  `ValueError`s, so the model read `unit` for things that have nothing to do with one:
+  removing a diagram's last node ("a diagram keeps at least one node") was `unit` in every
+  format. New module `ooxml_edit.errors`: `ArgumentError` (a `ValueError`) for a value the
+  library refuses, `ArgumentTypeError` (an `ArgumentError` and a `TypeError`) for a value of
+  a type it does not take, and `UnitError` (an `ArgumentError`) for a number, date or length
+  out of its range or not finite -- what `ERROR_CODES["unit"]` says. The dispatcher maps
+  `ArgumentError` to `invalid_arguments` and `UnitError` to `unit` (`BASE_ERRORS`, under
+  the formats' maps and the application's `error_map`, so a format may map a subclass
+  otherwise; the closest class in the exception's MRO wins). A plain `ValueError` stays
+  `unit` and a plain `TypeError` `internal`: the formats' own `ValueError` subclasses that
+  their maps do not name (xlsx-agent's `RuleError`, `RedactError`, `ShiftError`; this
+  package's `ChartDataError`, `ChartModelError`, `RecordError`, `PatternError`) relied on
+  that, and keep their code.
+  Every `raise ValueError(` / `TypeError(` in the package (113) was classified: 83 refuse a
+  caller's value and are now `ArgumentError` / `ArgumentTypeError` (the datasets, the
+  asset catalogue, the adapters' options, roles, views and contexts, the worker pools'
+  sizes, a cell or range reference, a formula, rich text, a cell's style index and value
+  type, a date's time zone, a chart's legend position and axis, the last node of a
+  diagram, the drawing policy, a number format id or code, a `DateCategory`); 8 are a
+  value out of its range and are `UnitError` (a column or cell outside the sheet, a date
+  before a date system's first day, a number that is not finite, text longer than a cell
+  holds) -- `unit` as before; 22 stay plain: a broken document (a part or
+  `[Content_Types].xml` missing, a diagram with no document point, a workbook with no main
+  part) or a mistake in the code using the library (a part added twice, two tools of one
+  name, a group's or kind's name, a renderer's non-PNG, an unknown error code, a format's
+  resolver returning no `Dataset`, a package that cannot scope an undo), and one the schema
+  check raises and catches itself. Each new class is the
+  one it was before, so every `except ValueError` and `except TypeError` still catches it.
+  What a model sees change: `edit_smartart` removing the last node is `invalid_arguments`,
+  not `unit`, in a deck and a Word document; any other typed refusal that reaches the
+  dispatcher unmapped is `invalid_arguments` where it was `unit` (or, for a type,
+  `internal`) -- the tools' schemas and the agents' own checks keep the rest from reaching
+  it. Messages are unchanged; no tool definition changes. Contract-tested
+  (`tests/test_errors.py`); `ooxml_edit.errors` is in the siblings' surface
+  (`tests/test_public_api.py`, docs/USED-BY.md).
+
 ## 0.65.1 -- unreleased
 - **ruff and mypy in CI; `py.typed` shipped** (review, S8). The package carries `py.typed`
   (PEP 561, in the wheel and the sdist), so the agents' type checkers read its annotations.
