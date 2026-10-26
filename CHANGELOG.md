@@ -4,6 +4,36 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet. Each vers
 reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
 earlier ones were never tagged.
 
+## 0.67.0 -- unreleased
+- **`edit_chart` and `edit_smartart` behave the same in a deck and a document** (review,
+  S10). The two agents' handlers did the same work twice and differed in six places; the
+  user chose one behaviour for each, and the work is now here once, in
+  `charts.actions`: `apply_data_action` (`set_values` to `set_gap_width`, `DATA_ACTIONS`),
+  `need` (what a missing argument is said to be, one message set), `add_plan` and
+  `finish_add` (`add`'s checks before anything is made, then its scale, minor gridlines
+  and look inside the same undo step; `required` names what a format needs besides, a
+  deck's `box`), `legend_position`, `apply_smartart_action` (`SMARTART_ACTIONS`), and
+  the results: `chart_json` / `chart_read_json` (the chart under the format's key,
+  `address` or `id`; type, title, categories as they are with dates as ISO dates,
+  series, legend, `number_formats`, the dates' format, the gap width where there are
+  bars; read adds each axis' title, the look and the workbook, `"unreadable: ..."` when
+  it cannot be read) and `smartart_json` (every node as `{n, text, level}`). A format
+  supplies only finding the chart or diagram and its key. What each format sees change
+  is in the agents' changelogs; here: `add_category`'s label is `text` (as the shared
+  definition says), `add_series`' and `add_category`'s `values` may be left out (blanks),
+  `set_legend` without `position` puts it on the right and refuses a label position
+  (`center`...) as `add` does, `hide_data_labels` takes `number_format` as
+  `show_data_labels` does (and so refuses it: a format is for labels shown), SmartArt
+  `set_text` takes `""` and no text as empty text. No tool definition changed.
+- `Chart.number_formats` (from pptx-agent's `Chart`, which now uses it): what decides how
+  numbers look, `{"values", "data_labels", "value_axis"}`.
+- `charts.cases`: the table both agents run through their own tools (`CHART`,
+  `CHART_CASES`, `SMARTART_CASES`, `pick`, `problems`), and here through the actions
+  (`tests/test_chart_cases.py`). Listed in [docs/USED-BY.md](docs/USED-BY.md) and
+  `tests/test_public_api.py` with the new actions; `apply_add_style`, `category_labels`,
+  `resolve_node` and `scale_axis` leave both lists, since no agent imports them any more
+  (they stay, used here).
+
 ## 0.66.0 -- unreleased
 - **Typed refusals: `unit` means a unit** (review, S9). The dispatcher gave every plain
   `ValueError` the code `unit`, and the libraries' own refusals of an argument were plain

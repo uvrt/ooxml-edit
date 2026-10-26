@@ -1,11 +1,16 @@
-"""The formatting actions of the shared ``edit_chart`` tool, on a :class:`~.chart.Chart`.
+"""The actions of the shared ``edit_chart`` and ``edit_smartart`` tools, on a
+:class:`~.chart.Chart` or :class:`~.diagram.Diagram`.
 
-Both format libraries' handlers resolve the chart their own way, and the series, category
-or SmartArt node a call names with :func:`resolve_series`, :func:`resolve_category` and
-:func:`resolve_node` (one lookup, a name first); then they call :func:`apply_style_action`.
-What the tool's arguments mean is decided here once.  Refusals are
-:class:`~.errors.ChartDataError` (the handlers answer ``invalid_arguments``), but for the
-lookups': the tool layer's errors, with their codes.
+Both format libraries' handlers find the chart or diagram their own way and say what it is
+called in a result (a deck's ``address``, a document's ``id``); everything else is here, once
+(review, N4 and S10): the series, category or SmartArt node a call names
+(:func:`resolve_series`, :func:`resolve_category`, :func:`resolve_node`: a name first), the
+data actions (:func:`apply_data_action`), the formatting ones (:func:`apply_style_action`),
+``add``'s arguments and look (:func:`add_plan`, :func:`finish_add`), the SmartArt actions
+(:func:`apply_smartart_action`) and what each returns (:func:`chart_json`,
+:func:`chart_read_json`, :func:`smartart_json`).  Refusals are
+:class:`~.errors.ChartDataError` (the handlers answer ``invalid_arguments``), but for a
+lookup or a missing argument: the tool layer's errors, with their codes.
 """
 
 from __future__ import annotations
@@ -385,6 +390,264 @@ def chart_style_json(chart) -> dict[str, Any]:
     return out
 
 
-__all__ = ["STYLE_ACTIONS", "add_style_actions", "apply_add_style", "apply_style_action",
+# -- the data actions, add, SmartArt and the results (review, S10) ------------------------------
+#
+# What the two agents' handlers did twice, and did differently in places, is one code here:
+# a label for add_category comes from ``text``; add_series' and add_category's values may be
+# left out (blanks); set_legend without a position puts the legend on the right;
+# hide_data_labels takes number_format as show_data_labels does (and refuses it: a format is
+# for labels shown); SmartArt's set_text takes "" ; a SmartArt result lists each node's
+# number, text and level.
+
+#: ``edit_chart``'s data, title and legend actions: :func:`apply_data_action`.
+DATA_ACTIONS = ("set_values", "set_value", "add_category", "remove_category", "rename_category",
+                "add_series", "remove_series", "rename_series", "set_title", "set_axis_title",
+                "set_legend", "show_data_labels", "hide_data_labels", "set_gap_width")
+
+#: ``edit_smartart``'s actions: :func:`apply_smartart_action`.
+SMARTART_ACTIONS = ("set_text", "add_node", "remove_node", "add_child")
+
+#: A legend's ``position`` -> :meth:`~.chart.Chart.set_legend`'s.
+LEGEND_POSITIONS = {"right": "r", "left": "l", "top": "t", "bottom": "b"}
+
+#: What ``add`` needs, said when it is missing.
+#: (``chart_type``: one of the tool's ``CHART_TYPES``.)
+ADD_NEEDS = {"chart_type": "one of <types>",
+             "data": "each series as {name, values}, one value per category",
+             "categories": "the category labels, in order"}
+
+#: At most this many values (categories times series) in a chart ``add`` makes.
+MAX_ADD_VALUES = 10_000
+
+
+def _missing(chart: Any, action: str, name: str) -> str:
+    """What a missing ``name`` of the data action ``action`` could be, on this chart."""
+    if name == "axis":
+        return " or ".join(chart.axes) or "the chart has no axes"
+    if name == "values":
+        return f"one number per category ({len(chart.categories)})"
+    if name == "value":
+        return ("the gap as a whole % of a bar's width, 0-500" if action == "set_gap_width"
+                else "the number")
+    return {"add_category": "the new category's label", "rename_category": "the new label",
+            "add_series": "the new series' name"}.get(action, "the new name")
+
+
+def need(chart: Any, action: str, name: str, given: Any) -> Any:
+    """``given``, or ``invalid_arguments`` (field ``name``) saying what ``action`` needs
+    ``name`` to be on ``chart`` (``None`` for ``add``, :data:`ADD_NEEDS`)::
+
+        need(chart, "set_value", "value", None)   # ToolError: set_value needs value: the number
+    """
+    if given is not None:
+        return given
+    from ..tools.results import ToolError
+
+    if action == "add":
+        from ..tools.shared import CHART_TYPES  # here, not at import: charts stand alone
+
+        expected = ADD_NEEDS.get(name, name).replace("<types>", ", ".join(CHART_TYPES))
+    else:
+        expected = _missing(chart, action, name)
+    raise ToolError("invalid_arguments", f"{action} needs {name}: {expected}", field=name)
+
+
+def legend_position(position: str | None) -> str | None:
+    """``set_legend``'s or ``add``'s ``position`` as :meth:`~.chart.Chart.set_legend` takes
+    it: ``None`` for ``"none"`` (no legend), the right for none given; a label position is
+    refused (``invalid_arguments``)."""
+    where = position or "right"
+    if where == "none":
+        return None
+    if where not in LEGEND_POSITIONS:
+        from ..tools.results import ToolError
+
+        raise ToolError("invalid_arguments", f"{where} is a label position; a legend is "
+                        "right, left, top, bottom or none", field="position")
+    return LEGEND_POSITIONS[where]
+
+
+def apply_data_action(chart: Any, action: str, *, series: Any = None, category: Any = None,
+                      values: Any = None, value: Any = None, text: str | None = None,
+                      axis: str | None = None, position: str | None = None,
+                      number_format: str | None = None) -> None:
+    """Run one of :data:`DATA_ACTIONS` with the tool's arguments as given: a series or
+    category is resolved here (:func:`resolve_series`, :func:`resolve_category`), a missing
+    argument refused (:func:`need`)."""
+    def want(name: str, given: Any) -> Any:
+        return need(chart, action, name, given)
+
+    def chosen() -> list[int] | None:
+        return None if series is None else [resolve_series(chart, series, action).index]
+
+    if action == "set_values":
+        resolve_series(chart, series, action).set_values(want("values", values))
+    elif action == "set_value":
+        resolve_series(chart, series, action).set_value(
+            resolve_category(chart, category, action), want("value", value))
+    elif action == "add_category":
+        chart.add_category(want("text", text), None if values is None else list(values))
+    elif action == "remove_category":
+        chart.remove_category(resolve_category(chart, category, action))
+    elif action == "rename_category":
+        chart.set_category(resolve_category(chart, category, action), want("text", text))
+    elif action == "add_series":
+        chart.add_series(want("text", text), None if values is None else list(values))
+    elif action == "remove_series":
+        chart.remove_series(resolve_series(chart, series, action).index)
+    elif action == "rename_series":
+        resolve_series(chart, series, action).set_name(want("text", text))
+    elif action == "set_title":
+        chart.set_title(text)
+    elif action == "set_axis_title":
+        chart.set_axis_title(want("axis", axis), text)
+    elif action == "set_legend":
+        where = legend_position(position)
+        if where is None:
+            chart.set_legend(False)
+        else:
+            chart.set_legend(True, where)
+    elif action in ("show_data_labels", "hide_data_labels"):
+        chart.set_data_labels(action == "show_data_labels", number_format=number_format,
+                              series=chosen())
+    elif action == "set_gap_width":
+        given = want("value", value)
+        if given != int(given):
+            from ..tools.results import ToolError
+
+            raise ToolError("invalid_arguments", "a gap width is a whole percentage, 0-500",
+                            field="value")
+        chart.set_gap_width(int(given))
+    else:  # pragma: no cover -- the schema's enum
+        raise ChartDataError(f"unknown action {action!r}")
+
+
+def add_plan(chart_type: Any, categories: Any, data: Any, values: Any = None, *,
+             position: str | None = None, axis: str | None = None,
+             scale: Mapping[str, Any] | None = None, data_labels: bool | None = None,
+             colors: Any = None, style: Mapping[str, Any] | None = None,
+             part: str | None = None,
+             required: Mapping[str, tuple[Any, str]] | None = None) -> dict[str, Any]:
+    """``edit_chart``'s ``add`` arguments checked and read, before anything is made:
+    ``{"labels", "legend", "category_order", "scale", "look"}`` -- the categories (a
+    scatter's or bubble's x values), what ``add_chart`` takes for the legend and the order,
+    the scale :func:`finish_add` applies, and the look (:func:`add_style_actions`).
+    ``required`` is what else the format needs, ``{name: (given, what it is)}``, checked
+    after ``chart_type`` and ``data`` (a deck's ``box``)."""
+    from ..tools.results import ToolError
+
+    chart_type = need(None, "add", "chart_type", chart_type)
+    data = need(None, "add", "data", data)
+    for name, (given, what) in (required or {}).items():
+        if given is None:
+            raise ToolError("invalid_arguments", f"add needs {name}: {what}", field=name)
+    if chart_type in ("scatter", "bubble"):
+        if values is None or categories is not None:
+            raise ToolError("invalid_arguments", f"a {chart_type} chart takes its x values in "
+                            "values, not categories", field="values")
+        labels = list(values)
+    else:
+        categories = need(None, "add", "categories", categories)
+        if values is not None:
+            raise ToolError("invalid_arguments", "values are a scatter or bubble chart's x "
+                            "values; give each series' values in data", field="values")
+        labels = list(categories)
+    if len(labels) * max(len(data), 1) > MAX_ADD_VALUES:
+        raise ToolError("limit", f"at most {MAX_ADD_VALUES:,} chart values", field="data")
+    if position not in (None, "none", *LEGEND_POSITIONS):
+        raise ToolError("invalid_arguments", f"{position} is a label position; a legend is "
+                        "right, left, top, bottom or none", field="position")
+    look = add_style_actions(chart_type, data, data_labels=data_labels, colors=colors,
+                             style=style, part=part)
+    reverse = bool((scale or {}).get("reverse")) and axis == "category"
+    return {"labels": labels,
+            "legend": None if position == "none" else (position or "default"),
+            "category_order": "reversed" if reverse else "normal",
+            "scale": {k: v for k, v in (scale or {}).items() if not (reverse and k == "reverse")},
+            "look": look}
+
+
+def finish_add(chart: Any, chart_type: str, plan: Mapping[str, Any], *,
+               axis: str | None = None, gridlines: str | None = None) -> None:
+    """Give the chart ``add`` just made from ``plan`` (:func:`add_plan`) its scale, minor
+    gridlines and look, inside the same undo step: a scale without ``axis`` is the chart's
+    one value axis (refused, and undone, if it has more)."""
+    rest = plan["scale"]
+    if rest:
+        apply_style_action(chart, "set_axis_scale", scale=rest,
+                           axis=axis or scale_axis(chart, rest, action="add with scale"))
+    if gridlines not in (None, "major", "none"):
+        apply_style_action(chart, "set_gridlines", gridlines=gridlines,
+                           axis="y" if chart_type in ("scatter", "bubble") else "value")
+    apply_add_style(chart, plan["look"])
+
+
+def chart_categories(chart: Any) -> list:
+    """The categories a result lists: ISO dates for dates kept as serials, else the labels
+    as they are (numbers stay numbers)."""
+    return category_labels(chart) if chart.category_dates is not None else list(chart.categories)
+
+
+def chart_json(chart: Any, key: str = "address") -> dict[str, Any]:
+    """What every ``edit_chart`` result holds: the chart under ``key`` (a deck's
+    ``address``, a document's ``id``: :attr:`~.chart.Chart.address`), its type, title,
+    categories, series, legend and number formats, its categories' format when they are
+    dates, its gap width when it has bars."""
+    data: dict[str, Any] = {
+        key: chart.address, "type": "dot" if chart.is_dot else chart.chart_type,
+        "title": chart.title, "categories": chart_categories(chart),
+        "series": [{"name": series.name, "values": list(series.values)}
+                   for series in chart.series],
+        "legend": chart.has_legend, "number_formats": chart.number_formats}
+    if chart.category_dates is not None:
+        # Dates kept as serials: listed as ISO dates, and how the chart shows them.
+        data["category_format"] = chart.category_format
+    if chart.gap_width is not None:
+        data["gap_width"] = chart.gap_width
+    return data
+
+
+def chart_read_json(chart: Any, key: str = "address") -> dict[str, Any]:
+    """``read``'s result: :func:`chart_json`, each axis' title, the look
+    (:func:`chart_style_json`) and what the embedded workbook holds (``"unreadable: ..."``
+    when it cannot be read)."""
+    data = chart_json(chart, key)
+    data["axes"] = {axis: chart.axis_title(axis) for axis in chart.axes}
+    data.update(chart_style_json(chart))
+    try:
+        data["workbook"] = chart.workbook_values()
+    except Exception as error:  # noqa: BLE001 -- a chart without a readable workbook
+        data["workbook"] = f"unreadable: {error}"
+    return data
+
+
+def apply_smartart_action(diagram: Any, action: str, *, node: Any = None,
+                          text: str | None = None) -> None:
+    """Run one of :data:`SMARTART_ACTIONS`: ``node`` resolved by :func:`resolve_node` (for
+    ``add_child`` the parent); no ``text`` is empty text."""
+    chosen = None if action == "add_node" else resolve_node(diagram, node, action)
+    if action == "set_text":
+        diagram.set_text(chosen, text or "")
+    elif action == "add_node":
+        diagram.add_node(text or "")
+    elif action == "remove_node":
+        diagram.remove_node(chosen)
+    elif action == "add_child":
+        diagram.add_node(text or "", parent=chosen)
+    else:  # pragma: no cover -- the schema's enum
+        raise ChartDataError(f"unknown action {action!r}")
+
+
+def smartart_json(diagram: Any) -> dict[str, Any]:
+    """What an ``edit_smartart`` result holds: every node, depth first, as ``{n, text,
+    level}``."""
+    return {"nodes": [{"n": index, "text": node.text, "level": node.level}
+                      for index, node in enumerate(diagram.nodes)]}
+
+
+__all__ = ["ADD_NEEDS", "DATA_ACTIONS", "LEGEND_POSITIONS", "MAX_ADD_VALUES", "SMARTART_ACTIONS",
+           "STYLE_ACTIONS", "add_plan", "apply_data_action", "apply_smartart_action",
+           "chart_categories", "chart_json", "chart_read_json", "finish_add", "legend_position",
+           "need", "smartart_json", "add_style_actions", "apply_add_style", "apply_style_action",
            "chart_style_json", "gridline_arguments", "resolve_category", "resolve_node",
            "resolve_series", "scale_arguments"]
