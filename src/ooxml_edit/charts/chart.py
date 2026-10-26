@@ -629,6 +629,22 @@ class Chart(ChartStyling):
         return None
 
     @property
+    def number_formats(self) -> dict[str, str | None]:
+        """What decides how numbers look on the chart: ``{"values", "data_labels",
+        "value_axis"}``.  ``values`` is :attr:`number_format`; ``data_labels`` the format
+        of the first data label that shows a value (``None`` when none does); ``value_axis``
+        the value axis's (``None`` without one).  A source-linked format reads as the
+        values' own::
+
+            chart.number_formats
+            # {'values': 'General', 'data_labels': None, 'value_axis': 'General'}
+        """
+        root = self._root()
+        values = self.number_format
+        return {"values": values, "data_labels": _label_format(root, values),
+                "value_axis": _format_of(self._axis(root, "value"), values)}
+
+    @property
     def title(self) -> str | None:
         """The title's text; ``None`` when the chart shows none of its own."""
         return _title_text(find(self._root(), "c:chart/c:title"))
@@ -1546,6 +1562,55 @@ def _labels_show_values(holder: Element | None) -> bool:
         return False
     shown = holder.find(qn("c:showVal"))
     return shown is not None and shown.get("val", "1") in ("1", "true")
+
+
+def _flag(owner: Element, tag: str) -> bool | None:
+    node = owner.find(qn(tag))
+    return None if node is None else node.get("val", "1") in ("1", "true")
+
+
+def _shows_number(owner: Element | None) -> bool | None:
+    """Whether a ``c:dLbls`` or ``c:dLbl`` shows a value or a percentage; ``None`` when it
+    does not say."""
+    if owner is None:
+        return None
+    if _flag(owner, "c:delete"):
+        return False
+    flags = [_flag(owner, "c:showVal"), _flag(owner, "c:showPercent")]
+    if all(flag is None for flag in flags):
+        return None
+    return any(flags)
+
+
+def _format_of(owner: Element | None, values: str | None) -> str | None:
+    """The format code ``owner`` (an axis, ``c:dLbls`` or ``c:dLbl``) gives its numbers:
+    ``values`` when it links to the source or says none."""
+    if owner is None:
+        return None
+    node = owner.find(qn("c:numFmt"))
+    if node is None or node.get("sourceLinked") in ("1", "true"):
+        return values
+    return node.get("formatCode")
+
+
+def _label_format(root: Element, values: str | None) -> str | None:
+    """The format of the first data label that shows a number: a point's own ``c:dLbl``
+    wins over its series' ``c:dLbls``, which wins over its plot's."""
+    for series in series_of(root):
+        own = series.element.find(qn("c:dLbls"))
+        plot = series.plot.find(qn("c:dLbls")) if series.plot is not None else None
+        points = {node.find(qn("c:idx")).get("val"): node
+                  for node in (own.findall(qn("c:dLbl")) if own is not None else [])
+                  if node.find(qn("c:idx")) is not None}
+        for index in range(max(series.values.count, 1)):
+            for owner in (points.get(str(index)), own, plot):
+                shown = _shows_number(owner)
+                if shown is None:
+                    continue
+                if shown:
+                    return _format_of(owner, values)
+                break
+    return None
 
 
 def _label_size(root: Element) -> int | None:
