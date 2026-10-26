@@ -4,6 +4,21 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet. Each vers
 reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
 earlier ones were never tagged.
 
+## 0.68.0 -- unreleased
+- **`ooxml_edit.pictures`** (round 17, P6), new and optional, held format-neutral as
+  `charts` is (`tests/test_pictures_neutrality.py`): an SVG picture's DrawingML and its
+  recolouring, moved from pptx-agent's `edit/svgpicture.py` so docx-agent tints an icon the
+  same way -- `looks_like_svg`, `parse` (untrusted: no document type, no entities, no
+  network, at most `SVG_LIMIT` bytes; `SvgError`, an `ArgumentError`), `native_size`,
+  `svg_blip` / `attach` / `drop` (the blip's `{96DAC541-...}` extension), `recolor`
+  (PowerPoint's Graphics Fill and Outline, as pptx-agent measured them in PowerPoint for
+  Mac on 2026-10-15), `theme_class`, `THEME_SLOTS`, `stroke_units`. Unchanged in what it
+  writes; pptx-agent's module re-exports the names. Word draws such an SVG (not its PNG
+  fallback) and resolves the `MsftOfcThm_..._v2` class against the document's theme
+  (measured in Word for Mac on 2026-10-26, docx-agent's round 17).
+- `docs/USED-BY.md`: docx-agent now imports `ooxml_edit.tools.assets` (`fetch`, `find`,
+  `MAX_RESULTS`) and `FolderCatalogue` too, for its own asset catalogue setting.
+
 ## 0.67.0 -- unreleased
 - **`edit_chart` and `edit_smartart` behave the same in a deck and a document** (review,
   S10). The two agents' handlers did the same work twice and differed in six places; the

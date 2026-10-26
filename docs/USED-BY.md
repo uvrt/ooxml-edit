@@ -31,12 +31,14 @@ Each line is a module, then which siblings import what from it.
 - `ooxml_edit.history` -- docx-agent, pptx-agent, xlsx-agent: `History`; docx-agent, pptx-agent: `Snapshottable`
 - `ooxml_edit.markdown` -- xlsx-agent: `Line`, `Run`, `merge`, `parse`, `plain`, `to_markdown`
 - `ooxml_edit.opc` -- docx-agent, pptx-agent, xlsx-agent: `OpcPackage`, `REL_OFFICE_DOCUMENT`, `rels_path_for`; docx-agent, pptx-agent: `CONTENT_TYPES_PART`, `Relationship`, `normalize_part_path`; pptx-agent: `RELS_NS`, `REL_IMAGE`, `numbered_template`, `part_for_rels`, `resolve_target`
+- `ooxml_edit.pictures` -- docx-agent: `SVG_CONTENT_TYPE`, `attach`, `looks_like_svg`, `native_size`, `parse`, `recolor`, `theme_class`
+- `ooxml_edit.pictures.svg` -- pptx-agent: `ASVG_NS`, `SVG_BLIP_EXT_URI`, `SVG_CONTENT_TYPE`, `SVG_LIMIT`, `SVG_NS`, `THEME_SLOTS`, `attach`, `drop`, `looks_like_svg`, `native_size`, `recolor`, `stroke_units`, `svg_blip`, `theme_class`
 - `ooxml_edit.provenance` -- docx-agent, pptx-agent: `RecordError`, `dumps`, `loads`; pptx-agent: `VERSION`, `facts_after_edit`, `facts_found`, `offset`, `place`, `record`
 - `ooxml_edit.sheets` -- xlsx-agent: `Area`, `Cell`, `Formula`, `MAX_COLUMN`, `MAX_ROW`, `MAX_TEXT`, `RichText`, `column_index`, `column_letters`, `date_serial`, `number_text`, `outside_footprint`, `rich_runs`
 - `ooxml_edit.stamp` -- pptx-agent: `ExtensionStamp`
-- `ooxml_edit.tools` -- docx-agent, pptx-agent, xlsx-agent: `CORE`, `Dataset`, `DatasetEntry`, `DocumentFormat`, `ROLES`, `Result`, `ToolError`, `ToolGroup`, `Toolbox`, `array`, `boolean`, `integer`, `number`, `obj`, `strict_problems`, `string`, `tool`; docx-agent, pptx-agent: `InProcess`, `REVIEW`, `SubprocessPool`, `names_as`, `page_list`, `page_text`, `render`, `worker`, `worker_task`; docx-agent: `ACCEPT`, `content_key`; pptx-agent: `FolderCatalogue`, `Param`, `collect_warnings`; xlsx-agent: `CACHE_EXTERNAL`, `CACHE_STATUSES`, `DATASET_ID`, `DATASET_PREFIX`, `REF`
+- `ooxml_edit.tools` -- docx-agent, pptx-agent, xlsx-agent: `CORE`, `Dataset`, `DatasetEntry`, `DocumentFormat`, `ROLES`, `Result`, `ToolError`, `ToolGroup`, `Toolbox`, `array`, `boolean`, `integer`, `number`, `obj`, `strict_problems`, `string`, `tool`; docx-agent, pptx-agent: `FolderCatalogue`, `InProcess`, `REVIEW`, `SubprocessPool`, `names_as`, `page_list`, `page_text`, `render`, `worker`, `worker_task`; docx-agent: `ACCEPT`, `content_key`; pptx-agent: `Param`, `collect_warnings`; xlsx-agent: `CACHE_EXTERNAL`, `CACHE_STATUSES`, `DATASET_ID`, `DATASET_PREFIX`, `REF`
 - `ooxml_edit.tools.adapters` -- docx-agent, pptx-agent, xlsx-agent: `anthropic_problems`, `openai_problems`; docx-agent, pptx-agent: `definitions_for`; xlsx-agent: `free_strings`
-- `ooxml_edit.tools.assets` -- pptx-agent: `MAX_RESULTS`, `fetch`, `find`
+- `ooxml_edit.tools.assets` -- docx-agent, pptx-agent: `MAX_RESULTS`, `fetch`, `find`
 - `ooxml_edit.tools.hints` -- docx-agent, pptx-agent, xlsx-agent: `tool_hints`
 - `ooxml_edit.tools.limits` -- xlsx-agent: `LimitError`, `Limits`, `check_package`
 - `ooxml_edit.tools.render` -- docx-agent, pptx-agent: `Layout`, `RendererBase`, `View`, `draw`, `draw_tiles`, `fingerprint`, `png_size`, `system_fonts`, `warm_up`; docx-agent: `lay_out_views`; pptx-agent: `raster_key`, `render_views`
