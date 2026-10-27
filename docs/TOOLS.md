@@ -660,8 +660,9 @@ an `atomic` batch with one runs nothing; `batch` itself is in every role set.
 
 *What is sent.* `definitions(roles=...)` sends only the roles' tools, and a mixed tool's
 `action` enum only their actions (a reviewer's `edit_chart` offers `read` alone, its
-comments tool `list`, `add`, `reply`, `edit`): definitions differ per role set, each stable for the
-cache. The core is the roles' core tools; a role set without `edit` also loads its
+comments tool `list`, `add`, `reply`, `edit`), without the parameters only other actions take
+(`Tool.action_fields`: a reviewer's tracked changes, `list` alone, have no `ids` or `all`):
+definitions differ per role set, each stable for the cache. The core is the roles' core tools; a role set without `edit` also loads its
 reviewing tools there (`Tool.review_core`: the comments tool, a deck's slide comparison,
 Word's tracked changes) when it has one of their own actions (not only a comment's text
 edit), which would otherwise wait in their groups. `allowed_tools(roles=...)` and

@@ -4,6 +4,15 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet. Each vers
 reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
 earlier ones were never tagged.
 
+## 0.69.0 -- unreleased
+- **`Tool.action_fields`** (round 17; `tool(..., action_fields=...)`): the optional
+  parameters that only some actions take, `{"ids": ("accept", "reject")}`. A role set
+  offered none of a parameter's actions is sent the definition without it, as its `action`
+  enum already lists only its actions -- a reviewer's Word tracked changes (`list` alone)
+  no longer offer `ids` and `all`, which the model was asked for in the online strict test
+  and left out. Checked when the tool is made (an optional parameter, actions of the
+  tool's); part of `same_definition`. No tool's definitions change until it names some.
+
 ## 0.68.0 -- unreleased
 - **`ooxml_edit.pictures`** (round 17, P6), new and optional, held format-neutral as
   `charts` is (`tests/test_pictures_neutrality.py`): an SVG picture's DrawingML and its

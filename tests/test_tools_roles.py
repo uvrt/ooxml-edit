@@ -157,6 +157,36 @@ def test_a_definition_with_a_wrong_role_is_refused_when_made():
                                "action": string("What.", enum=["read"])},
              action_roles={"read": "owner"})(lambda call, doc, action: 0)
 
+    with pytest.raises(SubsetError, match="'every', which is not an optional parameter"):
+        tool("t_bad", "Bad.", {"doc": string("Document id."),
+                               "action": string("What.", enum=["read"])},
+             action_fields={"every": ["read"]})(lambda call, doc, action: 0)
+    with pytest.raises(SubsetError, match="the action 'publish', which is not an action"):
+        tool("t_bad", "Bad.", {"doc": string("Document id."),
+                               "action": string("What.", enum=["read"]),
+                               "all": boolean("Every one.", optional=True)},
+             action_fields={"all": ["publish"]})(lambda call, doc, action, all=False: 0)
+
+
+def test_a_parameter_of_actions_a_role_set_is_not_offered_is_not_sent():
+    """Round 17: a reviewer offered only ``list`` is not sent ``accept``'s parameters."""
+    changes = tool("t_changes_by_id", "Tracked changes: list, accept or reject them.",
+                   {"doc": string("Document id."),
+                    "action": string("What to do.", enum=["list", "accept", "reject"]),
+                    "ids": array(string(), "accept, reject: these.", optional=True),
+                    "author": string("Only this author's.", optional=True)},
+                   kind="docx", mutates=True,
+                   reads=lambda arguments: arguments.get("action") == "list",
+                   action_roles={"list": REVIEW, "accept": ACCEPT, "reject": ACCEPT},
+                   action_fields={"ids": ["accept", "reject"]})(
+        lambda call, doc, action, ids=None, author=None: 0)
+    review = changes.for_roles([REVIEW])
+    assert review.actions == ["list"]
+    assert list(review.schema["properties"]) == ["doc", "action", "author"]
+    for roles in ([ACCEPT], [REVIEW, ACCEPT], ROLES):
+        assert "ids" in changes.for_roles(roles).schema["properties"]
+    assert "ids" in changes.schema["properties"]          # the tool itself keeps it
+
 
 # -- the default: the toolbox as without roles --------------------------------------------------
 
