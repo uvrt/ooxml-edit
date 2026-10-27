@@ -242,6 +242,10 @@ class Tool:
     #: the tool's (``{"read": "review"}`` on ``edit_chart``).  A role set's definitions offer
     #: only the actions of its roles.
     action_roles: Mapping[str, str] = field(default_factory=dict)
+    #: For a tool with an ``action`` argument: the optional parameters that apply only to
+    #: some actions (``{"ids": ("accept", "reject")}`` on Word's tracked changes).  A role
+    #: set offered none of a parameter's actions is not sent the parameter either.
+    action_fields: Mapping[str, Sequence[str]] = field(default_factory=dict)
     #: For a call whose action does not settle its role: a function of the arguments giving
     #: the role it needs instead, or ``None`` for its action's (a comment reply that also
     #: resolves the thread needs ``resolve``).
@@ -317,7 +321,8 @@ class Tool:
 
     def for_roles(self, roles: Iterable[str]) -> "Tool | None":
         """The tool as a role set is sent it: itself, ``None`` when it is in none of the
-        roles' toolsets, or a copy whose ``action`` enum lists only the roles' actions --
+        roles' toolsets, or a copy whose ``action`` enum lists only the roles' actions (and
+        without a parameter of :attr:`action_fields` none of those actions takes) --
         in the core, for a :attr:`review_core` tool and a role set without ``edit`` that has
         one of its own actions (not only one every role has)."""
         roles = frozenset(roles)
@@ -335,6 +340,9 @@ class Tool:
         if len(allowed) != len(actions):
             sent.schema = copy.deepcopy(self.schema)
             sent.schema["properties"]["action"]["enum"] = allowed
+            for name, applies in self.action_fields.items():
+                if not set(applies) & set(allowed):
+                    del sent.schema["properties"][name]
         return sent
 
     def optional_parameters(self) -> list[str]:
@@ -368,6 +376,8 @@ class Tool:
             other.reads) and tuple(self.datasets) == tuple(other.datasets) \
             and (self.role, dict(self.action_roles), self.call_role, self.review_core) == (
                 other.role, dict(other.action_roles), other.call_role, other.review_core) \
+            and {k: tuple(v) for k, v in self.action_fields.items()} \
+            == {k: tuple(v) for k, v in other.action_fields.items()} \
             and tuple(self.sources) == tuple(other.sources) \
             and tuple(self.facts) == tuple(other.facts) \
             and dict(self.aliases) == dict(other.aliases)
@@ -437,6 +447,20 @@ def definition_problems(tool: Tool) -> list[str]:
             if role not in (*ROLES, ANY_ROLE):
                 problems.append(f"action_roles gives {action!r} the role {role!r}, which is "
                                 f"not one of {', '.join((*ROLES, ANY_ROLE))}")
+    if tool.action_fields:
+        actions = (properties.get("action") or {}).get("enum") or ()
+        required = set(tool.schema.get("required") or ())
+        for name, applies in tool.action_fields.items():
+            if name not in properties or name in required:
+                problems.append(f"action_fields names {name!r}, which is not an optional "
+                                "parameter")
+            if isinstance(applies, str) or not applies:
+                problems.append(f"action_fields gives {name!r} {applies!r}: a list of actions")
+                continue
+            for action in applies:
+                if action not in actions:
+                    problems.append(f"action_fields gives {name!r} the action {action!r}, "
+                                    "which is not an action")
     if tool.route is not None and tool.route not in properties:
         problems.append(f"route names {tool.route!r}, which is not a parameter")
     if not callable(tool.documents):
@@ -489,7 +513,8 @@ def tool(name: str, description: str, params: Mapping[str, Param] | None = None,
          aliases: Mapping[str, Any] | None = None, role: str | None = None,
          action_roles: Mapping[str, str] | None = None,
          call_role: Callable[[Mapping[str, Any]], str | None] | None = None,
-         review_core: bool = False) -> Callable[[Handler], Tool]:
+         review_core: bool = False,
+         action_fields: Mapping[str, Sequence[str]] | None = None) -> Callable[[Handler], Tool]:
     """Make a :class:`Tool` of a handler.  ``kind`` restricts it to one document kind;
     ``reads`` marks the calls of a changing tool that only read (:attr:`Tool.reads`);
     ``aliases`` the argument names read as its own (:attr:`Tool.aliases`);
@@ -498,7 +523,8 @@ def tool(name: str, description: str, params: Mapping[str, Param] | None = None,
     may hold references to one value (:attr:`Tool.facts`); ``role``, ``action_roles`` and
     ``call_role`` the roles its calls need (:attr:`Tool.role`; by default ``edit`` for a
     changing tool, ``review`` for a reading one); ``review_core`` puts it in a reviewer's
-    core (:attr:`Tool.review_core`)."""
+    core (:attr:`Tool.review_core`); ``action_fields`` the parameters only some actions
+    take, left out for a role set offered none of them (:attr:`Tool.action_fields`)."""
 
     def make(handler: Handler) -> Tool:
         return Tool(name=name, description=description, schema=build_schema(params or {}),
@@ -508,7 +534,8 @@ def tool(name: str, description: str, params: Mapping[str, Param] | None = None,
                     datasets=tuple(datasets), sources=tuple(sources), facts=tuple(facts),
                     reads=reads, aliases=dict(aliases or {}), role=role,
                     action_roles=dict(action_roles or {}), call_role=call_role,
-                    review_core=review_core)
+                    review_core=review_core,
+                    action_fields={k: tuple(v) for k, v in (action_fields or {}).items()})
 
     return make
 
