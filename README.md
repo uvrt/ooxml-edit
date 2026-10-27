@@ -59,6 +59,10 @@ package.save("out.zip")
 - **`ooxml_edit.charts`** (optional): charts with their embedded workbooks, new charts from
   data, and SmartArt diagrams, edited the same way in a deck or a Word document.
   See [docs/CHARTS.md](docs/CHARTS.md).
+- **`ooxml_edit.pictures`** (optional): an SVG picture as Office stores one (the blip's SVG
+  extension) and the SVG recoloured as PowerPoint's Graphics Fill and Outline rewrite one,
+  a theme colour kept by its class -- the same in a deck and a Word document, which draws
+  it alike.
 - **`ooxml_edit.sheets`** (optional): a workbook's cells written losslessly -- text, rich
   text (runs with the cell's font, bold, italic, struck through), numbers, booleans, dates in the workbook's date system, formulas, blanks -- with shared strings,
   cell formats, rows with or without `r`, tables, the calculation chain and `calcPr` kept
