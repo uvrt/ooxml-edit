@@ -272,8 +272,9 @@ class Tool:
     #: (``include``'s defaults per kind).  A tool of several kinds is sent the shared one.
     kind_descriptions: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
     #: For a tool with a handler for any kind (``None``: the session tools, ``undo``): the
-    #: kinds it serves in a toolbox, its formats', which :class:`~.dispatch.Toolbox` sets
-    #: on its own copy so that :attr:`kind_fields` apply to it too.  ``None``: every kind.
+    #: kinds it serves in a toolbox -- those its other tools' handlers serve, the libraries
+    #: loaded -- which :class:`~.dispatch.Toolbox` sets on its own copy so that
+    #: :attr:`kind_fields` apply to it too.  ``None``: every kind.
     #: Not part of the definition (:meth:`same_definition`).
     kinds_served: tuple[str, ...] | None = None
 
@@ -310,7 +311,7 @@ class Tool:
     def served_kinds(self) -> set[str] | None:
         """The kinds the tool's handlers serve; ``None`` for every kind (a handler for any
         kind outside a toolbox, or none: a listing), whose definition is sent whole.  A
-        handler for any kind serves the toolbox's formats (:attr:`kinds_served`)."""
+        handler for any kind serves its toolbox's libraries' kinds (:attr:`kinds_served`)."""
         kinds = set(self.handlers)
         if None in kinds and self.kinds_served:
             return {kind for kind in kinds if kind is not None} | set(self.kinds_served)

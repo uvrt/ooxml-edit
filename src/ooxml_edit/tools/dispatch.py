@@ -684,17 +684,21 @@ def _with_format_tools(tools: dict[str, Tool],
     return tools
 
 
-def _served(tools: dict[str, Tool], formats: Mapping[str, DocumentFormat]) -> dict[str, Tool]:
+def _served(tools: dict[str, Tool]) -> dict[str, Tool]:
     """``tools``, each with a handler for any kind and parameters of some kinds only
-    (``undo``'s ``scope``) copied with the kinds it serves here, its formats'
-    (:attr:`Tool.kinds_served`), so it is sent only theirs."""
-    if not formats:
+    (``undo``'s ``scope``) copied with the kinds it serves here -- the kinds the other
+    tools' handlers serve, the libraries loaded (:attr:`Tool.kinds_served`) -- so it is sent
+    only theirs.  The libraries decide, not the formats configured, so configuring a
+    format changes no definition."""
+    kinds = tuple(dict.fromkeys(kind for item in tools.values() for kind in item.handlers
+                                if kind is not None))
+    if not kinds:
         return tools
     for name, item in tools.items():
         if None in item.handlers and (item.kind_fields or item.kind_values
                                       or item.kind_descriptions):
             served = copy.copy(item)
-            served.kinds_served = tuple(formats)
+            served.kinds_served = kinds
             tools[name] = served
     return tools
 
@@ -753,8 +757,7 @@ class Toolbox:
         call outside the session's roles is refused, inside ``batch`` too."""
         self.formats: dict[str, DocumentFormat] = {fmt.kind: fmt for fmt in formats}
         self.tools: dict[str, Tool] = _served(_with_format_tools(merge_tools(tools),
-                                                                 self.formats.values()),
-                                              self.formats)
+                                                                 self.formats.values()))
         #: Claude's strict priority: the application's order, else each format's in turn.
         self.strict_first: list[str] = list(dict.fromkeys(
             strict_first if strict_first is not None

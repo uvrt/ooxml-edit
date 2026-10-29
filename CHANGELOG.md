@@ -32,9 +32,10 @@ earlier ones were never tagged.
   - `save_document`: `clean` a document's (another kind's handler refuses `clean: true`).
   - `undo`: `scope` a deck's and a workbook's (their formats' `undo_scope`; a document's
     undo refuses it, document-wide), described per kind. `undo`'s handler serves every
-    kind, so the toolbox gives its own copy the kinds of its formats
-    (`Tool.kinds_served`, not part of the definition); outside a toolbox, and in a toolbox
-    of every kind, it is whole.
+    kind, so the toolbox gives its own copy the kinds its libraries' tools serve
+    (`Tool.kinds_served`, not part of the definition; the libraries loaded, not the formats
+    configured, so configuring a format changes no definition); outside a toolbox, and in
+    a toolbox of every kind, it is whole.
 
   Offline (characters / 3.5), old -> new: a deck toolbox's core 3,822 -> 3,545, every
   definition 13,442 -> 13,166; a Word toolbox's core 2,816 -> 2,436, every definition
