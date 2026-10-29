@@ -68,6 +68,7 @@ Checks run once, at the end.
 
 from __future__ import annotations
 
+import copy
 import difflib
 import json
 import logging
@@ -91,17 +92,16 @@ from .registry import (ACCEPT, ANY_ROLE, CORE, EDIT, RESOLVE, ROLES, Tool, ToolG
                        merge_tools, role_set)
 from .results import Image, Result, ToolError
 from .schema import CallError, validate_call
-from .session import (NO_CONTEXT, Clock, DocumentEntry, DocumentFormat, Output, Session,
-                      SessionView, StepOwner, doc_order, font_dirs_of, locale_of, narrowed,
-                      part_entries)
+from .session import (NO_CONTEXT, REF, REF_USE, Clock, DocumentEntry, DocumentFormat, Output,
+                      Session, SessionView, StepOwner, doc_order, font_dirs_of, locale_of,
+                      narrowed, part_entries)
 from .sources import Rows, qualify, resolve as resolve_rows
 from .rendercache import ContentStore
 from .worker import WorkerPool, default_workers, refuse_while_bootstrapping, run_all
 
-
-#: A ref's name: what ``$name`` may say.
-REF = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
-_REF_USE = re.compile(r"^\$([a-z][a-z0-9_]{0,31})(/.*)?$")
+#: A ref's name (``REF``) and a ref's use, ``$name`` or ``$name/rest`` (:mod:`.session`'s,
+#: whose :meth:`~.session.Session.resolve_ref` reads them as a call does).
+_REF_USE = REF_USE
 #: What :func:`fold_ref` folds: letters, digits, ``_`` and ``-``, from a letter.
 _FOLDABLE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*$")
 
@@ -684,6 +684,25 @@ def _with_format_tools(tools: dict[str, Tool],
     return tools
 
 
+def _served(tools: dict[str, Tool]) -> dict[str, Tool]:
+    """``tools``, each with a handler for any kind and parameters of some kinds only
+    (``undo``'s ``scope``) copied with the kinds it serves here -- the kinds the other
+    tools' handlers serve, the libraries loaded (:attr:`Tool.kinds_served`) -- so it is sent
+    only theirs.  The libraries decide, not the formats configured, so configuring a
+    format changes no definition."""
+    kinds = tuple(dict.fromkeys(kind for item in tools.values() for kind in item.handlers
+                                if kind is not None))
+    if not kinds:
+        return tools
+    for name, item in tools.items():
+        if None in item.handlers and (item.kind_fields or item.kind_values
+                                      or item.kind_descriptions):
+            served = copy.copy(item)
+            served.kinds_served = kinds
+            tools[name] = served
+    return tools
+
+
 class Toolbox:
     """The tools of one or more libraries, ready for a provider and a session."""
 
@@ -737,8 +756,8 @@ class Toolbox:
         default, is all four: every tool, the definitions and prompt as without roles.  A
         call outside the session's roles is refused, inside ``batch`` too."""
         self.formats: dict[str, DocumentFormat] = {fmt.kind: fmt for fmt in formats}
-        self.tools: dict[str, Tool] = _with_format_tools(merge_tools(tools),
-                                                         self.formats.values())
+        self.tools: dict[str, Tool] = _served(_with_format_tools(merge_tools(tools),
+                                                                 self.formats.values()))
         #: Claude's strict priority: the application's order, else each format's in turn.
         self.strict_first: list[str] = list(dict.fromkeys(
             strict_first if strict_first is not None

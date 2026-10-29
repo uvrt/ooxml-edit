@@ -4,6 +4,59 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet. Each vers
 reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
 earlier ones were never tagged.
 
+## 0.70.0 -- unreleased
+- **Each kind's toolbox is sent the shared tools with its own parameters only** (round 23,
+  V3). `Tool.kind_fields`, `Tool.kind_values` and `Tool.kind_descriptions` (and the same on
+  `shared.Spec`): the optional parameters of a shared tool that apply to some kinds only
+  (`{"boxes": ("pptx",)}`), the enum values that do (`{"include": {"fit": ("pptx",)}}`, an
+  enum or an array's items' enum), and a parameter's description for a tool of one kind
+  (`{"include": {"docx": "Default: validate, reflow, fields."}}`). One definition stays in
+  `shared.SPECS`; a tool whose handlers serve none of a parameter's (a value's) kinds leaves
+  it out of `Tool.canonical`, so of every provider's definition and of
+  `optional_parameters()`. A toolbox of several kinds, or a definition without handlers
+  (`shared.definition`), is sent the whole definition, so the libraries still merge.
+  Validation is unchanged: a call is checked against the whole schema, so one that still
+  passes another kind's parameter or value (an older prompt) gets that handler's answer, as
+  before. Applied, each checked against the handlers:
+  - `check`: `slides`, `boxes`, `spacing`, `contrast` a deck's; `pages`, `min_size`,
+    `styles` a document's; `include` `fit`, `collisions`, `facts`, `design` a deck's
+    (a document's handler refuses them), `reflow`, `fields` a document's (a deck's notes
+    them "documents only"), `validate`, `layout`, `app` both's; its default described per
+    kind. `contrast` stays a deck's: Word text against shading or a page colour is not
+    measured (docx-agent refuses it).
+  - `find_text`: `slides` a deck's; `range` a document's and a workbook's (described per
+    kind); `stories` a deck's and a document's, its `layouts` and `masters` a deck's (a
+    document reads any other value as its body), described per kind.
+  - `replace_text`: `slides` a deck's; `range` a document's; `stories` as `find_text`'s.
+  - `render`: `slides` a deck's, `pages` a document's.
+  - `save_document`: `clean` a document's (another kind's handler refuses `clean: true`).
+  - `undo`: `scope` a deck's and a workbook's (their formats' `undo_scope`; a document's
+    undo refuses it, document-wide), described per kind. `undo`'s handler serves every
+    kind, so the toolbox gives its own copy the kinds its libraries' tools serve
+    (`Tool.kinds_served`, not part of the definition; the libraries loaded, not the formats
+    configured, so configuring a format changes no definition); outside a toolbox, and in
+    a toolbox of every kind, it is whole.
+
+  Offline (characters / 3.5), old -> new: a deck toolbox's core 3,822 -> 3,545, every
+  definition 13,442 -> 13,166; a Word toolbox's core 2,816 -> 2,436, every definition
+  13,194 -> 12,814; a workbook toolbox's core 4,272 -> 4,122, every definition 5,013 ->
+  4,862. `replace_text` is strict: one optional parameter fewer for a deck and for a
+  document (24 -> 23 over each strict set).
+- **`replace_text`'s `regex` is its last parameter** (round 23). With a deck's `slides` no
+  longer sent to a document, `regex` came straight after the required `expect`, and
+  Claude (Sonnet 5.5, strict, effort low) left it out of a Word toolbox's `replace_text` in
+  6 of 6 calls asked for every field (docx-agent's online strict test, 3 of 3 runs); the
+  same definition with `slides` after `regex` kept it in 4 of 4, and with `regex` last in 4
+  of 4 probes and 3 of 3 runs of that test. Strict decoding writes keys in schema order;
+  the order of the other parameters is unchanged and no description changes.
+- **`Session.refs(doc)` and `Session.resolve_ref(doc, value)`** (round 23, V5): a
+  document's refs outside a call, `{name: address}` (a copy, read under the document's
+  lock), and one `$name` or `$name/rest` resolved as a call resolves it (`not_found`
+  naming the document's refs). The application read them from `DocumentEntry.refs` before,
+  which is internal. `REF` and the use pattern `REF_USE` now live in `tools.session`;
+  `tools.dispatch` imports them (`ooxml_edit.tools.REF` is unchanged). No tool definition
+  changes.
+
 ## 0.69.0 -- unreleased
 - **`Tool.action_fields`** (round 17; `tool(..., action_fields=...)`): the optional
   parameters that only some actions take, `{"ids": ("accept", "reject")}`. A role set
