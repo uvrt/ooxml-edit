@@ -91,17 +91,16 @@ from .registry import (ACCEPT, ANY_ROLE, CORE, EDIT, RESOLVE, ROLES, Tool, ToolG
                        merge_tools, role_set)
 from .results import Image, Result, ToolError
 from .schema import CallError, validate_call
-from .session import (NO_CONTEXT, Clock, DocumentEntry, DocumentFormat, Output, Session,
-                      SessionView, StepOwner, doc_order, font_dirs_of, locale_of, narrowed,
-                      part_entries)
+from .session import (NO_CONTEXT, REF, REF_USE, Clock, DocumentEntry, DocumentFormat, Output,
+                      Session, SessionView, StepOwner, doc_order, font_dirs_of, locale_of,
+                      narrowed, part_entries)
 from .sources import Rows, qualify, resolve as resolve_rows
 from .rendercache import ContentStore
 from .worker import WorkerPool, default_workers, refuse_while_bootstrapping, run_all
 
-
-#: A ref's name: what ``$name`` may say.
-REF = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
-_REF_USE = re.compile(r"^\$([a-z][a-z0-9_]{0,31})(/.*)?$")
+#: A ref's name (``REF``) and a ref's use, ``$name`` or ``$name/rest`` (:mod:`.session`'s,
+#: whose :meth:`~.session.Session.resolve_ref` reads them as a call does).
+_REF_USE = REF_USE
 #: What :func:`fold_ref` folds: letters, digits, ``_`` and ``-``, from a letter.
 _FOLDABLE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*$")
 

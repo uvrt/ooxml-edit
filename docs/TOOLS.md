@@ -20,7 +20,7 @@ standard library only, and no provider SDK. The plan it implements is
 | `tools.render` | one render pipeline for every format (review, S5, 0.65.0): a format brings a `Renderer` adapter -- how its bytes become each view's SVG (`lay_out`), what the pixels depend on besides the SVG (`fingerprint`), how an SVG becomes a PNG (`rasterise`, `rasterise_tiles`), what a new worker warms (`warm_up`) -- and the rest is shared: `draw` (the images a version already has, the snapshot, the chunks over the workers with the locks let go, what came back kept by content key and by version), the worker tasks (`worker_task`), the keys (`fingerprint`, `raster_key`), and every PNG checked (`png_size`, `checked_png`). Imports no renderer: the format passes its adapter |
 | `tools.tiles` | contact sheets, format-neutral: `render`'s `sheet` options checked and narrowed to fit (`tiling_of`, `fit`, `check_size`) and the SVG that tiles rendered PNGs with their labels (`tiled_svg`), which a format rasterises |
 | `tools.logs`, `tools.prompts` | call records with argument digests, not content; the shared system-prompt fragment (mechanics only, no house style) and a reviewer's role line |
-| `tools.shared` | the one definition of each tool every format shares (open, new, save, close, undo, find, replace, render, check, charts, SmartArt, properties, reading an input's text) and the generic `batch`; a library adds its handler with `@shared.handler("render", kind=...)`, and lists `shared.SESSION_TOOLS`, whose handlers serve every kind. The one module that names formats, in its descriptions only |
+| `tools.shared` | the one definition of each tool every format shares (open, new, save, close, undo, find, replace, render, check, charts, SmartArt, properties, reading an input's text) and the generic `batch`; a library adds its handler with `@shared.handler("render", kind=...)`, and lists `shared.SESSION_TOOLS`, whose handlers serve every kind. A parameter that only some kinds take is named in the spec's `kind_fields` (`Tool.kind_fields`, 0.70.0): a toolbox is sent the tool without the parameters of kinds its handlers do not serve -- a Word toolbox's `check` has no `slides`, `boxes`, `spacing` or `contrast`, a deck toolbox's no `pages`, `min_size` or `styles`, a toolbox of both all of them -- while a call is still validated against them all, so one that passes another kind's reaches the handler and its refusal, as before. The one module that names formats, in its descriptions only |
 
 ```python
 from ooxml_edit.tools import Toolbox
@@ -90,6 +90,14 @@ one op is `DocumentEntry.savepoint()` -- the document's `savepoint()`, else its 
 with neither keeps what a failing op did. Its ops' arguments are free-form objects, so
 `batch` is the one tool never sent strict: each op is validated by the dispatcher against
 its own tool's schema instead of by constrained decoding.
+
+*Refs outside a call* (0.70.0, round 23, V5). The application reads a document's refs with
+`session.refs("d1")` -- `{name: address}`, a copy taken under the document's lock, as they
+are now (an undo takes back the refs of what it undoes) -- and resolves one with
+`session.resolve_ref("d1", "$intro")` (`$name/rest` too; any other value as given;
+`not_found`, the document's refs as `valid_options`, for a name it has not), as a handler
+does with `call.resolve_ref`. Outside a call no warning can be given, so a camelCase
+`$recNow` is taken as written, not folded. A view (`session.view(...)`) reads the same refs.
 
 **Aliases and refusals.** What a model naturally writes for an argument or a value is read
 as the tool's own before validation, never sent, so it costs no tokens: a string's

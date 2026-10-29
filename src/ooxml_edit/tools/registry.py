@@ -254,6 +254,14 @@ class Tool:
     #: without ``edit``, which has few tools of its own; in its group otherwise, as without
     #: roles.
     review_core: bool = False
+    #: For a shared tool (:mod:`.shared`): the optional parameters that apply only to some
+    #: document kinds (``{"boxes": (kind,)}`` on ``check``).  A tool whose handlers serve
+    #: none of a parameter's kinds is sent without it (:attr:`canonical`): one library's
+    #: toolbox is not offered another's parameters, a toolbox of both is offered all.  The
+    #: dispatcher still validates a call against the whole :attr:`schema`, so one that
+    #: passes such a parameter reaches the handler, whose refusal names the field to use.
+    #: A tool with a handler for any kind (``None``), or with none (a listing), is sent all.
+    kind_fields: Mapping[str, Sequence[str]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         problems = definition_problems(self)
@@ -262,8 +270,20 @@ class Tool:
 
     @property
     def canonical(self) -> dict[str, Any]:
-        """The schema providers are sent: in the common strict subset, no bounds."""
-        return canonical(self.schema)
+        """The schema providers are sent: in the common strict subset, no bounds, without
+        the parameters of kinds it serves none of (:attr:`kind_fields`)."""
+        sent = canonical(self.schema)
+        for name in self.foreign_fields():
+            sent["properties"].pop(name, None)
+        return sent
+
+    def foreign_fields(self) -> list[str]:
+        """The parameters of :attr:`kind_fields` that none of the tool's handlers' kinds
+        takes: left out of what providers are sent."""
+        kinds = set(self.handlers)
+        if not kinds or None in kinds:
+            return []
+        return [name for name, applies in self.kind_fields.items() if not kinds & set(applies)]
 
     @property
     def core(self) -> bool:
@@ -378,6 +398,8 @@ class Tool:
                 other.role, dict(other.action_roles), other.call_role, other.review_core) \
             and {k: tuple(v) for k, v in self.action_fields.items()} \
             == {k: tuple(v) for k, v in other.action_fields.items()} \
+            and {k: tuple(v) for k, v in self.kind_fields.items()} \
+            == {k: tuple(v) for k, v in other.kind_fields.items()} \
             and tuple(self.sources) == tuple(other.sources) \
             and tuple(self.facts) == tuple(other.facts) \
             and dict(self.aliases) == dict(other.aliases)
@@ -461,6 +483,11 @@ def definition_problems(tool: Tool) -> list[str]:
                 if action not in actions:
                     problems.append(f"action_fields gives {name!r} the action {action!r}, "
                                     "which is not an action")
+    for name, applies in tool.kind_fields.items():
+        if name not in properties or name in set(tool.schema.get("required") or ()):
+            problems.append(f"kind_fields names {name!r}, which is not an optional parameter")
+        if isinstance(applies, str) or not applies:
+            problems.append(f"kind_fields gives {name!r} {applies!r}: a list of kinds")
     if tool.route is not None and tool.route not in properties:
         problems.append(f"route names {tool.route!r}, which is not a parameter")
     if not callable(tool.documents):

@@ -4,6 +4,32 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet. Each vers
 reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
 earlier ones were never tagged.
 
+## 0.70.0 -- unreleased
+- **Each kind's toolbox is sent `check` with its own parameters only** (round 23, V3).
+  `Tool.kind_fields` (`shared.Spec(..., kind_fields=...)`): the optional parameters of a
+  shared tool that apply to some kinds only, `{"boxes": ("pptx",)}`. One definition stays
+  in `shared.SPECS`; a tool whose handlers serve none of a parameter's kinds leaves it out
+  of `Tool.canonical`, so of every provider's definition and of
+  `optional_parameters()`. `check`: `slides`, `boxes`, `spacing` and `contrast` are a
+  deck's, `pages`, `min_size` and `styles` a document's. `contrast` stays a deck's: Word
+  text against shading or a page colour is not measured (docx-agent refuses it). A toolbox
+  of both kinds, or a definition without handlers (`shared.definition`), has them all, so
+  the two libraries' tools still merge into one. Validation is unchanged: a call is
+  checked against the whole schema, so one that still passes another kind's parameter
+  (an older prompt) gets that handler's refusal, as before. Checked when the tool is made
+  (an optional parameter, a list of kinds; `Spec`: known kinds); part of
+  `same_definition`. Offline (characters / 3.5): a deck toolbox's `check` 406 -> 312, its
+  core 3,822 -> 3,728, every definition 13,442 -> 13,348; a Word toolbox's `check` 406 ->
+  262, its core 2,816 -> 2,672, every definition 13,194 -> 13,051. `check` is not sent
+  strict: the strict sets are unchanged.
+- **`Session.refs(doc)` and `Session.resolve_ref(doc, value)`** (round 23, V5): a
+  document's refs outside a call, `{name: address}` (a copy, read under the document's
+  lock), and one `$name` or `$name/rest` resolved as a call resolves it (`not_found`
+  naming the document's refs). The application read them from `DocumentEntry.refs` before,
+  which is internal. `REF` and the use pattern `REF_USE` now live in `tools.session`;
+  `tools.dispatch` imports them (`ooxml_edit.tools.REF` is unchanged). No tool definition
+  changes.
+
 ## 0.69.0 -- unreleased
 - **`Tool.action_fields`** (round 17; `tool(..., action_fields=...)`): the optional
   parameters that only some actions take, `{"ids": ("accept", "reject")}`. A role set

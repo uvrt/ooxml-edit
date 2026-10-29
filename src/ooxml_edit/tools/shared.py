@@ -38,7 +38,9 @@ How a call finds its handler:
 A parameter that applies to one format says so in its description (``slides`` for decks,
 ``pages`` and ``range`` for documents, ``find_text``'s ``range`` for workbooks too: a sheet,
 range or table); the handler of another kind answers ``invalid_arguments`` naming the field
-to use instead.  Lengths are points, as everywhere in the tool layer.
+to use instead.  Where a spec names such parameters in ``kind_fields`` (``check``'s, round
+23), a library's toolbox is not even sent another kind's: :attr:`~.registry.Tool.kind_fields`.
+Lengths are points, as everywhere in the tool layer.
 
 The kinds (:data:`KINDS`) are ``ooxml_common.kinds``' main kind per application: ``pptx``,
 ``docx`` and ``xlsx``.  The enums that name them (``new_document``'s ``kind``,
@@ -110,7 +112,8 @@ class Spec:
                  reads: Callable[[Mapping[str, Any]], bool] | None = None,
                  wrap: Callable[[Callable[..., Any]], Callable[..., Any]] | None = None,
                  aliases: Mapping[str, Any] | None = None, role: str | None = None,
-                 action_roles: Mapping[str, str] | None = None) -> None:
+                 action_roles: Mapping[str, str] | None = None,
+                 kind_fields: Mapping[str, tuple[str, ...]] | None = None) -> None:
         self.name = name
         self.description = description
         self.params = dict(params)
@@ -132,6 +135,12 @@ class Spec:
         #: The roles its calls need (:attr:`~.registry.Tool.role`).
         self.role = role
         self.action_roles = dict(action_roles or {})
+        #: The parameters that apply to some kinds only (:attr:`~.registry.Tool.kind_fields`):
+        #: a library's toolbox is sent the tool without the others' parameters.
+        self.kind_fields = {name: tuple(kinds) for name, kinds in (kind_fields or {}).items()}
+        unknown = {kind for kinds in self.kind_fields.values() for kind in kinds} - set(KINDS)
+        if unknown:
+            raise ValueError(f"{name}: kind_fields names {sorted(unknown)}; kinds are {KINDS}")
         #: What every kind's handler runs inside: the shared part of a tool's work (taking
         #: ``edit_chart``'s rows from a source), done once here for every library.
         self.wrap = wrap
@@ -146,7 +155,8 @@ class Spec:
                     batchable=self.batchable, composite=self.composite, refs=self.refs,
                     datasets=self.datasets, sources=self.sources, facts=self.facts,
                     reads=self.reads,
-                    aliases=self.aliases, role=self.role, action_roles=self.action_roles)
+                    aliases=self.aliases, role=self.role, action_roles=self.action_roles,
+                    kind_fields=self.kind_fields)
 
     @property
     def schema(self) -> dict[str, Any]:
@@ -316,7 +326,14 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
                              maximum=400, optional=True),
           "styles": array(string(), "Documents: the allowed paragraph and table styles; "
                           "others listed.", optional=True)},
-         refs=("slides[]",), wrap=lambda fn: _with_layout_options(fn)),
+         refs=("slides[]",), wrap=lambda fn: _with_layout_options(fn),
+         # Round 23, V3: each library's toolbox is sent only its kind's parameters; a call
+         # that passes another's still gets that handler's refusal (kept, as before).
+         # contrast stays a deck's: Word text against shading or a page colour is not
+         # measured (docx-agent refuses it); add "docx" here when it is.
+         kind_fields={"slides": ("pptx",), "boxes": ("pptx",), "spacing": ("pptx",),
+                      "contrast": ("pptx",), "pages": ("docx",), "min_size": ("docx",),
+                      "styles": ("docx",)}),
     # S10, S11: edit_chart reads too
     Spec("edit_chart",
          "Add, read or change a chart. add: a new chart, styled as Office inserts one. read: "

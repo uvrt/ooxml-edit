@@ -50,6 +50,12 @@ of them touched a part it touched; otherwise it is refused as ``entangled``, nam
 later change that depends on it and who made it.  Two callers are the same when their
 contexts are equal.  An undo with no context (the session itself, or a view made without
 one) is as before: the latest change, whoever made it.  See :meth:`Session.undo`.
+
+Refs (round 23, V5).  A creating call may name what it made (``ref``); later calls write
+``$name`` for it.  The application reads a document's refs outside a call with
+:meth:`Session.refs` -- a copy, ``{name: address}`` -- and resolves one with
+:meth:`Session.resolve_ref`, as a call's handler does with
+:meth:`~.dispatch.Call.resolve_ref`.
 """
 
 from __future__ import annotations
@@ -77,6 +83,12 @@ from .results import ToolError
 from ..errors import ArgumentError, ArgumentTypeError
 
 Clock = Callable[[], _dt.datetime]
+
+
+#: A ref's name: what ``$name`` may say.
+REF = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
+#: A ref used in an argument: ``$name``, or ``$name/rest`` (an address inside it).
+REF_USE = re.compile(r"^\$([a-z][a-z0-9_]{0,31})(/.*)?$")
 
 
 def utc_now() -> _dt.datetime:
@@ -878,6 +890,36 @@ class Session:
                                 field="blob") from None
             raise ToolError("invalid_arguments", str(exc), field="blob",
                             valid_options=sorted(self.formats)) from None
+
+    # -- refs --------------------------------------------------------------------------------
+
+    def refs(self, doc_id: str) -> dict[str, str]:
+        """The refs of the open document ``doc_id``: ``{name: address}``, each ``$name`` its
+        calls defined and the address it stands for (``{"intro": "item:3"}``), as they
+        are now -- an undo takes back the refs of what it undoes.  A copy, read under the
+        document's lock: changing it changes nothing.  For the application outside a call
+        (a handler reads :meth:`~.dispatch.Call.refs`, which has the call's own too);
+        ``not_found`` names the open documents."""
+        entry = self.entry(doc_id)
+        with entry.lock:
+            return dict(entry.refs)
+
+    def resolve_ref(self, doc_id: str, value: str) -> str:
+        """``value`` as an address in ``doc_id``: a leading ``$name`` replaced by the address
+        it names, ``$name/rest`` by that address and ``/rest``; any other value as given.
+        ``not_found`` for a name the document has not, with its refs as the valid options --
+        what a call answers (:meth:`~.dispatch.Call.resolve_ref`, which also reads a
+        camelCase ``$recNow`` as ``$rec_now`` with a warning: outside a call no warning can
+        be given, so here the name is taken as written)."""
+        match = REF_USE.match(value) if isinstance(value, str) else None
+        if match is None:
+            return value
+        known = self.refs(doc_id)
+        name, rest = match.group(1), match.group(2) or ""
+        if name not in known:
+            raise ToolError("not_found", f"no ref ${name} in {doc_id}",
+                            valid_options=[f"${key}" for key in sorted(known)])
+        return known[name] + rest
 
     # -- datasets ----------------------------------------------------------------------------
 

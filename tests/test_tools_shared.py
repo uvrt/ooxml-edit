@@ -245,6 +245,87 @@ def test_definitions_meet_each_providers_rules_with_batch_sent_non_strict(toolbo
     assert openai_problems(chat, chat=True) == []
 
 
+DECK_CHECK = ("slides", "include", "boxes", "spacing", "contrast")
+TEXT_CHECK = ("pages", "include", "min_size", "styles")
+
+
+def _checked(kind, takes, given):
+    """A toy check refuses every parameter but its kind's, as the libraries' handlers refuse
+    another kind's (docx-agent: ``boxes is for decks``)."""
+    given = {name: value for name, value in given.items() if value is not None}
+    foreign = sorted(set(given) - set(takes))
+    if foreign:
+        raise ToolError("invalid_arguments", f"{foreign[0]} is not a {kind} parameter",
+                        field=foreign[0])
+    return Result(summary="Checked", data={"given": sorted(given)})
+
+
+def _text_check(call, doc, slides=None, pages=None, include=None, boxes=None, spacing=None,
+                contrast=None, min_size=None, styles=None):
+    return _checked("docx", TEXT_CHECK, dict(slides=slides, pages=pages, include=include,
+                                             boxes=boxes, spacing=spacing, contrast=contrast,
+                                             min_size=min_size, styles=styles))
+
+
+def _deck_check(call, doc, slides=None, pages=None, include=None, boxes=None, spacing=None,
+                contrast=None):
+    return _checked("pptx", DECK_CHECK, dict(slides=slides, pages=pages, include=include,
+                                             boxes=boxes, spacing=spacing, contrast=contrast))
+
+
+def _check_params(box):
+    sent = next(d for d in box.definitions("anthropic", defer=False) if d["name"] == "check")
+    return set(sent["input_schema"]["properties"])
+
+
+def test_each_kinds_toolbox_is_sent_check_with_its_own_parameters_only():
+    """Round 23, V3: one definition (shared.SPECS) and its kind_fields; a toolbox is sent
+    the parameters of the kinds its handlers serve, and validates against them all."""
+    text = shared.handler("check", kind="docx")(_text_check)
+    deck = shared.handler("check", kind="pptx")(_deck_check)
+    with Toolbox([text, *TEXT_TOOLS], formats=[TEXT]) as box:
+        assert _check_params(box) == {"doc", *TEXT_CHECK}
+        assert set(box.tools["check"].optional_parameters()) == set(TEXT_CHECK)
+        session = box.session(clock=CLOCK)
+        session.open(synthetic.outer_package(), "text.docx")
+        # an older prompt's deck parameter still reaches the handler and its refusal
+        for name, value in (("boxes", True), ("spacing", 8), ("contrast", 4.5), ("slides", ["1"])):
+            refused = call(box, session, "check", doc="d1", **{name: value})
+            assert refused.error.code == "invalid_arguments" and refused.error.field == name
+            assert refused.error.message == f"{name} is not a docx parameter"
+        assert call(box, session, "check", doc="d1", min_size=9).data == {"given": ["min_size"]}
+    with Toolbox([deck, *DECK_TOOLS], formats=[DECK]) as box:
+        assert _check_params(box) == {"doc", *DECK_CHECK}
+        session = box.session(clock=CLOCK)
+        session.open(synthetic.outer_package(), "deck.pptx")
+        assert call(box, session, "check", doc="d1", pages=[1]).error.field == "pages"
+        # the shared wrapper's refusal of a document's measures, as before
+        refused = call(box, session, "check", doc="d1", min_size=9)
+        assert refused.error.field == "min_size" and "leave it out" in refused.error.message
+    with Toolbox([text, deck, *TEXT_TOOLS, *DECK_TOOLS], formats=[DECK, TEXT]) as box:
+        assert _check_params(box) == set(shared.SPECS["check"].schema["properties"])
+    # a definition without handlers (a listing) has them all; the full schema is unchanged
+    assert set(shared.definition("check").canonical["properties"]) == {
+        "doc", *DECK_CHECK, *TEXT_CHECK}
+    assert set(text.schema["properties"]) == set(shared.SPECS["check"].schema["properties"])
+    assert text.foreign_fields() == ["slides", "boxes", "spacing", "contrast"]
+
+
+def test_kind_fields_name_optional_parameters_and_known_kinds():
+    with pytest.raises(SubsetError, match="kind_fields names 'doc'"):
+        Tool(name="t", description="A tool.", schema=shared.SPECS["check"].schema,
+             kind_fields={"doc": ("pptx",)})
+    with pytest.raises(SubsetError, match="a list of kinds"):
+        Tool(name="t", description="A tool.", schema=shared.SPECS["check"].schema,
+             kind_fields={"boxes": "pptx"})
+    with pytest.raises(ValueError, match="kind_fields names"):
+        shared.Spec("t", "A tool.", {"doc": string("Document id.")}, kind_fields={"doc": ("odt",)})
+    # two definitions that differ in kind_fields are two tools
+    other = dataclasses.replace(shared.definition("check"), kind_fields={})
+    with pytest.raises(ValueError, match="two different tools"):
+        merge_tools([shared.definition("check"), other])
+
+
 # -- the session tools ---------------------------------------------------------------------------
 
 
@@ -597,6 +678,30 @@ def test_undo_takes_back_the_refs_of_what_it_undoes(toolbox, session):
     assert entry.refs == {"x": "item:1"}
     stale = call(toolbox, session, "t_set", doc="d1", target="$y", text="B")
     assert stale.error.code == "not_found"
+
+
+def test_the_application_reads_and_resolves_refs_outside_a_call(toolbox, session):
+    """Round 23, V5: Session.refs (a copy) and Session.resolve_ref, as a call resolves."""
+    call(toolbox, session, "t_add", doc="d1", items=[{"text": "a", "ref": "first"},
+                                                     {"text": "b", "ref": "second"}])
+    refs = session.refs("d1")
+    assert refs == {"first": "item:1", "second": "item:2"} and session.refs("d2") == {}
+    refs["third"] = "item:3"                      # a copy: the document's refs stay
+    assert "third" not in session.refs("d1") and "third" not in session.entry("d1").refs
+    assert session.resolve_ref("d1", "$second") == "item:2"
+    assert session.resolve_ref("d1", "$first/r0") == "item:1/r0"
+    assert session.resolve_ref("d1", "item:2") == "item:2"          # no ref: as given
+    with pytest.raises(ToolError) as missing:
+        session.resolve_ref("d1", "$third")
+    assert missing.value.code == "not_found" and missing.value.valid_options == ["$first", "$second"]
+    assert "no ref $third in d1" in missing.value.message
+    with pytest.raises(ToolError) as closed:
+        session.refs("d9")
+    assert closed.value.code == "not_found"
+    view = session.view(roles=["review"])         # a view reads the session's
+    assert view.refs("d1") == session.refs("d1")
+    call(toolbox, session, "undo", doc="d1")      # undo takes them back
+    assert session.refs("d1") == {}
 
 
 # -- undo by scope: one writer per page ------------------------------------------------------------
