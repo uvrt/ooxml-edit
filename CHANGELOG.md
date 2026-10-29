@@ -5,23 +5,36 @@ reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0
 earlier ones were never tagged.
 
 ## 0.70.0 -- unreleased
-- **Each kind's toolbox is sent `check` with its own parameters only** (round 23, V3).
-  `Tool.kind_fields` (`shared.Spec(..., kind_fields=...)`): the optional parameters of a
-  shared tool that apply to some kinds only, `{"boxes": ("pptx",)}`. One definition stays
-  in `shared.SPECS`; a tool whose handlers serve none of a parameter's kinds leaves it out
-  of `Tool.canonical`, so of every provider's definition and of
-  `optional_parameters()`. `check`: `slides`, `boxes`, `spacing` and `contrast` are a
-  deck's, `pages`, `min_size` and `styles` a document's. `contrast` stays a deck's: Word
-  text against shading or a page colour is not measured (docx-agent refuses it). A toolbox
-  of both kinds, or a definition without handlers (`shared.definition`), has them all, so
-  the two libraries' tools still merge into one. Validation is unchanged: a call is
-  checked against the whole schema, so one that still passes another kind's parameter
-  (an older prompt) gets that handler's refusal, as before. Checked when the tool is made
-  (an optional parameter, a list of kinds; `Spec`: known kinds); part of
-  `same_definition`. Offline (characters / 3.5): a deck toolbox's `check` 406 -> 312, its
-  core 3,822 -> 3,728, every definition 13,442 -> 13,348; a Word toolbox's `check` 406 ->
-  262, its core 2,816 -> 2,672, every definition 13,194 -> 13,051. `check` is not sent
-  strict: the strict sets are unchanged.
+- **Each kind's toolbox is sent the shared tools with its own parameters only** (round 23,
+  V3). `Tool.kind_fields`, `Tool.kind_values` and `Tool.kind_descriptions` (and the same on
+  `shared.Spec`): the optional parameters of a shared tool that apply to some kinds only
+  (`{"boxes": ("pptx",)}`), the enum values that do (`{"include": {"fit": ("pptx",)}}`, an
+  enum or an array's items' enum), and a parameter's description for a tool of one kind
+  (`{"include": {"docx": "Default: validate, reflow, fields."}}`). One definition stays in
+  `shared.SPECS`; a tool whose handlers serve none of a parameter's (a value's) kinds leaves
+  it out of `Tool.canonical`, so of every provider's definition and of
+  `optional_parameters()`. A toolbox of several kinds, or a definition without handlers
+  (`shared.definition`), is sent the whole definition, so the libraries still merge.
+  Validation is unchanged: a call is checked against the whole schema, so one that still
+  passes another kind's parameter or value (an older prompt) gets that handler's answer, as
+  before. Applied, each checked against the handlers:
+  - `check`: `slides`, `boxes`, `spacing`, `contrast` a deck's; `pages`, `min_size`,
+    `styles` a document's; `include` `fit`, `collisions`, `facts`, `design` a deck's
+    (a document's handler refuses them), `reflow`, `fields` a document's (a deck's notes
+    them "documents only"), `validate`, `layout`, `app` both's; its default described per
+    kind. `contrast` stays a deck's: Word text against shading or a page colour is not
+    measured (docx-agent refuses it).
+  - `find_text`: `slides` a deck's; `range` a document's and a workbook's (described per
+    kind); `stories` a deck's and a document's, its `layouts` and `masters` a deck's (a
+    document reads any other value as its body), described per kind.
+  - `replace_text`: `slides` a deck's; `range` a document's; `stories` as `find_text`'s.
+  - `render`: `slides` a deck's, `pages` a document's.
+
+  Offline (characters / 3.5), old -> new: a deck toolbox's core 3,822 -> 3,594, every
+  definition 13,442 -> 13,214; a Word toolbox's core 2,816 -> 2,471, every definition
+  13,194 -> 12,849; a workbook toolbox's core 4,272 -> 4,169, every definition 5,013 ->
+  4,909. `replace_text` is strict: one optional parameter fewer for a deck and for a
+  document (24 -> 23 over each strict set).
 - **`Session.refs(doc)` and `Session.resolve_ref(doc, value)`** (round 23, V5): a
   document's refs outside a call, `{name: address}` (a copy, read under the document's
   lock), and one `$name` or `$name/rest` resolved as a call resolves it (`not_found`

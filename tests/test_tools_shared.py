@@ -311,6 +311,50 @@ def test_each_kinds_toolbox_is_sent_check_with_its_own_parameters_only():
     assert text.foreign_fields() == ["slides", "boxes", "spacing", "contrast"]
 
 
+def _sent(name, *kinds):
+    """The shared tool ``name`` as a toolbox of ``kinds`` is sent it (handlers do nothing)."""
+    tools = [shared.handler(name, kind=kind)(lambda call, **given: None) for kind in kinds]
+    return merge_tools(tools)[name].canonical["properties"]
+
+
+def test_find_replace_render_and_checks_include_are_sent_per_kind():
+    """Round 23: slides a deck's, pages a document's, range not a deck's (and replace_text's
+    a document's alone), stories not a workbook's and layouts/masters a deck's; check's
+    include values and its default described per kind; several kinds: everything."""
+    assert set(_sent("find_text", "pptx")) == {"doc", "text", "regex", "slides", "stories", "cursor"}
+    assert set(_sent("find_text", "docx")) == {"doc", "text", "regex", "range", "stories", "cursor"}
+    assert set(_sent("find_text", "xlsx")) == {"doc", "text", "regex", "range", "cursor"}
+    assert _sent("find_text", "xlsx")["range"]["description"] == "Only within this sheet, range or table."
+    assert set(_sent("replace_text", "pptx")) == {"doc", "find", "replace", "expect", "regex",
+                                                  "slides", "stories"}
+    assert set(_sent("replace_text", "docx")) == {"doc", "find", "replace", "expect", "regex",
+                                                  "range", "stories"}
+    assert _sent("find_text", "docx")["stories"]["enum"] == ["body", "all"]
+    assert _sent("replace_text", "pptx")["stories"]["enum"] == ["body", "all", "layouts", "masters"]
+    assert set(_sent("render", "pptx")) == {"doc", "slides", "width", "sheet"}
+    assert set(_sent("render", "docx")) == {"doc", "pages", "width", "sheet"}
+    deck, text = _sent("check", "pptx")["include"], _sent("check", "docx")["include"]
+    assert deck["items"]["enum"] == ["fit", "collisions", "facts", "design", "validate", "layout", "app"]
+    assert text["items"]["enum"] == ["validate", "reflow", "fields", "layout", "app"]
+    assert (deck["description"], text["description"]) == (
+        "Default: fit, collisions, validate.", "Default: validate, reflow, fields.")
+    for name in ("find_text", "replace_text", "render", "check"):
+        whole = shared.definition(name).canonical["properties"]
+        assert _sent(name, "pptx", "docx") == whole
+    both = _sent("find_text", "pptx", "xlsx")
+    assert set(both) == set(shared.definition("find_text").canonical["properties"])
+    assert both["stories"]["enum"] == ["body", "all", "layouts", "masters"]
+
+
+def test_a_call_may_still_name_a_value_its_kind_is_not_sent():
+    """A deck's check notes reflow as documents only, as before: validation takes every value."""
+    deck = shared.handler("check", kind="pptx")(_deck_check)
+    with Toolbox([deck, *DECK_TOOLS], formats=[DECK]) as box:
+        session = box.session(clock=CLOCK)
+        session.open(synthetic.outer_package(), "deck.pptx")
+        assert call(box, session, "check", doc="d1", include=["reflow"]).data == {"given": ["include"]}
+
+
 def test_kind_fields_name_optional_parameters_and_known_kinds():
     with pytest.raises(SubsetError, match="kind_fields names 'doc'"):
         Tool(name="t", description="A tool.", schema=shared.SPECS["check"].schema,
@@ -318,8 +362,17 @@ def test_kind_fields_name_optional_parameters_and_known_kinds():
     with pytest.raises(SubsetError, match="a list of kinds"):
         Tool(name="t", description="A tool.", schema=shared.SPECS["check"].schema,
              kind_fields={"boxes": "pptx"})
-    with pytest.raises(ValueError, match="kind_fields names"):
+    with pytest.raises(ValueError, match="kind_fields, kind_values or kind_descriptions name"):
         shared.Spec("t", "A tool.", {"doc": string("Document id.")}, kind_fields={"doc": ("odt",)})
+    with pytest.raises(SubsetError, match="kind_values names 'doc', which has no enum"):
+        Tool(name="t", description="A tool.", schema=shared.SPECS["check"].schema,
+             kind_values={"doc": {"x": ("pptx",)}})
+    with pytest.raises(SubsetError, match="'nope', which is not in its enum"):
+        Tool(name="t", description="A tool.", schema=shared.SPECS["check"].schema,
+             kind_values={"include": {"nope": ("pptx",)}})
+    with pytest.raises(SubsetError, match="kind_descriptions names 'nowhere'"):
+        Tool(name="t", description="A tool.", schema=shared.SPECS["check"].schema,
+             kind_descriptions={"nowhere": {"pptx": "Text."}})
     # two definitions that differ in kind_fields are two tools
     other = dataclasses.replace(shared.definition("check"), kind_fields={})
     with pytest.raises(ValueError, match="two different tools"):

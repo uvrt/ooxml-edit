@@ -262,6 +262,15 @@ class Tool:
     #: passes such a parameter reaches the handler, whose refusal names the field to use.
     #: A tool with a handler for any kind (``None``), or with none (a listing), is sent all.
     kind_fields: Mapping[str, Sequence[str]] = field(default_factory=dict)
+    #: The same for an enum's values: ``{parameter: {value: kinds}}`` (``check``'s
+    #: ``include``: ``{"fit": (kind,), ...}``), the parameter's enum or its items' enum.  A
+    #: value it does not name is every kind's.  Left out of what is sent, as
+    #: :attr:`kind_fields` are; still valid in a call.
+    kind_values: Mapping[str, Mapping[str, Sequence[str]]] = field(default_factory=dict)
+    #: A parameter's description for a tool that serves one kind only:
+    #: ``{parameter: {kind: description}}``, where the shared one names every kind's case
+    #: (``include``'s defaults per kind).  A tool of several kinds is sent the shared one.
+    kind_descriptions: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         problems = definition_problems(self)
@@ -271,19 +280,43 @@ class Tool:
     @property
     def canonical(self) -> dict[str, Any]:
         """The schema providers are sent: in the common strict subset, no bounds, without
-        the parameters of kinds it serves none of (:attr:`kind_fields`)."""
+        the parameters and enum values of kinds it serves none of (:attr:`kind_fields`,
+        :attr:`kind_values`), a one-kind tool's parameters described for its kind
+        (:attr:`kind_descriptions`)."""
         sent = canonical(self.schema)
+        served = self.served_kinds()
+        if served is None:
+            return sent
+        properties = sent["properties"]
         for name in self.foreign_fields():
-            sent["properties"].pop(name, None)
+            properties.pop(name, None)
+        for name, values in self.kind_values.items():
+            holder = _enum_holder(properties.get(name))
+            if holder is not None:
+                holder["enum"] = [value for value in holder["enum"]
+                                  if value not in values or served & set(values[value])]
+        if len(served) == 1:
+            (kind,) = served
+            for name, texts in self.kind_descriptions.items():
+                if name in properties and kind in texts:
+                    properties[name]["description"] = texts[kind]
         return sent
+
+    def served_kinds(self) -> set[str] | None:
+        """The kinds the tool's handlers serve; ``None`` for every kind (a handler for any
+        kind, or none: a listing), whose definition is sent whole."""
+        kinds = set(self.handlers)
+        if not kinds or None in kinds:
+            return None
+        return {kind for kind in kinds if kind is not None}
 
     def foreign_fields(self) -> list[str]:
         """The parameters of :attr:`kind_fields` that none of the tool's handlers' kinds
         takes: left out of what providers are sent."""
-        kinds = set(self.handlers)
-        if not kinds or None in kinds:
+        served = self.served_kinds()
+        if served is None:
             return []
-        return [name for name, applies in self.kind_fields.items() if not kinds & set(applies)]
+        return [name for name, applies in self.kind_fields.items() if not served & set(applies)]
 
     @property
     def core(self) -> bool:
@@ -400,6 +433,9 @@ class Tool:
             == {k: tuple(v) for k, v in other.action_fields.items()} \
             and {k: tuple(v) for k, v in self.kind_fields.items()} \
             == {k: tuple(v) for k, v in other.kind_fields.items()} \
+            and _kind_map(self.kind_values) == _kind_map(other.kind_values) \
+            and {k: dict(v) for k, v in self.kind_descriptions.items()} \
+            == {k: dict(v) for k, v in other.kind_descriptions.items()} \
             and tuple(self.sources) == tuple(other.sources) \
             and tuple(self.facts) == tuple(other.facts) \
             and dict(self.aliases) == dict(other.aliases)
@@ -417,6 +453,22 @@ class Tool:
         combined = copy.copy(self)
         combined.handlers = {**self.handlers, **other.handlers}
         return combined
+
+
+def _enum_holder(schema: Any) -> dict[str, Any] | None:
+    """The node holding a parameter's enum: the parameter's own, or its items' (an array
+    of values); ``None`` when it has none."""
+    if not isinstance(schema, dict):
+        return None
+    if "enum" in schema:
+        return schema
+    items = schema.get("items")
+    return items if isinstance(items, dict) and "enum" in items else None
+
+
+def _kind_map(values: Mapping[str, Mapping[str, Sequence[str]]]) -> dict[str, dict[str, tuple[str, ...]]]:
+    return {name: {value: tuple(kinds) for value, kinds in found.items()}
+            for name, found in values.items()}
 
 
 def definition_problems(tool: Tool) -> list[str]:
@@ -488,6 +540,23 @@ def definition_problems(tool: Tool) -> list[str]:
             problems.append(f"kind_fields names {name!r}, which is not an optional parameter")
         if isinstance(applies, str) or not applies:
             problems.append(f"kind_fields gives {name!r} {applies!r}: a list of kinds")
+    for name, values in tool.kind_values.items():
+        holder = _enum_holder(properties.get(name))
+        if holder is None:
+            problems.append(f"kind_values names {name!r}, which has no enum")
+            continue
+        for value, applies in values.items():
+            if value not in holder["enum"]:
+                problems.append(f"kind_values gives {name!r} the value {value!r}, which is "
+                                "not in its enum")
+            if isinstance(applies, str) or not applies:
+                problems.append(f"kind_values gives {name}={value!r} {applies!r}: a list of kinds")
+    for name, texts in tool.kind_descriptions.items():
+        if name not in properties:
+            problems.append(f"kind_descriptions names {name!r}, which is not a parameter")
+        for kind, text in texts.items():
+            if not isinstance(text, str) or not text.strip():
+                problems.append(f"kind_descriptions gives {name!r} no description for {kind!r}")
     if tool.route is not None and tool.route not in properties:
         problems.append(f"route names {tool.route!r}, which is not a parameter")
     if not callable(tool.documents):

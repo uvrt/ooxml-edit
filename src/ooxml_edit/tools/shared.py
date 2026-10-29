@@ -38,8 +38,9 @@ How a call finds its handler:
 A parameter that applies to one format says so in its description (``slides`` for decks,
 ``pages`` and ``range`` for documents, ``find_text``'s ``range`` for workbooks too: a sheet,
 range or table); the handler of another kind answers ``invalid_arguments`` naming the field
-to use instead.  Where a spec names such parameters in ``kind_fields`` (``check``'s, round
-23), a library's toolbox is not even sent another kind's: :attr:`~.registry.Tool.kind_fields`.
+to use instead.  A spec names such parameters in ``kind_fields`` (and enum values in
+``kind_values``, one-kind descriptions in ``kind_descriptions``; round 23), so a library's
+toolbox is not even sent another kind's: :attr:`~.registry.Tool.kind_fields`.
 Lengths are points, as everywhere in the tool layer.
 
 The kinds (:data:`KINDS`) are ``ooxml_common.kinds``' main kind per application: ``pptx``,
@@ -100,6 +101,19 @@ _STORIES = string("Documents: body (default) or all stories. Decks: body is the 
 _CURSOR = string("next_cursor of the previous page.", optional=True)
 
 
+#: Round 23 (V3): what each kind's toolbox is sent of the shared parameters a kind does not
+#: take.  slides: a deck's (a document's handler reads find's and replace's as refused, its
+#: render's and check's as pages); pages: a document's (a deck's handlers refuse it); range: a
+#: document's and, in find_text, a workbook's (a deck's handlers refuse it); stories: a
+#: deck's and a document's (a workbook's find_text refuses it), layouts and masters a deck's
+#: alone (a document reads any other value as its body).
+_SLIDES = ("pptx",)
+_PAGES = ("docx",)
+_STORY_VALUES = {"layouts": ("pptx",), "masters": ("pptx",)}
+_STORY_TEXTS = {"pptx": "Body (default): the slides; layouts, masters, or all.",
+                "docx": "Body (default) or all stories."}
+
+
 class Spec:
     """One shared tool's definition, without handlers."""
 
@@ -113,7 +127,9 @@ class Spec:
                  wrap: Callable[[Callable[..., Any]], Callable[..., Any]] | None = None,
                  aliases: Mapping[str, Any] | None = None, role: str | None = None,
                  action_roles: Mapping[str, str] | None = None,
-                 kind_fields: Mapping[str, tuple[str, ...]] | None = None) -> None:
+                 kind_fields: Mapping[str, tuple[str, ...]] | None = None,
+                 kind_values: Mapping[str, Mapping[str, tuple[str, ...]]] | None = None,
+                 kind_descriptions: Mapping[str, Mapping[str, str]] | None = None) -> None:
         self.name = name
         self.description = description
         self.params = dict(params)
@@ -138,9 +154,20 @@ class Spec:
         #: The parameters that apply to some kinds only (:attr:`~.registry.Tool.kind_fields`):
         #: a library's toolbox is sent the tool without the others' parameters.
         self.kind_fields = {name: tuple(kinds) for name, kinds in (kind_fields or {}).items()}
-        unknown = {kind for kinds in self.kind_fields.values() for kind in kinds} - set(KINDS)
+        #: Enum values that apply to some kinds only, and one-kind descriptions
+        #: (:attr:`~.registry.Tool.kind_values`, :attr:`~.registry.Tool.kind_descriptions`).
+        self.kind_values = {param: {value: tuple(kinds) for value, kinds in values.items()}
+                            for param, values in (kind_values or {}).items()}
+        self.kind_descriptions = {param: dict(texts)
+                                  for param, texts in (kind_descriptions or {}).items()}
+        named = ({kind for kinds in self.kind_fields.values() for kind in kinds}
+                 | {kind for values in self.kind_values.values() for kinds in values.values()
+                    for kind in kinds}
+                 | {kind for texts in self.kind_descriptions.values() for kind in texts})
+        unknown = named - set(KINDS)
         if unknown:
-            raise ValueError(f"{name}: kind_fields names {sorted(unknown)}; kinds are {KINDS}")
+            raise ValueError(f"{name}: kind_fields, kind_values or kind_descriptions name "
+                             f"{sorted(unknown)}; kinds are {KINDS}")
         #: What every kind's handler runs inside: the shared part of a tool's work (taking
         #: ``edit_chart``'s rows from a source), done once here for every library.
         self.wrap = wrap
@@ -156,7 +183,8 @@ class Spec:
                     datasets=self.datasets, sources=self.sources, facts=self.facts,
                     reads=self.reads,
                     aliases=self.aliases, role=self.role, action_roles=self.action_roles,
-                    kind_fields=self.kind_fields)
+                    kind_fields=self.kind_fields, kind_values=self.kind_values,
+                    kind_descriptions=self.kind_descriptions)
 
     @property
     def schema(self) -> dict[str, Any]:
@@ -266,7 +294,13 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
           "range": _FIND_RANGE,
           "stories": _STORIES,
           "cursor": _CURSOR},
-         refs=("slides[]",)),
+         refs=("slides[]",),
+         kind_fields={"slides": _SLIDES, "range": ("docx", "xlsx"),
+                      "stories": ("pptx", "docx")},
+         kind_values={"stories": _STORY_VALUES},
+         kind_descriptions={"stories": _STORY_TEXTS,
+                            "range": {"docx": "Only within this block or span (p:A..t:B).",
+                                      "xlsx": "Only within this sheet, range or table."}}),
     # S7
     Spec("replace_text",
          "Replace text, keeping its formatting. expect=one needs exactly one match (else the "
@@ -279,7 +313,10 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
           "slides": _slide_addresses(". Default all"),
           "range": _RANGE,
           "stories": _STORIES},
-         mutates=True, facts=("replace",), refs=("slides[]",)),
+         mutates=True, facts=("replace",), refs=("slides[]",),
+         kind_fields={"slides": _SLIDES, "range": ("docx",), "stories": ("pptx", "docx")},
+         kind_values={"stories": _STORY_VALUES},
+         kind_descriptions={"stories": _STORY_TEXTS}),
     # S8
     Spec("render",
          "Render slides or pages to PNG to look at them, at most 4 per call. Images cost "
@@ -295,7 +332,8 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
                         "width": integer("Each tile's px.", minimum=160, maximum=1280,
                                          optional=True)},
                        "Up to 30 in one labelled image; {} for defaults.", optional=True)},
-         batchable=False, refs=("slides[]",)),
+         batchable=False, refs=("slides[]",),
+         kind_fields={"slides": _SLIDES, "pages": _PAGES}),
     # S9
     Spec("check",
          "Facts as the document will show: text that does not fit, collisions, validation "
@@ -331,9 +369,16 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
          # that passes another's still gets that handler's refusal (kept, as before).
          # contrast stays a deck's: Word text against shading or a page colour is not
          # measured (docx-agent refuses it); add "docx" here when it is.
-         kind_fields={"slides": ("pptx",), "boxes": ("pptx",), "spacing": ("pptx",),
-                      "contrast": ("pptx",), "pages": ("docx",), "min_size": ("docx",),
-                      "styles": ("docx",)}),
+         kind_fields={"slides": _SLIDES, "boxes": ("pptx",), "spacing": ("pptx",),
+                      "contrast": ("pptx",), "pages": _PAGES, "min_size": ("docx",),
+                      "styles": ("docx",)},
+         # The facts each kind reports: a document's handler refuses a deck's; a deck's
+         # notes reflow and fields as "documents only".  validate, layout and app are both's.
+         kind_values={"include": {"fit": ("pptx",), "collisions": ("pptx",),
+                                  "facts": ("pptx",), "design": ("pptx",),
+                                  "reflow": ("docx",), "fields": ("docx",)}},
+         kind_descriptions={"include": {"pptx": "Default: fit, collisions, validate.",
+                                        "docx": "Default: validate, reflow, fields."}}),
     # S10, S11: edit_chart reads too
     Spec("edit_chart",
          "Add, read or change a chart. add: a new chart, styled as Office inserts one. read: "
