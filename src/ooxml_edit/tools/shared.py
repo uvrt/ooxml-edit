@@ -258,7 +258,9 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
           # Round 16, F11: a kind whose handler takes no clean refuses it (_with_clean).
           "clean": boolean("Documents: strip what Word never draws (orphaned parts, "
                            "rsids, web divs, template link). Default false.", optional=True)},
-         batchable=False, role=ANY_ROLE, wrap=lambda fn: _with_clean(fn)),
+         batchable=False, role=ANY_ROLE, wrap=lambda fn: _with_clean(fn),
+         # Round 23: a document's alone (another kind's handler refuses clean: true).
+         kind_fields={"clean": ("docx",)}),
     # S4 (list_documents went post-T4: the application names the documents and inputs)
     Spec("close_document", "Close a document, discarding unsaved changes. The session holds "
          "a few documents at a time: close a source once you have taken what you need.",
@@ -273,7 +275,13 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
           # Round 10: each kind's scope (Format.undo_scope); a document takes none.
           "scope": string("A slide's (256) or sheet's (Sales) changes only. Default: the "
                           "latest, anywhere.", optional=True)},
-         batchable=False, role=EDIT),
+         batchable=False, role=EDIT,
+         # Round 23: decks' and workbooks' (their formats' undo_scope); a document's undo
+         # refuses scope, document-wide.  undo serves every kind: the toolbox's formats decide.
+         kind_fields={"scope": ("pptx", "xlsx")},
+         kind_descriptions={"scope": {
+             "pptx": "A slide's (256) changes only. Default: the latest, anywhere.",
+             "xlsx": "A sheet's (Sales) changes only. Default: the latest, anywhere."}}),
     # S16: describe, one schema for every kind
     Spec("describe",
          "The document at a glance; call once, first. Decks: slides (id, title, layout, "

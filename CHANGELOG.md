@@ -29,11 +29,17 @@ earlier ones were never tagged.
     document reads any other value as its body), described per kind.
   - `replace_text`: `slides` a deck's; `range` a document's; `stories` as `find_text`'s.
   - `render`: `slides` a deck's, `pages` a document's.
+  - `save_document`: `clean` a document's (another kind's handler refuses `clean: true`).
+  - `undo`: `scope` a deck's and a workbook's (their formats' `undo_scope`; a document's
+    undo refuses it, document-wide), described per kind. `undo`'s handler serves every
+    kind, so the toolbox gives its own copy the kinds of its formats
+    (`Tool.kinds_served`, not part of the definition); outside a toolbox, and in a toolbox
+    of every kind, it is whole.
 
-  Offline (characters / 3.5), old -> new: a deck toolbox's core 3,822 -> 3,594, every
-  definition 13,442 -> 13,214; a Word toolbox's core 2,816 -> 2,471, every definition
-  13,194 -> 12,849; a workbook toolbox's core 4,272 -> 4,169, every definition 5,013 ->
-  4,909. `replace_text` is strict: one optional parameter fewer for a deck and for a
+  Offline (characters / 3.5), old -> new: a deck toolbox's core 3,822 -> 3,545, every
+  definition 13,442 -> 13,166; a Word toolbox's core 2,816 -> 2,436, every definition
+  13,194 -> 12,814; a workbook toolbox's core 4,272 -> 4,122, every definition 5,013 ->
+  4,862. `replace_text` is strict: one optional parameter fewer for a deck and for a
   document (24 -> 23 over each strict set).
 - **`Session.refs(doc)` and `Session.resolve_ref(doc, value)`** (round 23, V5): a
   document's refs outside a call, `{name: address}` (a copy, read under the document's

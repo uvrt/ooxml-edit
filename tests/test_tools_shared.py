@@ -346,6 +346,36 @@ def test_find_replace_render_and_checks_include_are_sent_per_kind():
     assert both["stories"]["enum"] == ["body", "all", "layouts", "masters"]
 
 
+def test_undo_and_save_document_are_sent_per_kind_and_old_calls_answered_as_before():
+    """Round 23: save_document's clean is a document's; undo (a handler for every kind) takes
+    its kinds from the toolbox's formats: scope a deck's and a workbook's, described per kind."""
+    with Toolbox(TEXT_TOOLS, formats=[TEXT]) as box:
+        sent = {d["name"]: d["input_schema"]["properties"] for d in box.definitions("anthropic", defer=False)}
+        assert "scope" not in sent["undo"] and "clean" in sent["save_document"]
+        session = box.session(clock=CLOCK)
+        session.open(synthetic.outer_package(), "text.docx")
+        call(box, session, "t_add", doc="d1", items=[{"text": "a"}])
+        scoped = call(box, session, "undo", doc="d1", scope="1")
+        assert scoped.error.code == "invalid_arguments" and "undoes document-wide" in scoped.error.message
+    with Toolbox(DECK_TOOLS, formats=[DECK]) as box:
+        sent = {d["name"]: d["input_schema"]["properties"] for d in box.definitions("anthropic", defer=False)}
+        assert sent["undo"]["scope"]["description"] == (
+            "A slide's (256) changes only. Default: the latest, anywhere.")
+        assert "clean" not in sent["save_document"]
+        session = box.session(clock=CLOCK)
+        session.open(synthetic.outer_package(), "deck.pptx")
+        refused = call(box, session, "save_document", doc="d1", name="a.pptx", format="pptx", clean=True)
+        assert refused.error.field == "clean" and "clean is for documents" in refused.error.message
+        assert box.tools["undo"].kinds_served == ("pptx",)
+    # the session tool itself is unchanged, and a toolbox of every kind is sent it whole
+    undo = next(t for t in shared.SESSION_TOOLS if t.name == "undo")
+    assert undo.kinds_served is None and "scope" in undo.canonical["properties"]
+    with Toolbox(TEXT_TOOLS + DECK_TOOLS, formats=[DECK, TEXT]) as box:
+        sent = {d["name"]: d["input_schema"]["properties"] for d in box.definitions("anthropic", defer=False)}
+        assert sent["undo"]["scope"] == undo.canonical["properties"]["scope"]
+        assert "clean" in sent["save_document"]
+
+
 def test_a_call_may_still_name_a_value_its_kind_is_not_sent():
     """A deck's check notes reflow as documents only, as before: validation takes every value."""
     deck = shared.handler("check", kind="pptx")(_deck_check)
