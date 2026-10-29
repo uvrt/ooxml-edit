@@ -42,6 +42,13 @@ earlier ones were never tagged.
   13,194 -> 12,814; a workbook toolbox's core 4,272 -> 4,122, every definition 5,013 ->
   4,862. `replace_text` is strict: one optional parameter fewer for a deck and for a
   document (24 -> 23 over each strict set).
+- **`replace_text`'s `regex` is its last parameter** (round 23). With a deck's `slides` no
+  longer sent to a document, `regex` came straight after the required `expect`, and
+  Claude (Sonnet 5.5, strict, effort low) left it out of a Word toolbox's `replace_text` in
+  6 of 6 calls asked for every field (docx-agent's online strict test, 3 of 3 runs); the
+  same definition with `slides` after `regex` kept it in 4 of 4, and with `regex` last in 4
+  of 4 probes and 3 of 3 runs of that test. Strict decoding writes keys in schema order;
+  the order of the other parameters is unchanged and no description changes.
 - **`Session.refs(doc)` and `Session.resolve_ref(doc, value)`** (round 23, V5): a
   document's refs outside a call, `{name: address}` (a copy, read under the document's
   lock), and one `$name` or `$name/rest` resolved as a call resolves it (`not_found`

@@ -317,10 +317,14 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
           "find": string("Text to replace."),
           "replace": string("Replacement; with regex, \\1 is a group."),
           "expect": string("Matches expected.", enum=["one", "all"]),
-          "regex": boolean("find is a Python regex. Default false.", optional=True),
           "slides": _slide_addresses(". Default all"),
           "range": _RANGE,
-          "stories": _STORIES},
+          "stories": _STORIES,
+          # Round 23: regex last.  With a deck's slides gone from a document's definition,
+          # regex came straight after the required expect, and Claude (Sonnet 5.5, strict,
+          # effort low) left it out in 6 of 6 calls asked for every field; last, in none
+          # (feedback-round23 probe).  Strict decoding keeps the order given.
+          "regex": boolean("find is a Python regex. Default false.", optional=True)},
          mutates=True, facts=("replace",), refs=("slides[]",),
          kind_fields={"slides": _SLIDES, "range": ("docx",), "stories": ("pptx", "docx")},
          kind_values={"stories": _STORY_VALUES},
