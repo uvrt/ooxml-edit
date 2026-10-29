@@ -93,8 +93,9 @@ from .registry import (ACCEPT, ANY_ROLE, CORE, EDIT, RESOLVE, ROLES, Tool, ToolG
 from .results import Image, Result, ToolError
 from .schema import CallError, validate_call
 from .session import (NO_CONTEXT, REF, REF_USE, Clock, DocumentEntry, DocumentFormat, Output,
-                      Session, SessionView, StepOwner, doc_order, font_dirs_of, locale_of,
-                      narrowed, part_entries)
+                      Session, SessionView, StepOwner, doc_order, fold_ref, font_dirs_of,
+                      locale_of, narrowed, part_entries)
+from .session import _folded_use, _misspelt_ref
 from .sources import Rows, qualify, resolve as resolve_rows
 from .rendercache import ContentStore
 from .worker import WorkerPool, default_workers, refuse_while_bootstrapping, run_all
@@ -102,8 +103,6 @@ from .worker import WorkerPool, default_workers, refuse_while_bootstrapping, run
 #: A ref's name (``REF``) and a ref's use, ``$name`` or ``$name/rest`` (:mod:`.session`'s,
 #: whose :meth:`~.session.Session.resolve_ref` reads them as a call does).
 _REF_USE = REF_USE
-#: What :func:`fold_ref` folds: letters, digits, ``_`` and ``-``, from a letter.
-_FOLDABLE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*$")
 
 
 class CallContext:
@@ -2060,43 +2059,6 @@ def ref_rule(name: str) -> str:
     return (f"ref {name!r} is not a ref name: a ref starts with a lowercase letter, then "
             f"up to 31 lowercase letters, digits or _ (no capitals, spaces or -); "
             f"e.g. {suggestion!r}")
-
-
-def fold_ref(name: Any) -> str | None:
-    """The ref name a camelCase or hyphenated name stands for: ``recNow`` -> ``rec_now``,
-    ``scale-note`` -> ``scale_note``, ``HTTPLink`` -> ``http_link``; ``None`` when it
-    folds to no ref name, holds anything but letters, digits, ``_`` and ``-``, or has no
-    lowercase letter (``A1`` is an address, not a ref)."""
-    if not isinstance(name, str) or not _FOLDABLE.match(name) or not re.search("[a-z]", name):
-        return None
-    folded = re.sub(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])", "_", name)
-    folded = folded.replace("-", "_").lower()
-    return folded if REF.match(folded) else None
-
-
-def _folded_use(value: Any, known: Mapping[str, str],
-                failed: Mapping[str, int] | None = None) -> str | None:
-    """``$recNow`` (or ``$recNow/rest``) as ``$rec_now`` when it folds (:func:`fold_ref`)
-    to a known ref -- or one a failed op of the batch would have made, whose refusal then
-    says so; ``None`` for anything else."""
-    if not isinstance(value, str) or not value.startswith("$"):
-        return None
-    head, slash, rest = value[1:].partition("/")
-    folded = fold_ref(head)
-    if folded is None or folded == head or (folded not in known and folded not in (failed or {})):
-        return None
-    return f"${folded}{slash}{rest}"
-
-
-def _misspelt_ref(value: Any, known: Mapping[str, str]) -> str | None:
-    """The known ref a ``$Name`` that is no ref name stands for (``$catChart`` for a ref
-    ``catchart`` or ``cat_chart``); ``None`` for anything else, which stays an address."""
-    if not isinstance(value, str) or not value.startswith("$"):
-        return None
-    head = value[1:].split("/", 1)[0]
-    folded = head.lower().replace("_", "").replace("-", "")
-    found = [name for name in known if name.replace("_", "") == folded]
-    return found[0] if len(found) == 1 else None
 
 
 def _walk(node: Any, parts: list[str], where: str, resolve: Callable[[Any, str], Any]) -> Any:

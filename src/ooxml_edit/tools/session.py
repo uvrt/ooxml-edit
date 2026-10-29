@@ -89,6 +89,45 @@ Clock = Callable[[], _dt.datetime]
 REF = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
 #: A ref used in an argument: ``$name``, or ``$name/rest`` (an address inside it).
 REF_USE = re.compile(r"^\$([a-z][a-z0-9_]{0,31})(/.*)?$")
+#: What :func:`fold_ref` folds: letters, digits, ``_`` and ``-``, from a letter.
+_FOLDABLE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*$")
+
+
+def fold_ref(name: Any) -> str | None:
+    """The ref name a camelCase or hyphenated name stands for: ``recNow`` -> ``rec_now``,
+    ``scale-note`` -> ``scale_note``, ``HTTPLink`` -> ``http_link``; ``None`` when it
+    folds to no ref name, holds anything but letters, digits, ``_`` and ``-``, or has no
+    lowercase letter (``A1`` is an address, not a ref)."""
+    if not isinstance(name, str) or not _FOLDABLE.match(name) or not re.search("[a-z]", name):
+        return None
+    folded = re.sub(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])", "_", name)
+    folded = folded.replace("-", "_").lower()
+    return folded if REF.match(folded) else None
+
+
+def _folded_use(value: Any, known: Mapping[str, str],
+                failed: Mapping[str, int] | None = None) -> str | None:
+    """``$recNow`` (or ``$recNow/rest``) as ``$rec_now`` when it folds (:func:`fold_ref`)
+    to a known ref -- or one a failed op of the batch would have made, whose refusal then
+    says so; ``None`` for anything else."""
+    if not isinstance(value, str) or not value.startswith("$"):
+        return None
+    head, slash, rest = value[1:].partition("/")
+    folded = fold_ref(head)
+    if folded is None or folded == head or (folded not in known and folded not in (failed or {})):
+        return None
+    return f"${folded}{slash}{rest}"
+
+
+def _misspelt_ref(value: Any, known: Mapping[str, str]) -> str | None:
+    """The known ref a ``$Name`` that is no ref name stands for (``$catChart`` for a ref
+    ``catchart`` or ``cat_chart``); ``None`` for anything else, which stays an address."""
+    if not isinstance(value, str) or not value.startswith("$"):
+        return None
+    head = value[1:].split("/", 1)[0]
+    folded = head.lower().replace("_", "").replace("-", "")
+    found = [name for name in known if name.replace("_", "") == folded]
+    return found[0] if len(found) == 1 else None
 
 
 def utc_now() -> _dt.datetime:
@@ -907,14 +946,27 @@ class Session:
     def resolve_ref(self, doc_id: str, value: str) -> str:
         """``value`` as an address in ``doc_id``: a leading ``$name`` replaced by the address
         it names, ``$name/rest`` by that address and ``/rest``; any other value as given.
-        ``not_found`` for a name the document has not, with its refs as the valid options --
-        what a call answers (:meth:`~.dispatch.Call.resolve_ref`, which also reads a
-        camelCase ``$recNow`` as ``$rec_now`` with a warning: outside a call no warning can
-        be given, so here the name is taken as written)."""
-        match = REF_USE.match(value) if isinstance(value, str) else None
-        if match is None:
+        Read as a call reads it (:meth:`~.dispatch.Call.resolve_ref`): a camelCase or
+        hyphenated ``$recNow`` that folds to a ref (:func:`fold_ref`) is that ref -- outside a
+        call no warning can be given, so it is read silently -- and a ``$Name`` that is no
+        ref name but stands for one (``$catChart`` for ``catchart``) is ``not_found`` asking
+        whether that one was meant. ``not_found`` for a name the document has not, with its
+        refs as the valid options."""
+        if not isinstance(value, str):
             return value
         known = self.refs(doc_id)
+        match = REF_USE.match(value)
+        if match is None:
+            folded = _folded_use(value, known)
+            if folded is not None:
+                match = REF_USE.match(folded)
+        if match is None:
+            meant = _misspelt_ref(value, known)
+            if meant is not None:
+                raise ToolError("not_found", f"{value!r} is no ref; did you mean ${meant}? "
+                                "A ref is lowercase",
+                                valid_options=[f"${key}" for key in sorted(known)])
+            return value
         name, rest = match.group(1), match.group(2) or ""
         if name not in known:
             raise ToolError("not_found", f"no ref ${name} in {doc_id}",

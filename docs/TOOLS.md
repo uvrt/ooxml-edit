@@ -96,8 +96,11 @@ its own tool's schema instead of by constrained decoding.
 are now (an undo takes back the refs of what it undoes) -- and resolves one with
 `session.resolve_ref("d1", "$intro")` (`$name/rest` too; any other value as given;
 `not_found`, the document's refs as `valid_options`, for a name it has not), as a handler
-does with `call.resolve_ref`. Outside a call no warning can be given, so a camelCase
-`$recNow` is taken as written, not folded. A view (`session.view(...)`) reads the same refs.
+does with `call.resolve_ref`. From 0.71.0 (round 24, W5) it folds names as a call does: a
+camelCase or hyphenated `$recNow` is `$rec_now` when that ref exists (silently: outside a
+call no warning can be given), and `$REC_NOW` for a ref `rec_now` is `not_found` asking
+whether `$rec_now` was meant. `fold_ref` is importable from `ooxml_edit.tools`. A view
+(`session.view(...)`) reads the same refs.
 
 **Aliases and refusals.** What a model naturally writes for an argument or a value is read
 as the tool's own before validation, never sent, so it costs no tokens: a string's
@@ -119,7 +122,7 @@ An unknown key that is a property one level up or down says where it belongs
 
 Round 6 reads three more of a model's small mistakes, each with a warning. A ref name in
 camelCase or with hyphens (`recNow`, `scale-note`) is kept as the name it folds to
-(`rec_now`, `scale_note`; `dispatch.fold_ref`), and `$recNow` in a target, or in
+(`rec_now`, `scale_note`; `ooxml_edit.tools.fold_ref`), and `$recNow` in a target, or in
 `call.resolve_ref`, is read as `$rec_now` when that ref exists -- a name with no lowercase
 letter (`$A1`) stays an address. A folded name that already names another address is
 refused rather than moved. A tool name with a namespace before it
