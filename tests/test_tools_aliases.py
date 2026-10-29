@@ -9,7 +9,8 @@ import pytest
 
 from ooxml_edit.tools import (Result, SubsetError, Toolbox, array, check_subset, integer,
                               names_as, number, obj, shared, string, tool, validate_call)
-from ooxml_edit.tools.dispatch import fold_ref, ref_rule
+from ooxml_edit.tools import fold_ref
+from ooxml_edit.tools.dispatch import ref_rule
 from ooxml_edit.tools.registry import build_schema
 from ooxml_edit.tools.schema import CallError, canonical, close_match
 

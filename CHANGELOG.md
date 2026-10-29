@@ -4,6 +4,14 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet. Each vers
 reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
 earlier ones were never tagged.
 
+## 0.71.0 -- unreleased
+- **`Session.resolve_ref` folds ref names as a call does** (round 24, W5): `$recNow` and
+  `$rec-now` are `$rec_now` when the document has that ref (silently: outside a call there is
+  no result to warn in), and a `$Name` that is no ref name but stands for one (`$REC_NOW`)
+  is `not_found` with "did you mean $rec_now?", as in a call's targets. `fold_ref` (and the
+  helpers both use) moved from `dispatch` to `session`, and `fold_ref` is exported from
+  `ooxml_edit.tools`; `ooxml_edit.tools.dispatch.fold_ref` still imports.
+
 ## 0.70.0 -- unreleased
 - **Each kind's toolbox is sent the shared tools with its own parameters only** (round 23,
   V3). `Tool.kind_fields`, `Tool.kind_values` and `Tool.kind_descriptions` (and the same on

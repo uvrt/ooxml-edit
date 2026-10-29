@@ -785,6 +785,14 @@ def test_the_application_reads_and_resolves_refs_outside_a_call(toolbox, session
     assert view.refs("d1") == session.refs("d1")
     call(toolbox, session, "undo", doc="d1")      # undo takes them back
     assert session.refs("d1") == {}
+    # Names folded as a call folds them (round 24, W5): $recNow is $rec_now, silently.
+    call(toolbox, session, "t_add", doc="d1", items=[{"text": "c", "ref": "rec_now"}])
+    assert session.resolve_ref("d1", "$recNow") == "item:1"
+    assert session.resolve_ref("d1", "$rec-now/r1") == "item:1/r1"
+    assert session.resolve_ref("d1", "$otherName") == "$otherName"  # folds to no ref: as given
+    with pytest.raises(ToolError) as misspelt:
+        session.resolve_ref("d1", "$REC_NOW")
+    assert misspelt.value.code == "not_found" and "did you mean $rec_now?" in misspelt.value.message
 
 
 # -- undo by scope: one writer per page ------------------------------------------------------------
