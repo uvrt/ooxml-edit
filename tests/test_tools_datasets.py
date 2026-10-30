@@ -80,7 +80,18 @@ def ds_insert(call, doc, items):
     return Result(summary=f"Inserted {len(items)} column(s)")
 
 
-TOOLS = [ds_derive, ds_read, ds_insert, tools_toys.toy_ppt_set_title, *shared.SESSION_TOOLS]
+@tool("ds_join", "Derive a dataset from a document's pages that also read other sources.",
+      {"doc": string("Document id."), "id": string("The dataset's id."),
+       "also": array(string(), "Other documents or datasets it read.")},
+      datasets=("also[]",))
+def ds_join(call, doc, id, also):
+    others = [call.dataset(a) if a.startswith(DATASET_PREFIX) else a for a in also]
+    address = call.define_dataset(id, _titles(call.document), also=others)
+    return Result(summary=f"Derived {address}")
+
+
+TOOLS = [ds_derive, ds_read, ds_insert, ds_join, tools_toys.toy_ppt_set_title,
+         *shared.SESSION_TOOLS]
 
 
 @pytest.fixture
@@ -472,3 +483,59 @@ def test_the_type_labels():
                            "error")
     data = Dataset.from_records([{"when": dt.datetime(2026, 3, 1, 14, 5)}])
     assert pickle.loads(pickle.dumps(data)) == data
+
+
+# -- several sources (round 25: a join) ----------------------------------------------------------
+
+
+@pytest.fixture
+def three(toolbox, session):
+    session.open(synthetic.outer_package(), "other.pptx")     # d3
+    return session
+
+
+def test_a_dataset_that_also_read_a_document_goes_stale_when_it_changes(toolbox, three):
+    assert call(toolbox, three, "ds_join", doc="d1", id="joined", also=["d3"]).ok
+    entry = three.dataset("d:joined")
+    assert not entry.stale and [o.doc for o in entry.also] == ["d3"]
+    assert entry.also[0].version == three.entry("d3").version
+    assert call(toolbox, three, "toy_ppt_set_title", doc="d3", page=1, text="New").ok
+    assert entry.stale and entry.doc == "d1"
+    read = call(toolbox, three, "ds_read", **{"from": "d:joined"})
+    assert read.warnings == ["d:joined is stale: d3 has changed since it was derived "
+                             "(version 0, now 1); derive it again for current values "
+                             "(a source it also read)"]
+    assert call(toolbox, three, "undo", doc="d3").ok
+    assert not entry.stale                                     # back where it was derived
+    # what is derived from it inherits every source
+    assert call(toolbox, three, "ds_derive", doc="d1", id="first", **{"from": "d:joined"}).ok
+    first = three.dataset("d:first")
+    assert not first.stale
+    assert call(toolbox, three, "toy_ppt_set_title", doc="d3", page=1, text="Again").ok
+    assert first.stale
+
+
+def test_a_dataset_that_also_read_a_dataset_goes_stale_with_its_source(toolbox, three):
+    assert call(toolbox, three, "ds_derive", doc="d3", id="other").ok
+    assert call(toolbox, three, "ds_join", doc="d1", id="joined", also=["d:other"]).ok
+    entry = three.dataset("d:joined")
+    assert not entry.stale
+    retitle(toolbox, three, "Own change")                      # its own source: stale
+    assert entry.stale
+    assert call(toolbox, three, "undo", doc="d1").ok and not entry.stale
+    assert call(toolbox, three, "toy_ppt_set_title", doc="d3", page=1, text="New").ok
+    assert entry.stale and three.dataset("d:other").stale
+
+
+def test_closing_another_source_keeps_its_staleness_for_good(toolbox, three):
+    assert call(toolbox, three, "ds_join", doc="d1", id="current", also=["d3"]).ok
+    assert call(toolbox, three, "toy_ppt_set_title", doc="d3", page=1, text="New").ok
+    assert call(toolbox, three, "ds_join", doc="d1", id="later", also=["d3"]).ok
+    assert call(toolbox, three, "toy_ppt_set_title", doc="d3", page=1, text="Newer").ok
+    current, later = three.dataset("d:current"), three.dataset("d:later")
+    assert call(toolbox, three, "undo", doc="d3").ok           # later is current again
+    assert current.stale and not later.stale
+    closed = call(toolbox, three, "close_document", doc="d3")
+    assert closed.ok and not closed.data                      # neither one's own source
+    assert current.stale and not later.stale and later.also[0].closed
+    assert not current.closed                                  # its own source is open
