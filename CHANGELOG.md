@@ -4,7 +4,7 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet. Each vers
 reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
 earlier ones were never tagged.
 
-## 0.73.0 -- unreleased
+## 0.72.0 -- unreleased
 - **A dataset that read several sources goes stale when any of them changes** (round 25,
   lane K: xlsx-agent's join). `Call.define_dataset(..., also=[...])` names the other
   sources a dataset read besides its own -- document handles, or `DatasetEntry`s (another
@@ -14,7 +14,7 @@ earlier ones were never tagged.
   the source. Closing a document keeps the staleness of every source that is that
   document, its own or one it also read (`DatasetEntry.document_closed`), for good. A
   dataset derived from it inherits them. The stale warning names the source that changed,
-  with "(a source it also read)". 0.73.0, not 0.72.0: a parallel lane takes 0.72.0.
+  with "(a source it also read)".
 
 ## 0.71.0 -- unreleased
 - **`Session.resolve_ref` folds ref names as a call does** (round 24, W5): `$recNow` and
