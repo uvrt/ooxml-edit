@@ -155,8 +155,9 @@ class CallContext:
     def pending_stale(self, entry: DatasetEntry) -> bool:
         """Whether a dataset this call (or batch) defined is stale so far: before the call
         ends it has no version to compare (:meth:`changed_since`)."""
-        return entry.stale if entry.version is not None else (
+        own = entry.stale if entry.version is not None else (
             entry.dataset.invalidated or self.changed_since(entry))
+        return own or any(self.pending_stale(other) for other in entry.also)
 
     def missing_ref(self, name: str, field: str | None) -> ToolError | None:
         """The error for ``$name`` that a failed op of the batch would have made."""
@@ -289,7 +290,7 @@ class Call:
         return known[name] + rest
 
     def define_dataset(self, id: str, dataset: Dataset, *, source: Any = _PRIMARY,
-                       origin: str | None = None) -> str:
+                       origin: str | None = None, also: Sequence[Any] = ()) -> str:
         """Keep ``dataset`` in the session as ``d:<id>`` once the call succeeds; its address.
 
         ``source`` is what it was derived from: by default the call's document; another
@@ -298,8 +299,11 @@ class Call:
         source's version is taken when the call ends, so a changing call defines a dataset
         from the state it leaves.  ``origin``: the address in the source document it was
         derived from (``t:sales``), which ``describe`` lists as ``d3/t:sales``; a dataset
-        derived from a dataset has that dataset as its origin unless given.  An existing id
-        is replaced.  ``limit`` when the dataset is
+        derived from a dataset has that dataset as its origin unless given.  ``also``: the
+        other sources it read (a join's other table or dataset), each a document's handle or
+        a :class:`~.datasets.DatasetEntry`; it is stale when any of them is too
+        (:attr:`DatasetEntry.also <.datasets.DatasetEntry.also>`), a document's version taken
+        when the call ends, as the source's is.  An existing id is replaced.  ``limit`` when the dataset is
         over ``Limits.max_dataset_cells`` or the session would keep over
         ``Limits.max_datasets``."""
         id = check_dataset_id(id)
@@ -333,6 +337,16 @@ class Call:
                                  kind=document.kind if document else None,
                                  name=document.name if document else None, source=document,
                                  origin=origin)
+        others = list(entry.also)
+        for other in also:
+            if isinstance(other, DatasetEntry):
+                others.append(other.derived(other.id, other.dataset))
+            else:
+                document = self.entries.get(other) or self.session.entry(other)
+                others.append(DatasetEntry(id, dataset, doc=document.doc_id,
+                                           kind=document.kind, name=document.name,
+                                           source=document))
+        entry.also = tuple(others)
         self.context.datasets.pop(id, None)
         self.context.datasets[id] = entry
         self.context.dataset_ops[id] = self.context.op
@@ -1502,12 +1516,13 @@ class Toolbox:
         warn about the stale ones it defined or named."""
         defined = list(context.datasets.values())
         for entry in defined:
-            if entry.version is None and entry.doc is not None and not entry.closed:
-                if context.changed_since(entry):
-                    # A later op of the batch changed its source: the state it came from
-                    # has no version of its own.
-                    entry.mark_stale()
-                entry.version = entry.source_version
+            for source in (entry, *entry.also):
+                if source.version is None and source.doc is not None and not source.closed:
+                    if context.changed_since(source):
+                        # A later op of the batch changed its source: the state it came
+                        # from has no version of its own.
+                        source.mark_stale()
+                    source.version = source.source_version
         session.keep_datasets(defined)
         named = {**context.datasets_used, **context.datasets}
         for entry in named.values():
@@ -2165,21 +2180,32 @@ def _ref_names(node: Any) -> list[str]:
 
 
 def _stale_warning(entry: DatasetEntry) -> str:
+    if not entry._own_stale():
+        # stale through another source it read (DatasetEntry.also): that one says why
+        for other in entry.also:
+            if other.stale:
+                return f"{entry.address} is stale: {_stale_reason(other)} (a source it also read)"
+    return f"{entry.address} is stale: {_stale_reason(entry)}"
+
+
+def _stale_reason(entry: DatasetEntry) -> str:
+    if not entry._own_stale():
+        for other in entry.also:
+            if other.stale:
+                return _stale_reason(other)
     if entry.closed:
-        return (f"{entry.address} is stale: {entry.doc} changed after it was derived, "
-                "before it was closed")
+        return f"{entry.doc} changed after it was derived, before it was closed"
     if entry.version is not None and entry.source_version is not None \
             and entry.version != entry.source_version:
-        return (f"{entry.address} is stale: {entry.doc} has changed since it was derived "
-                f"(version {entry.version}, now {entry.source_version}); derive it again "
-                "for current values")
+        return (f"{entry.doc} has changed since it was derived (version {entry.version}, now "
+                f"{entry.source_version}); derive it again for current values")
     if entry.dataset.invalidated:
-        return (f"{entry.address} is stale: it was computed from formula values whose "
-                f"cache is invalidated ({(entry.dataset.cache or {})['invalidated']} cell(s)): "
-                "they are as last saved, and nothing here recalculates; recalculate the "
-                "source in its application, then derive it again")
-    return (f"{entry.address} is stale: {entry.doc} was changed after it was derived in "
-            "the same batch; derive it again for current values")
+        return ("it was computed from formula values whose cache is invalidated "
+                f"({(entry.dataset.cache or {})['invalidated']} cell(s)): they are as last "
+                "saved, and nothing here recalculates; recalculate the source in its "
+                "application, then derive it again")
+    return (f"{entry.doc} was changed after it was derived in the same batch; derive it "
+            "again for current values")
 
 
 #: ``\v`` in JSON text, not itself escaped: no JSON escape, but what a model writes for U+000B.

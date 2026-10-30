@@ -41,6 +41,12 @@ version (:attr:`DocumentEntry.version`) after the call that defined it.  It outl
   start: the state it came from had no version of its own.
 * A dataset derived from another dataset (``source=`` an entry) inherits that dataset's
   source and version: it goes stale when its origin does.
+* A dataset that read **more than one source** -- a join of two tables, a table and another
+  dataset -- names the others as ``also`` (:meth:`Call.define_dataset
+  <.dispatch.Call.define_dataset>`): each a document handle or a dataset entry, kept with
+  its own version (or inherited source) as :attr:`DatasetEntry.also`.  It is stale when its
+  own source or any of them is; closing any of their documents keeps that one's staleness
+  for good, as closing the source does.
 * A dataset whose values were computed from **invalidated formula caches** is stale from
   the start, whatever the versions say (:attr:`Dataset.cache`): the cells it read hold
   values an edit (or the file itself) has asked the application to recalculate, and no
@@ -417,8 +423,11 @@ class DatasetEntry:
                  kind: str | None = None, name: str | None = None,
                  version: int | None = None, source: Any = None,
                  stale: bool = False, defined_at: Any = None,
-                 origin: str | None = None) -> None:
+                 origin: str | None = None, also: "Sequence[DatasetEntry]" = ()) -> None:
         self.id = id
+        #: The other sources it read, each an entry of its own (a document's version, or a
+        #: dataset's inherited source): it is stale when any of them is.
+        self.also: tuple[DatasetEntry, ...] = tuple(also)
         self.origin = origin
         self.dataset = dataset
         self.doc = doc
@@ -447,7 +456,9 @@ class DatasetEntry:
         if self._stale or self.dataset.invalidated:
             return True
         source = self._source
-        return source is not None and source.version != self.version
+        if source is not None and source.version != self.version:
+            return True
+        return any(other.stale for other in self.also)
 
     @property
     def source_version(self) -> int | None:
@@ -458,8 +469,23 @@ class DatasetEntry:
     def source_closed(self) -> None:
         """The session closed the source: keep its staleness as it is now, for good."""
         if self._source is not None:
-            self._stale = self.stale
+            self._stale = self._own_stale()
             self._source = None
+
+    def _own_stale(self) -> bool:
+        """Whether its own source makes it stale (not one of :attr:`also`)."""
+        source = self._source
+        return self._stale or self.dataset.invalidated or (
+            source is not None and source.version != self.version)
+
+    def document_closed(self, doc: str) -> None:
+        """The session closed document ``doc``: every source of this dataset that is that
+        document -- its own, or one of :attr:`also` (at any depth) -- keeps its staleness as
+        it is now, for good."""
+        if self.doc == doc and not self.closed:
+            self.source_closed()
+        for other in self.also:
+            other.document_closed(doc)
 
     def mark_stale(self) -> None:
         """Stale for good: the state it was derived from never had a version."""
@@ -470,7 +496,7 @@ class DatasetEntry:
         this dataset."""
         return DatasetEntry(id, dataset, doc=self.doc, kind=self.kind, name=self.name,
                             version=self.version, source=self._source, stale=self._stale,
-                            defined_at=defined_at, origin=self.address)
+                            defined_at=defined_at, origin=self.address, also=self.also)
 
     def brief(self, *, stale: bool | None = None) -> dict[str, Any]:
         """What ``describe`` lists of it: id, columns (the first :data:`BRIEF_COLUMNS`, the

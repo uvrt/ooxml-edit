@@ -734,8 +734,8 @@ class Session:
             kept = []
             for dataset in self.datasets.values():
                 if dataset.doc == doc_id and not dataset.closed:
-                    dataset.source_closed()
                     kept.append(dataset.address)
+                dataset.document_closed(doc_id)     # its own source, and any it also read
             return kept
 
     @contextmanager
@@ -1011,8 +1011,9 @@ class Session:
                                 f"{limits.max_datasets}: reuse an id to replace one",
                                 valid_options=self.dataset_ids())
             for entry in entries:
-                if entry.doc is not None and entry.doc not in self.documents:
-                    entry.source_closed()       # closed while the call ran (in a batch)
+                for doc in {source.doc for source in (entry, *entry.also)}:
+                    if doc is not None and doc not in self.documents:
+                        entry.document_closed(doc)   # closed while the call ran (a batch)
                 self.datasets.pop(entry.id, None)
                 self.datasets[entry.id] = entry
 
