@@ -13,6 +13,14 @@ on:
   schedule:
     - cron: "17 2 * * *"
 
+# One run per pull request at a time: a new push to it cancels the run for the push
+# before.  A push to main, the nightly run and a manual run are never cancelled and never
+# wait: their group ends in the run's own id (a group keeps one pending run and drops the
+# one before it, so a shared group would drop a queued run of main).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'pr' || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   test:
     runs-on: ${{ matrix.os }}
@@ -21,6 +29,12 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
         python-version: ["3.10", "3.11", "3.12", "3.13", "3.14", "3.15"]
+        # On a pull request macOS runs only the oldest and the newest Python (3.10 and
+        # 3.15): its runners are the scarce ones, and a pull request mostly waited for
+        # them.  Ubuntu and Windows still run every version there.  A push to main, the
+        # nightly run and a manual run take the whole matrix.  The job names stay
+        # `test (<os>, <python>)`, which branch protection matches.
+        exclude: ${{ github.event_name == 'pull_request' && fromJSON('[{"os":"macos-latest","python-version":"3.11"},{"os":"macos-latest","python-version":"3.12"},{"os":"macos-latest","python-version":"3.13"},{"os":"macos-latest","python-version":"3.14"}]') || fromJSON('[]') }}
 
     steps:
       - uses: actions/checkout@v4
