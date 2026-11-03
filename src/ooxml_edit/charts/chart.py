@@ -954,13 +954,19 @@ class Chart(ChartStyling):
         zero: measured in PowerPoint and Word 16 (Mac), 2026-11-03, on line, radar, scatter
         and area charts, the schema's default for ``val``.  Office's own new charts say
         gap.  An area chart draws span as zero (measured too); this reports what the file
-        says."""
+        says::
+
+            chart.blanks        # 'gap'
+        """
         node = find(self._root(), "c:chart/c:dispBlanksAs")
         value = node.get("val") if node is not None else None
         return value if value in BLANKS else "zero"
 
     def set_blanks(self, how: str) -> "Chart":
-        """Draw blank points as ``how``: ``"gap"``, ``"zero"`` or ``"span"`` (:attr:`blanks`)."""
+        """Draw blank points as ``how``: ``"gap"``, ``"zero"`` or ``"span"`` (:attr:`blanks`)::
+
+            chart.set_blanks("span")     # a line joins the points either side of a blank
+        """
         if how not in BLANKS:
             raise ChartDataError(f"{self.address}: blanks is gap, zero or span, not {how!r}")
         node = find(self._root(), "c:chart/c:dispBlanksAs")
@@ -975,7 +981,11 @@ class Chart(ChartStyling):
 
     def blank_points(self) -> dict[int, list[int]]:
         """Each series' blank points: ``{series position: [category positions]}``, from 0,
-        for the series that have any."""
+        for the series that have any::
+
+            chart.series[1].set_values([7, None, None, 6])
+            chart.blank_points()         # {1: [1, 2]}
+        """
         out = {}
         for series in self.series:
             gaps = [index for index, value in enumerate(series.values) if value is None]
