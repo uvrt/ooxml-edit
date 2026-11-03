@@ -632,7 +632,9 @@ class Call:
         ``timeout`` counts from when a worker takes the task; the wait for one has its own
         bound, :attr:`~.limits.Limits.worker_queue_timeout` (300 s), so a busy pool does
         not time out work that never started (an application's own runner: ``timeout``
-        bounds both, as for :meth:`run`).  ``fn`` is a module-level :func:`~.worker.worker_task`; its
+        bounds both, as for :meth:`run`).  A :class:`~.worker.ThreadRunner` runs it as the
+        pool does, in one of its threads, with the same slots and bounds.  ``fn`` is a
+        module-level :func:`~.worker.worker_task`; its
         arguments and result pickle.  Where the pool runs in this process (``workers=0``,
         an :class:`~.worker.InProcess` runner, or no worker could start) ``fn`` runs in
         this thread, still unlocked and without a deadline: a thread cannot be stopped at

@@ -798,8 +798,17 @@ too, over as many threads as the pool has workers (`render.lay_out_views(...,
 threads=n)`), instead of handing them to the other workers in chunks: one task, one
 deadline covering both, no SVGs crossing between processes and no other worker needing to
 be warm. A worker that finds the GIL on returns the SVGs, and the chunks go to the workers
-as before; with the GIL on in the caller nothing changes. Measured on 3.15t: `timings-23.md`
-in the work notes of this change (the numbers are in its pull request).
+as before; with the GIL on in the caller nothing changes.
+
+Measured on 3.15t with lxml 7 (a 2-core laptop, 4 threads against 4 worker processes; warm,
+cold, memory): a docx-agent render of 20 pages 24.5 s / 24.6 s / 287 MB with threads against
+24.9 s / 27.1 s / 590 MB with processes; a pptx-agent render of 17 slides 0.61 / 1.19 s /
+147 MB against 0.62 / 2.92 s / 434 MB; eight documents laid out 0.86 / 1.69 s / 130 MB against
+0.81 / 3.00 s / 315 MB. Warm, threads and processes are even (on two cores both stop at the
+same ceiling); cold, threads are 1.1-2.5 times faster, and they take 1.4-3 times less memory.
+The images and layouts are the same, byte for byte. Moving a document's pages into the
+layout's worker changed nothing measurable with a warm pool (24.9 against 24.7 s): drawing the
+pages is the time.
 
 **A worker that exits as it starts** (round 13, R6, 0.58.0). Under `spawn` a worker first
 imports the program's main module again, so a script with no `if __name__ == "__main__":`
