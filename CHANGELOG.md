@@ -18,7 +18,7 @@ earlier ones were never tagged.
   `data.not_run` has their `count`, the `first` and `last` index, how many `ran` and in how
   many `seconds`, and `batch_size`: the batch that fits 80 % of the deadline at the rate the
   ops ran. The summary says it -- `Not run: 86 op(s), ops[38]..ops[123], after the batch
-  passed its 120 s deadline (38 op(s) ran in 121.0 s); resend them as batches of at most 25
+  passed its 120 s deadline (38 op(s) ran in 121.0 s); resend them as batches of at most 30
   ops` -- and lists only the ops that failed as `fix and resend only these`. An all-or-none
   batch's timeout says the same in its message and `details.not_run`.
 
