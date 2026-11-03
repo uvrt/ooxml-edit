@@ -4,7 +4,7 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet. Each vers
 reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
 earlier ones were never tagged.
 
-## 0.74.0 -- unreleased
+## 0.73.0 -- unreleased
 - **`Call.defer(work)`: work for a call's result once the document is as the call leaves
   it** (round 28, W8: docx-agent's batched table ops). A call alone runs `work(result)` as
   its handler returns; a batch runs every op's after its last op, before the checks, in op
