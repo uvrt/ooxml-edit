@@ -4,6 +4,24 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet. Each vers
 reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
 earlier ones were never tagged.
 
+## 0.73.0 -- unreleased
+- **`Call.defer(work)`: work for a call's result once the document is as the call leaves
+  it** (round 28, W8: docx-agent's batched table ops). A call alone runs `work(result)` as
+  its handler returns; a batch runs every op's after its last op, before the checks, in op
+  order, each with its op's own result -- warnings it adds are put in their place among the
+  batch's (`ops[k]: ...`). For what reads the whole document (a layout): done after every
+  op, a batch cost the document's size per op; deferred, the ops after the first find it
+  done. Work that fails is a warning, never the op's error (the op applied).
+  `Toolbox.batch_defers = False` runs each op's work right after it, for comparing.
+- **A batch past its deadline says what was not run** (W8). With ops applied one by one, the
+  ops after the deadline are not run (each still listed with its `timeout` error), and
+  `data.not_run` has their `count`, the `first` and `last` index, how many `ran` and in how
+  many `seconds`, and `batch_size`: the batch that fits 80 % of the deadline at the rate the
+  ops ran. The summary says it -- `Not run: 86 op(s), ops[38]..ops[123], after the batch
+  passed its 120 s deadline (38 op(s) ran in 121.0 s); resend them as batches of at most 30
+  ops` -- and lists only the ops that failed as `fix and resend only these`. An all-or-none
+  batch's timeout says the same in its message and `details.not_run`.
+
 ## 0.72.0 -- unreleased
 - **A dataset that read several sources goes stale when any of them changes** (round 25,
   lane K: xlsx-agent's join). `Call.define_dataset(..., also=[...])` names the other
