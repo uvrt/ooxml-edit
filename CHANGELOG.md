@@ -4,6 +4,35 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet. Each vers
 reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
 earlier ones were never tagged.
 
+## 0.74.0 -- unreleased
+- **Slow reads on a snapshot in the worker pool, side by side** (production round 28, P2:
+  checks of one deck took turns). `Call.on_snapshot(fn, *args, timeout=...)` takes the
+  primary document's bytes under its lock (`DocumentEntry.snapshot`, once per version, shared
+  by every reader of that version), lets the call's locks go and runs `fn(data, *args)` in a
+  worker process; the result reports the snapshot's version. Each worker opens its own copy
+  and drops it with the task, so copies are bounded by the pool. Such tasks hold all the
+  pool's workers but one (`Toolbox.snapshot_slots`; `Limits.snapshot_workers` sets how
+  many), so a render does not queue behind a turn of checks. The task's `timeout` counts
+  from when a worker takes it; the wait for one has its own bound,
+  `Limits.worker_queue_timeout` (300 s), so a busy pool does not time out work that never
+  started (`WorkerPool.run`, `SubprocessPool.run` and `InProcess.run` take
+  `queue_timeout`; without it the wait counts against `timeout`, as before). In process (`workers=0`, an `InProcess` runner, the fallback) `fn` runs in
+  the calling thread, unlocked and without a deadline, as before. Inside a batch or a
+  changing call the locks stay held.
+- **A read that let its lock go says when the document moved on**: the result keeps the
+  version it read and warns "d1 changed while this call read it: the result is of version 5,
+  the document is at version 6 now; call again for the latest" (`dispatch.moved_on`). For
+  every unlocked read: renders and checks of decks and Word documents alike. Not when the
+  change came from a later call of the same `dispatch_many` turn alone: the turn's order
+  already says the read sees the document before it.
+- **`dispatch_many` runs one turn's reads of a document side by side.** A call that only
+  reads (`Toolbox._side_by_side`: a reading tool with no role of its own -- not `undo`,
+  `close_document`, `save_document` -- taking no datasets, sources or text facts) waits for
+  the turn's earlier edits of its documents, not its earlier reads; an edit waits for the
+  earlier edits to end and for the earlier reads to hold their locks, so it runs while a read
+  works on its snapshot. Every result is still the one the calls in order would give.
+  Writes still serialize.
+
 ## 0.73.0 -- unreleased
 - **`Call.defer(work)`: work for a call's result once the document is as the call leaves
   it** (round 28, W8: docx-agent's batched table ops). A call alone runs `work(result)` as

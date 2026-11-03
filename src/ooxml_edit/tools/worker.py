@@ -587,6 +587,14 @@ class _Pool:
 # -- multiprocessing workers -------------------------------------------------------------------
 
 
+def _queue(deadline: float, timeout: float, queue_timeout: float | None) -> tuple[float, float]:
+    """What :meth:`_Pool._acquire` waits for a busy worker against: the task's deadline, or
+    its own ``queue_timeout`` from now when one is given."""
+    if queue_timeout is None:
+        return deadline, timeout
+    return time.monotonic() + queue_timeout, queue_timeout
+
+
 class _StartFailed(ToolError):
     """A worker did not start, or not in time: raised from its warm-up, never a task's.
     ``lasting``: it exited with a code as it started, so the next would too."""
@@ -936,16 +944,18 @@ class SubprocessPool(_Pool):
         """Unregistered tasks run in-process and given up at their deadline."""
         return self._inline.abandoned if self._inline is not None else 0
 
-    def run(self, fn: Callable[..., Any], *args: Any, timeout: float, **kwargs: Any) -> Any:
+    def run(self, fn: Callable[..., Any], *args: Any, timeout: float,
+            queue_timeout: float | None = None, **kwargs: Any) -> Any:
         if self._closed:
             raise RuntimeError("the worker pool is closed")
         reference = task_reference(fn)
         if reference is None:
-            return self._run_inline(fn, args, kwargs, timeout)
+            return self._run_inline(fn, args, kwargs, timeout, queue_timeout)
         payload = pickle.dumps((args, kwargs), protocol=_PROTOCOL)
         deadline = time.monotonic() + timeout
-        worker, uncounted = self._acquire(deadline, timeout)
-        deadline += uncounted
+        worker, uncounted = self._acquire(*_queue(deadline, timeout, queue_timeout))
+        deadline = (deadline + uncounted if queue_timeout is None
+                    else time.monotonic() + timeout)
         try:
             worker.send(("task", reference, payload))
             reply = worker.wait(deadline - time.monotonic())
@@ -964,7 +974,7 @@ class SubprocessPool(_Pool):
         return _outcome(reply)
 
     def _run_inline(self, fn: Callable[..., Any], args: tuple, kwargs: dict,
-                    timeout: float) -> Any:
+                    timeout: float, queue_timeout: float | None = None) -> Any:
         name = f"{getattr(fn, '__module__', '?')}.{getattr(fn, '__qualname__', repr(fn))}"
         with self._condition:
             if self._inline is None:
@@ -975,7 +985,8 @@ class SubprocessPool(_Pool):
             logger.warning("%s is not a registered worker task (ooxml_edit.tools.worker_task), "
                            "so it runs in-process: a deadline bounds the wait, not the work",
                            name)
-        return self._inline.run(fn, *args, timeout=timeout, **kwargs)
+        return self._inline.run(fn, *args, timeout=timeout, queue_timeout=queue_timeout,
+                                **kwargs)
 
     def _start(self) -> _Subprocess:
         timeout = self.start_timeout
@@ -1039,13 +1050,17 @@ class InProcess:
         self.abandoned = 0
         self.running_abandoned = 0
 
-    def run(self, fn: Callable[..., Any], *args: Any, timeout: float, **kwargs: Any) -> Any:
+    def run(self, fn: Callable[..., Any], *args: Any, timeout: float,
+            queue_timeout: float | None = None, **kwargs: Any) -> Any:
         if self._closed:
             raise RuntimeError("the worker pool is closed")
+        wait = timeout if queue_timeout is None else queue_timeout
         deadline = time.monotonic() + timeout
-        if not self._slots.acquire(timeout=max(0.0, timeout)):
-            raise ToolError("timeout", f"no worker was free within {timeout:g} s",
-                            details={"timeout": timeout, "in_process": True})
+        if not self._slots.acquire(timeout=max(0.0, wait)):
+            raise ToolError("timeout", f"no worker was free within {wait:g} s",
+                            details={"timeout": wait, "in_process": True})
+        if queue_timeout is not None:
+            deadline = time.monotonic() + timeout     # from when a slot took it
         outcome: dict[str, Any] = {}
         done = threading.Event()
         state = {"abandoned": False}
@@ -1192,7 +1207,9 @@ class WorkerPool(_Pool):
             return self._subprocesses
 
     def _run_elsewhere(self, runner: Any, fn: Callable[..., Any], args: tuple, kwargs: dict,
-                       deadline: float) -> Any:
+                       deadline: float, queue_timeout: float | None = None) -> Any:
+        if queue_timeout is not None:
+            kwargs = {**kwargs, "queue_timeout": queue_timeout}
         try:
             return runner.run(fn, *args, timeout=max(0.0, deadline - time.monotonic()),
                               **kwargs)
@@ -1207,19 +1224,26 @@ class WorkerPool(_Pool):
         inline = self._go_in_process(why)
         return inline.run(fn, *args, timeout=max(0.0, deadline - time.monotonic()), **kwargs)
 
-    def run(self, fn: Callable[..., Any], *args: Any, timeout: float, **kwargs: Any) -> Any:
+    def run(self, fn: Callable[..., Any], *args: Any, timeout: float,
+            queue_timeout: float | None = None, **kwargs: Any) -> Any:
+        """``fn(*args, **kwargs)`` in a worker, waited for at most ``timeout`` s.  Waiting for
+        a busy worker counts against it, unless ``queue_timeout`` is given: then that bounds
+        the wait for a worker, and ``timeout`` counts from when one takes the task."""
         if self._closed:
             raise RuntimeError("the worker pool is closed")
         refuse_while_bootstrapping()
         deadline = time.monotonic() + timeout
         if self._inline is not None:
-            return self._inline.run(fn, *args, timeout=timeout, **kwargs)
+            return self._inline.run(fn, *args, timeout=timeout, queue_timeout=queue_timeout,
+                                    **kwargs)
         if self._subprocesses is not None:
-            return self._run_elsewhere(self._subprocesses, fn, args, kwargs, deadline)
+            return self._run_elsewhere(self._subprocesses, fn, args, kwargs, deadline,
+                                       queue_timeout)
         why = None
         try:
-            worker, uncounted = self._acquire(deadline, timeout)
-            deadline += uncounted
+            worker, uncounted = self._acquire(*_queue(deadline, timeout, queue_timeout))
+            deadline = (deadline + uncounted if queue_timeout is None
+                        else time.monotonic() + timeout)
         except _NoChildren as exc:
             if not self._fallback:
                 raise AssertionError(str(exc)) from None
@@ -1229,7 +1253,8 @@ class WorkerPool(_Pool):
                 raise
             why = exc.message
         if why is not None:         # outside the handler: the work's own error unchained
-            return self._run_elsewhere(self._go_elsewhere(why), fn, args, kwargs, deadline)
+            return self._run_elsewhere(self._go_elsewhere(why), fn, args, kwargs, deadline,
+                                       queue_timeout)
         try:
             worker.conn.send((fn, args, kwargs))
             if not worker.conn.poll(max(0.0, deadline - time.monotonic())):

@@ -16,7 +16,8 @@ describe, makes sessions, emits provider definitions, and runs calls.  A call go
    become error results with a code and, where there is a closed set, ``valid_options``.
 
 :meth:`Toolbox.dispatch_many` runs one assistant turn's parallel calls: calls on the same
-document serially in the order the model emitted them, calls on different documents at
+document serially in the order the model emitted them -- its reads side by side, an edit
+once the reads before it hold their locks (round 28) -- calls on different documents at
 the same time, results in call order.
 
 **Refs.**  A creating call may name what it makes (``call.define_ref("box1", "256.7")``);
@@ -98,7 +99,8 @@ from .session import (NO_CONTEXT, REF, REF_USE, Clock, DocumentEntry, DocumentFo
 from .session import _folded_use, _misspelt_ref
 from .sources import Rows, qualify, resolve as resolve_rows
 from .rendercache import ContentStore
-from .worker import WorkerPool, default_workers, refuse_while_bootstrapping, run_all
+from .worker import (InProcess, SubprocessPool, WorkerPool, default_workers,
+                     refuse_while_bootstrapping, run_all)
 
 #: A ref's name (``REF``) and a ref's use, ``$name`` or ``$name/rest`` (:mod:`.session`'s,
 #: whose :meth:`~.session.Session.resolve_ref` reads them as a call does).
@@ -613,6 +615,52 @@ class Call:
         with self.unlocked():
             return self.run(fn, *args, timeout=timeout, **kwargs)
 
+    def on_snapshot(self, fn: Callable[..., Any], *args: Any, timeout: float | None = None,
+                    **kwargs: Any) -> Any:
+        """``fn(data, *args, **kwargs)`` in a worker process, ``data`` the primary
+        document's bytes at this version, the call's locks let go while it runs: a slow
+        read -- a check -- side by side with other calls on the document, and an edit to it
+        meanwhile does not wait (round 28, P2).
+
+        The bytes are taken here, under the lock (:meth:`DocumentEntry.snapshot`: made once
+        per version, so concurrent calls on one version share them), and the result
+        reports their version (:attr:`version_used`); the dispatcher warns when the
+        document moved on before the call ended.  Each worker opens its own copy from the
+        bytes and drops it with the task, so there are at most as many copies as the
+        pool has workers; such tasks take all the workers but one
+        (:attr:`Toolbox.snapshot_slots`: a render need not wait for a turn of them).
+        ``timeout`` counts from when a worker takes the task; the wait for one has its own
+        bound, :attr:`~.limits.Limits.worker_queue_timeout` (300 s), so a busy pool does
+        not time out work that never started (an application's own runner: ``timeout``
+        bounds both, as for :meth:`run`).  ``fn`` is a module-level :func:`~.worker.worker_task`; its
+        arguments and result pickle.  Where the pool runs in this process (``workers=0``,
+        an :class:`~.worker.InProcess` runner, or no worker could start) ``fn`` runs in
+        this thread, still unlocked and without a deadline: a thread cannot be stopped at
+        one.  Inside a batch or a changing call the locks stay held (:meth:`unlocked`),
+        the work still on the bytes."""
+        if self.entry is None:
+            raise ValueError("on_snapshot needs the call's document")
+        data = self.entry.snapshot()
+        pool = self.toolbox.pool
+        with self.unlocked():
+            if getattr(pool, "in_process", False) or isinstance(pool, InProcess):
+                return fn(data, *args, **kwargs)
+            queue = self.limits.worker_queue_timeout
+            began = time.monotonic()
+            slots = self.toolbox.snapshot_slots
+            if not slots.acquire(timeout=queue):
+                raise ToolError("timeout", f"no worker was free within {queue:g} s",
+                                details={"timeout": queue})
+            try:
+                timeout = timeout or self.limits.render_timeout
+                if not isinstance(pool, (WorkerPool, SubprocessPool)):
+                    return pool.run(fn, data, *args, timeout=timeout, **kwargs)
+                return pool.run(fn, data, *args, timeout=timeout,
+                                queue_timeout=max(0.0, queue - (time.monotonic() - began)),
+                                **kwargs)
+            finally:
+                slots.release()
+
     def run(self, fn: Callable[..., Any], *args: Any, timeout: float | None = None,
             **kwargs: Any) -> Any:
         """Run ``fn`` in a worker process (or in-process: :mod:`.worker`); ``timeout`` (s)
@@ -817,6 +865,7 @@ class Toolbox:
         self._prewarm = prewarm
         self._pool: Any = runner
         self._pool_lock = threading.Lock()
+        self._snapshot_slots: threading.BoundedSemaphore | None = None
         #: Rendered images by content key, every session's and view's (:mod:`.rendercache`).
         self.images = ContentStore(self.limits.image_cache_bytes)
         #: Fonts a worker decoded from a document's embedded ones, by payload digest, for
@@ -1100,6 +1149,20 @@ class Toolbox:
         size = getattr(pool, "size", 1)
         return max(1, size) if isinstance(size, int) else 1
 
+    @property
+    def snapshot_slots(self) -> threading.BoundedSemaphore:
+        """How many :meth:`Call.on_snapshot` tasks hold a worker at once:
+        :attr:`~.limits.Limits.snapshot_workers`, by default all of the pool's workers but
+        one (at least one), so a render does not queue behind a turn of checks that fills
+        the pool."""
+        size = self.parallelism                # takes the pool's lock itself
+        wanted = self.limits.snapshot_workers
+        count = max(1, size - 1) if wanted is None else max(1, int(wanted))
+        with self._pool_lock:
+            if self._snapshot_slots is None:
+                self._snapshot_slots = threading.BoundedSemaphore(count)
+            return self._snapshot_slots
+
     def warm(self, *, wait: bool = False) -> None:
         """Start the worker processes now and warm them (the formats' imports and font
         index), in the background -- at the application's start, say, so no call waits for
@@ -1113,6 +1176,7 @@ class Toolbox:
     def close(self) -> None:
         with self._pool_lock:
             pool, self._pool = self._pool, None
+            self._snapshot_slots = None
         if pool is not None:
             pool.close()
 
@@ -1136,7 +1200,26 @@ class Toolbox:
         In a worker process that is still starting -- a main module with no ``__main__``
         guard, imported again there -- it stops that process instead (see
         :mod:`.worker`): the program's work does not run once more in each worker."""
+        return self._dispatch(session, name, arguments, roles=roles, context=context)
+
+    def _dispatch(self, session: Session | SessionView, name: str, arguments: Any, *,
+                  roles: str | Iterable[str] | None = None,
+                  context: Mapping[str, Any] | None = None,
+                  holding: threading.Event | None = None, turn: "_Turn | None" = None) -> Result:
+        """:meth:`dispatch`; ``holding`` is set once the call holds its documents' locks, or
+        has ended without them (:meth:`dispatch_many`: an edit after a read waits for it);
+        ``turn``: the changes the turn's calls made (:class:`_Turn`)."""
         refuse_while_bootstrapping()
+        try:
+            return self._dispatch_held(session, name, arguments, roles, context, holding,
+                                       turn)
+        finally:
+            if holding is not None:
+                holding.set()
+
+    def _dispatch_held(self, session: Session | SessionView, name: str, arguments: Any,
+                       roles: str | Iterable[str] | None, context: Mapping[str, Any] | None,
+                       holding: threading.Event | None, turn: "_Turn | None" = None) -> Result:
         session, roles, caller = _caller(session, roles, context)
         started = time.perf_counter()
         tool: Tool | None = None
@@ -1165,10 +1248,12 @@ class Toolbox:
                     hint=lambda value: self._source_hint(session, doc_ids, value))
             reading = [doc for doc in found if doc not in doc_ids]
             with session.lock(doc_ids + reading) as locked:
+                if holding is not None:
+                    holding.set()
                 entries = {entry.doc_id: entry for entry in locked}
                 primary = entries[doc_ids[0]] if doc_ids else None
                 result = self._run(session, tool, clean, entries, primary, reading,
-                                   roles=roles, caller=caller)
+                                   roles=roles, caller=caller, turn=turn)
         except ToolError as error:
             result = Result.failure(error)
         except Exception as exc:  # noqa: BLE001 -- the model gets an error result
@@ -1193,27 +1278,71 @@ class Toolbox:
                       *, max_workers: int = 8, roles: str | Iterable[str] | None = None,
                       context: Mapping[str, Any] | None = None) -> list[Result]:
         """Run one turn's calls: per document in the order given, documents concurrently.
-        ``session``, ``roles`` and ``context`` as for :meth:`dispatch`, for every call."""
+        ``session``, ``roles`` and ``context`` as for :meth:`dispatch`, for every call.
+
+        Reads of one document run side by side (round 28, P2): a call that only reads
+        (:meth:`_side_by_side`) waits for the turn's earlier edits of its documents, never
+        for its earlier reads; an edit waits for the earlier edits to end and for the
+        earlier reads to hold their locks -- a read that works on a snapshot
+        (:meth:`Call.on_snapshot`) lets them go while it works, so the edit runs then, and
+        the read's result is still of the document before the edit.  Every result is the
+        one the calls in the order given would have."""
         refuse_while_bootstrapping()
         if not calls:
             return []
         session, roles, caller = _caller(session, roles, context)
         documents = [self._documents_named(session, name, arguments)
                      for name, arguments in calls]
+        reads = [bool(documents[index]) and self._side_by_side(name, arguments)
+                 for index, (name, arguments) in enumerate(calls)]
         futures: list[Future[Result]] = []
+        holding: list[threading.Event] = []
+        turn = _Turn()
         with ThreadPoolExecutor(max_workers=max(1, min(max_workers, len(calls)))) as executor:
             for index, (name, arguments) in enumerate(calls):
-                earlier = [futures[j] for j in range(index) if documents[j] & documents[index]
-                           or not documents[j] or not documents[index]]
-                futures.append(executor.submit(self._after, earlier, session, name, arguments,
-                                               roles, caller))
+                ended: list[Future[Result]] = []
+                held: list[threading.Event] = []
+                for j in range(index):
+                    if (documents[j] and documents[index]
+                            and not documents[j] & documents[index]):
+                        continue
+                    if reads[j] and reads[index]:
+                        continue
+                    if reads[j]:
+                        held.append(holding[j])
+                    else:
+                        ended.append(futures[j])
+                holding.append(threading.Event())
+                futures.append(executor.submit(self._after, ended, held, holding[index],
+                                               session, name, arguments, roles, caller, turn))
             return [future.result() for future in futures]
 
-    def _after(self, earlier: list[Future[Result]], session: Session, name: str,
-               arguments: Any, roles: Sequence[str], caller: Mapping[str, Any]) -> Result:
-        for future in earlier:
+    def _after(self, ended: list[Future[Result]], held: list[threading.Event],
+               holding: threading.Event, session: Session, name: str, arguments: Any,
+               roles: Sequence[str], caller: Mapping[str, Any], turn: "_Turn") -> Result:
+        for future in ended:
             future.exception()  # wait; its outcome is its own
-        return self.dispatch(session, name, arguments, roles=roles, context=caller)
+        for event in held:
+            event.wait()        # the earlier read holds its locks (or has ended)
+        return self._dispatch(session, name, arguments, roles=roles, context=caller,
+                              holding=holding, turn=turn)
+
+    def _side_by_side(self, name: str, arguments: Any) -> bool:
+        """Whether a call of a turn only reads its documents, so it may run beside the
+        turn's other reads of them (:meth:`dispatch_many`): a reading call of a tool of no
+        role of its own (not a session tool: undo, close_document, save_document) that
+        takes no datasets, sources or text facts, whose values an earlier call of the turn
+        may make.  Anything that cannot be told is ``False``: in order, as before."""
+        try:
+            tool = self.tools[self.tool_named(name)]
+            parsed = json.loads(arguments) if isinstance(arguments, str) else arguments
+            if not isinstance(parsed, Mapping) or tool.composite or tool.role is not None:
+                return False
+            if tool.datasets or tool.sources or tool.facts:
+                return False
+            return not tool.changes(parsed)
+        except Exception:  # noqa: BLE001 -- the call will fail on its own, in order
+            return False
 
     def _documents_named(self, session: Session, name: str,
                          arguments: Any) -> frozenset[str]:
@@ -1292,12 +1421,19 @@ class Toolbox:
     def _run(self, session: Session, tool: Tool, arguments: dict[str, Any],
              entries: dict[str, DocumentEntry], primary: DocumentEntry | None,
              reading: Sequence[str] = (), *, roles: Sequence[str] = ROLES,
-             caller: Mapping[str, Any] = NO_CONTEXT) -> Result:
+             caller: Mapping[str, Any] = NO_CONTEXT, turn: "_Turn | None" = None) -> Result:
+        # The turn's changes so far, and the versions now: what this call changes is the
+        # turn's, for its reads that let their locks go meanwhile (never warned about).
+        since = turn.mark() if turn is not None else 0
+        before = {doc: entry.version for doc, entry in entries.items()}
         if tool.composite:
             edited = {doc: entry for doc, entry in entries.items() if doc not in reading}
-            return self._run_batch(session, arguments, edited, primary,
-                                   {doc: entries[doc] for doc in reading},
-                                   roles=roles, caller=caller)
+            outcome = self._run_batch(session, arguments, edited, primary,
+                                      {doc: entries[doc] for doc in reading},
+                                      roles=roles, caller=caller)
+            if turn is not None:
+                turn.made(entries, before)
+            return outcome
         handler = self._handler(session, tool, arguments, primary)
         changing = tool.changes(arguments)
         key = arguments.get("key") if changing and isinstance(arguments.get("key"), str) else None
@@ -1335,6 +1471,12 @@ class Toolbox:
             _report_facts(call, result)
             if call.version_used is not None:
                 result.version = call.version_used
+                if (call.released and primary is not None
+                        and primary.version != call.version_used
+                        and not (turn is not None and turn.explains(
+                            primary.doc_id, call.version_used, primary.version, since))):
+                    result.warnings.append(moved_on(primary.doc_id, call.version_used,
+                                                    primary.version))
             if changing and result.ok:
                 self._keep_refs(entries, context, [primary.doc_id] if primary else [])
                 if primary is not None:
@@ -1346,6 +1488,8 @@ class Toolbox:
         result.warnings.extend(caught)
         if key is not None and primary is not None and result.ok:
             primary.keys[(tool.name, key)] = result
+        if turn is not None and not call.released:
+            turn.made(entries, before)
         return result
 
     def _handler(self, session: Session, tool: Tool, arguments: Mapping[str, Any],
@@ -2251,6 +2395,47 @@ def _not_run(timeout: float, first: int, total: int, elapsed: float
     else:
         text += "; resend them as smaller batches"
     return text, data
+
+
+class _Turn:
+    """The changes one :meth:`Toolbox.dispatch_many` turn's calls made, in order:
+    ``(doc, version before, version after)``, each kept while the call held the lock.  A
+    read of the turn that let its locks go is not warned that its document moved on when
+    the turn's later calls alone moved it: the turn's order already says the read sees
+    the document before them."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._steps: list[tuple[str, int, int]] = []
+
+    def mark(self) -> int:
+        with self._lock:
+            return len(self._steps)
+
+    def made(self, entries: Mapping[str, DocumentEntry], before: Mapping[str, int]) -> None:
+        with self._lock:
+            for doc, entry in entries.items():
+                if entry.version != before.get(doc, entry.version):
+                    self._steps.append((doc, before[doc], entry.version))
+
+    def explains(self, doc: str, used: int, now: int, since: int) -> bool:
+        """Whether the turn's changes since ``since`` take ``doc`` from ``used`` to ``now``,
+        one after another, nothing else between."""
+        with self._lock:
+            version = used
+            for step_doc, start, end in self._steps[since:]:
+                if step_doc == doc:
+                    if start != version:
+                        return False
+                    version = end
+            return version == now
+
+
+def moved_on(doc: str, used: int, now: int) -> str:
+    """The warning of a reading call whose document changed while it worked on a snapshot
+    (:meth:`Call.unlocked`): its result stands for the version it read."""
+    return (f"{doc} changed while this call read it: the result is of version {used}, "
+            f"the document is at version {now} now; call again for the latest")
 
 
 def _set_checks(result: Result, checks: Mapping[str, Any]) -> None:

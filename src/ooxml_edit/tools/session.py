@@ -10,6 +10,10 @@ Concurrency.  A document is an lxml tree mutated in place, so every call on it h
 entry's re-entrant lock.  Calls on different documents run concurrently.  A call on several
 documents takes their locks in :func:`doc_order`, so two such calls cannot deadlock.  The
 session's own maps have a lock of their own, never held while a document lock is awaited.
+A slow read lets its locks go and works on a snapshot (:meth:`DocumentEntry.snapshot`, the
+bytes of one version, made once and shared by every reader of it), in a worker process
+(:meth:`~.dispatch.Call.on_snapshot`): reads of one document run side by side, and an edit
+does not wait for them.
 
 Fonts.  :attr:`Session.font_dirs` is the application's own font folders, for every render
 and every measurement of text the session's documents make: application configuration,
