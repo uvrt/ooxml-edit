@@ -168,6 +168,16 @@ def render_page(data: bytes, number: int, width: int, seconds: float = 0.0) -> t
 
 
 @worker_task
+def read_title(data: bytes, number: int, seconds: float = 0.0) -> tuple[str, int, int]:
+    """A slow read in a worker (``Call.on_snapshot``): a page's title in the bytes, their
+    length and the worker's pid.  ``seconds`` stalls it."""
+    import os
+    if seconds:
+        time.sleep(seconds)
+    return ToyDocument(data).title(number), len(data), os.getpid()
+
+
+@worker_task
 def worker_pid() -> int:
     import os
     return os.getpid()
