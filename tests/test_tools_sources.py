@@ -371,7 +371,7 @@ def test_text_in_a_series_is_refused_naming_its_cell(toolbox, session):
     assert error.field == "columns[1]" and not SEEN
 
 
-@pytest.mark.parametrize("value, word", [("4", "text"), (True, "logical"), (None, "blank"),
+@pytest.mark.parametrize("value, word", [("4", "text"), (True, "logical"),
                                          (float("nan"), "finite")])
 def test_nothing_is_coerced_into_a_number(toolbox, value, word):
     session = toolbox.session(clock=CLOCK)

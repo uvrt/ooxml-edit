@@ -275,6 +275,8 @@ def test_in_a_daemonic_process_renders_run_in_parallel_and_edits_do_not_wait():
     assert got["edit"] < 0.4 * one, got  # an edit does not wait for the render
 
 
+@pytest.mark.skipif(not getattr(sys, "_is_gil_enabled", lambda: True)(),
+                    reason="the GIL is off (free-threaded build): in-process work no longer serialises")
 def test_in_a_daemonic_process_in_process_work_serialises_as_measured():
     """The control: the same work in-process (``workers=0``) holds the GIL, so two renders
     take twice as long and an edit waits for the render."""

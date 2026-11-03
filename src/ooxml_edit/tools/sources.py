@@ -145,6 +145,25 @@ def first_rows(address: str, count: int) -> str | None:
     return f"{match.group(1)}/#{first}" + ("" if last == first else f":#{last}")
 
 
+def blank_text(positions: list[int], one: str, many: str, *, start: int) -> str:
+    """Where a series' blank points are, for a result: ``"1 blank point (category 2)"``,
+    ``"3 blank points (rows 4-5, 9)"`` -- positions counted from ``start``, consecutive
+    ones as runs, never a value::
+
+        blank_text([3, 4, 8], "row", "rows", start=1)   # '3 blank points (rows 4-5, 9)'
+    """
+    runs: list[str] = []
+    for position in positions:
+        shown = position + start
+        if runs and runs[-1].split("-")[-1] == str(shown - 1):
+            runs[-1] = f"{runs[-1].split('-')[0]}-{shown}"
+        else:
+            runs.append(str(shown))
+    count = len(positions)
+    return (f"{count} blank point{'s' if count != 1 else ''} "
+            f"({one if count == 1 else many} {', '.join(runs)})")
+
+
 def runs(rows: Iterable[int]) -> str:
     """Row positions from 0 as text from 1, consecutive ones as runs: ``1-4,7``."""
     parts: list[str] = []
@@ -419,6 +438,6 @@ def _clock(parts: Sequence[str | None]) -> _dt.time:
     return _dt.time(int(hour), int(minute), int(second or 0), micro)
 
 
-__all__ = ["MOMENT_TYPES", "QUALIFIED", "Rows", "date_pattern", "date_value", "first_rows", "label",
+__all__ = ["MOMENT_TYPES", "QUALIFIED", "Rows", "blank_text", "date_pattern", "date_value", "first_rows", "label",
            "merged", "moment_of", "moment_text", "no_dates",
            "number", "prefixes", "qualify", "resolve", "runs", "what"]

@@ -121,17 +121,18 @@ def store_provenance(package: Any, part: str, found: Mapping[str, Any] | None) -
     return changed
 
 
-def holder(package: Any, part: str) -> _provenance.Holder:
-    """The chart part ``part`` as a :class:`~ooxml_edit.provenance.Holder`."""
+def holder(package: Any, part: str, chart: Any = None) -> _provenance.Holder:
+    """The chart part ``part`` as a :class:`~ooxml_edit.provenance.Holder`; ``chart``, the
+    :class:`~.chart.Chart` that used it, as its ``target``."""
     return _provenance.Holder(
         key=(id(package), part),
         store=lambda found: store_provenance(package, part, found),
-        read=lambda: _read_part(package, part))
+        read=lambda: _read_part(package, part), target=chart)
 
 
-def note(package: Any, part: str) -> None:
-    """Say that the chart part ``part`` was used, for a placement watching."""
-    _provenance.note(holder(package, part))
+def note(package: Any, part: str, chart: Any = None) -> None:
+    """Say that the chart part ``part`` was used (by ``chart``), for a placement watching."""
+    _provenance.note(holder(package, part, chart))
 
 
 def _read_part(package: Any, part: str) -> dict[str, Any] | None:

@@ -23,6 +23,26 @@ earlier ones were never tagged.
 - New `tests/test_tools_threads.py`; `tests/test_tools_snapshot.py` runs its cases with a
   thread runner too.
 
+## 0.75.0 -- unreleased
+- **Blank chart points** (production round 29, C1). `edit_chart` from a source takes a blank
+  cell (nothing, or only spaces) as a blank point (`None`) instead of refusing it. Text and
+  other non-numbers are still refused, and so is a blank category or scatter x value. The
+  result's `blank_points` says per series how many and in which source rows ("1 blank point
+  (row 14)"), never a value. Values by position take `null` for a blank: `values`, and
+  `data`'s `values`. New `blanks` (`gap`, `zero`, `span`) on `add`, `set_values`,
+  `set_value`, `add_series` and `add_category` writes `c:dispBlanksAs` in the call's undo
+  step; the handlers never see it. Every chart result with a blank point says `blanks` and
+  `blank_points` by category position; `read` always says `blanks`. `Chart.blanks` reads the
+  setting: a chart that does not say draws zero, measured in PowerPoint and Word.
+  `Chart.set_blanks` and `Chart.blank_points` are new. `tools.sources.blank_text` is new.
+  The validation keyword `orNull` (`number(or_null=True)`) is new, and so is
+  `openai_strict_schema(schema, nulls)`, which makes such items nullable.
+  `provenance.Holder.target` holds the chart a part's holder was noted by. `edit_chart`
+  costs 49 more offline tokens in every pptx and docx definition. It is not sent strict, so
+  the strict sets are unchanged.
+- **`ToolError(valid_options=None)` means no options**, as `()` does (production round 29,
+  W11: a refusal with nothing smaller to offer crashed as an internal error).
+
 ## 0.74.0 -- unreleased
 - **Slow reads on a snapshot in the worker pool, side by side** (production round 28, P2:
   checks of one deck took turns). `Call.on_snapshot(fn, *args, timeout=...)` takes the
