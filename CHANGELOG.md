@@ -4,7 +4,7 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet. Each vers
 reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
 earlier ones were never tagged.
 
-## 0.73.0 -- unreleased
+## 0.74.0 -- unreleased
 - **Slow reads on a snapshot in the worker pool, side by side** (production round 28, P2:
   checks of one deck took turns). `Call.on_snapshot(fn, *args, timeout=...)` takes the
   primary document's bytes under its lock (`DocumentEntry.snapshot`, once per version, shared
