@@ -15,6 +15,18 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  # Nightly, half an hour after ci.yml's own (staggered as its crons are), with macOS
+  # too, which a pull request leaves out.
+  schedule:
+    - cron: "47 2 * * *"
+
+# One run per pull request at a time: a new push to it cancels the run for the push
+# before.  A push to main, the nightly run and a manual run are never cancelled and never
+# wait: their group ends in the run's own id (a group keeps one pending run and drops the
+# one before it, so a shared group would drop a queued run of main).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'pr' || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   test:
@@ -23,7 +35,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        # Ubuntu only on a pull request (macOS runners are the scarce ones); both on a
+        # push to main, the nightly run and a manual run.
+        os: ${{ github.event_name == 'pull_request' && fromJSON('["ubuntu-latest"]') || fromJSON('["ubuntu-latest", "macos-latest"]') }}
 
     steps:
       - uses: actions/checkout@v4
