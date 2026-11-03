@@ -46,7 +46,7 @@ import json
 import re
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable, Hashable, Iterator, Mapping
 
 #: The record format's version, ``v`` in every record.
@@ -190,6 +190,10 @@ class Holder:
     key: Hashable
     store: Callable[[Mapping[str, Any] | None], object]  # what it returns is not used
     read: Callable[[], "dict[str, Any] | None"]
+    #: The object itself, when the one that noted it has it (a chart part's
+    #: :class:`~ooxml_edit.charts.Chart`), for a caller that changes more than the record;
+    #: not part of what tells holders apart.
+    target: Any = field(default=None, compare=False)
 
 
 _WATCHED: ContextVar["list[Holder] | None"] = ContextVar("ooxml_edit_provenance_holders",
@@ -220,8 +224,12 @@ def note(holder: Holder) -> None:
 
 
 def _add(found: list[Holder], holder: Holder) -> None:
-    if all(known.key != holder.key for known in found):
-        found.append(holder)
+    for index, known in enumerate(found):
+        if known.key == holder.key:
+            if known.target is None and holder.target is not None:
+                found[index] = holder       # the same holder, now with its object
+            return
+    found.append(holder)
 
 
 __all__ = ["Holder", "RecordError", "SESSION_ONLY", "VERSION", "dumps", "edit_span",

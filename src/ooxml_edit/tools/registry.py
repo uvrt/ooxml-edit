@@ -116,9 +116,13 @@ def integer(description: str | None = None, *, minimum: int | None = None,
 
 
 def number(description: str | None = None, *, minimum: float | None = None,
-           maximum: float | None = None, optional: bool = False) -> Param:
+           maximum: float | None = None, or_null: bool = False,
+           optional: bool = False) -> Param:
+    """A number; with ``or_null`` (an array's items) ``null`` too, kept ``None`` -- a
+    validation keyword only (``orNull``, :data:`~.schema.BOUND_KEYWORDS`): the description
+    says what a null is."""
     return _param(_described("number", description), optional,
-                  minimum=minimum, maximum=maximum)
+                  minimum=minimum, maximum=maximum, orNull=True if or_null else None)
 
 
 def boolean(description: str | None = None, *, optional: bool = False) -> Param:

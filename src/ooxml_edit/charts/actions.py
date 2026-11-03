@@ -546,6 +546,10 @@ def add_plan(chart_type: Any, categories: Any, data: Any, values: Any = None, *,
             raise ToolError("invalid_arguments", f"a {chart_type} chart takes its x values in "
                             "values, not categories", field="values")
         labels = list(values)
+        if any(value is None for value in labels):
+            raise ToolError("invalid_arguments", f"a {chart_type} chart's x values are "
+                            "numbers, none blank: a blank point goes in a series' values",
+                            field="values")
     else:
         categories = need(None, "add", "categories", categories)
         if values is not None:
@@ -592,7 +596,10 @@ def chart_json(chart: Any, key: str = "address") -> dict[str, Any]:
     """What every ``edit_chart`` result holds: the chart under ``key`` (a deck's
     ``address``, a document's ``id``: :attr:`~.chart.Chart.address`), its type, title,
     categories, series, legend and number formats, its categories' format when they are
-    dates, its gap width when it has bars."""
+    dates, its gap width when it has bars, and -- when a series has a blank point (a
+    ``None`` among its values) -- how blanks draw (``blanks``) and each such series' blank
+    points by category position from 0 (``blank_points``:
+    :func:`ooxml_edit.tools.sources.blank_text`)."""
     data: dict[str, Any] = {
         key: chart.address, "type": "dot" if chart.is_dot else chart.chart_type,
         "title": chart.title, "categories": chart_categories(chart),
@@ -604,14 +611,26 @@ def chart_json(chart: Any, key: str = "address") -> dict[str, Any]:
         data["category_format"] = chart.category_format
     if chart.gap_width is not None:
         data["gap_width"] = chart.gap_width
+    gaps = chart.blank_points()
+    if gaps:
+        from ..tools.sources import blank_text  # here, not at import: charts stand alone
+
+        # How the blanks draw, and where they are: by category position, never a value.
+        data["blanks"] = chart.blanks
+        names = {series.index: series.name for series in chart.series}
+        data["blank_points"] = {
+            str(names[index] if names[index] is not None else index):
+            blank_text(positions, "category", "categories", start=0)
+            for index, positions in gaps.items()}
     return data
 
 
 def chart_read_json(chart: Any, key: str = "address") -> dict[str, Any]:
-    """``read``'s result: :func:`chart_json`, each axis' title, the look
+    """``read``'s result: :func:`chart_json` with ``blanks`` always, each axis' title, the look
     (:func:`chart_style_json`) and what the embedded workbook holds (``"unreadable: ..."``
     when it cannot be read)."""
     data = chart_json(chart, key)
+    data.setdefault("blanks", chart.blanks)
     data["axes"] = {axis: chart.axis_title(axis) for axis in chart.axes}
     data.update(chart_style_json(chart))
     try:

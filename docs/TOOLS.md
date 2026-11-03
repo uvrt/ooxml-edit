@@ -374,8 +374,11 @@ defaulted column that is not all numbers is refused, naming the cell and suggest
 
 The kind's handler is wrapped once for every library (`Spec(wrap=...)`): it gets literal
 `categories`, `data` and `values` as if the model had written them and never sees `from`.
-Series values must be numbers: text, a logical value or a blank is refused with the cell's
-sources in the message (never its text), and nothing is converted. Category labels are text
+Series values must be numbers: text or a logical value is refused with the cell's
+sources in the message (never its text), and nothing is converted. A blank cell (nothing,
+or only spaces) is a blank point (`None`), and the result's `blank_points` says per series
+how many and in which rows of the source, never a value: `{"total": "1 blank point (row
+14)"}`. A blank category label or scatter x value is still refused. Category labels are text
 as given, or a number written as the General format does in the session's locale (`2,5` in
 nl-NL; `2024` without a thousands separator). Columns match exactly, else case aside. A
 bubble chart's sizes are not taken from a source. The result's `from` says where every
@@ -390,6 +393,19 @@ placed value came from, the column, the rows placed (from 1, in the order placed
 ```
 
 The sources are also kept in the saved document: see the next paragraphs.
+
+**Blank points** (round 29). Values given by position take `null` for a blank point too
+(`values`, and `data`'s `values` for `add`; the validation schema's `orNull`, which the
+canonical schema leaves out -- the descriptions say `null` -- and the OpenAI strict form
+makes those items nullable). `blanks` (`gap`, `zero`, `span`) on `add`, `set_values`,
+`set_value`, `add_series` or `add_category` sets how the chart draws them
+(`c:dispBlanksAs`, `Chart.set_blanks`), after the kind's handler has run and in the same
+undo step; another action refuses it. Every result of a chart with a blank point says
+`blanks` and its `blank_points` per series, by category position from 0 (`"2 blank points
+(categories 1-2)"`); `read` always says `blanks`. Measured in PowerPoint and Word 16 (Mac):
+a chart that does not say (no `c:dispBlanksAs`, or one without `val`) draws zero, so
+`blanks` reads it as `zero`; Office's new charts, and `add`'s, say `gap`; columns leave a
+blank out whatever the setting, and an area chart draws `span` as zero.
 
 **Source addresses in the saved file.** What a result's `from` says is also written into the
 document, so it can be read back after a save, in another session, or after the file has

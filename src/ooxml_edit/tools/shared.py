@@ -68,6 +68,14 @@ from .results import Result, ToolError, page_text
 CHART_TYPES = ("column", "stacked_column", "bar", "stacked_bar", "line", "pie", "scatter",
                "radar", "radar_filled", "bubble", "dot")
 
+#: ``edit_chart``'s ``blanks``: how a chart draws its blank points
+#: (:data:`ooxml_edit.charts.chart.BLANKS`, kept equal by a test; not imported here, as
+#: the tool layer loads the chart library only when a chart is edited).
+BLANKS = ("gap", "zero", "span")
+
+#: The ``edit_chart`` actions that take ``blanks``: those that give a chart values.
+BLANKS_ACTIONS = ("add", "set_values", "set_value", "add_series", "add_category")
+
 #: The group of the shared tools that are not core: loaded on demand.
 MISC = "shared_misc"
 
@@ -409,11 +417,12 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
           "chart_type": string("add: the kind of chart; set_series_type: line or column.",
                                enum=list(CHART_TYPES), optional=True),
           "categories": array(string(), "add: category labels, in order.", optional=True),
-          "data": array(obj({"name": string(), "values": array(number()),
+          "data": array(obj({"name": string(), "values": array(number(or_null=True)),
                              "type": string("line: drawn as a line (column charts).",
                                             enum=["column", "line"], optional=True),
                              "size": array(number(), "Bubble sizes.", optional=True)}),
-                        "add: each series' name and one value per category.", optional=True),
+                        "add: each series' name and one value per category, null for a "
+                        "blank.", optional=True),
           "box": obj({"x": number(), "y": number(), "w": number(), "h": number()},
                      "add, decks: the frame, pt.", optional=True),
           "width": number("add, documents: width in pt. Default 432.", minimum=36,
@@ -422,9 +431,9 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
                                   "code, e.g. #,##0.0.", optional=True),
           "series": string("Series name, or number from 0.", optional=True),
           "category": string("Category label, or number from 0.", optional=True),
-          "values": array(number(), "One per category (set_values, add_series) or series "
-                          "(add_category); add: scatter, bubble x values.",
-                          optional=True),
+          "values": array(number(or_null=True), "One per category (set_values, add_series) "
+                          "or series (add_category), null for a blank; add: scatter, bubble "
+                          "x values.", optional=True),
           "value": number("set_value: the value; set_gap_width: % of a bar's width.",
                           optional=True),
           "text": string("New name, label or title; add: the chart title.", optional=True),
@@ -475,7 +484,10 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
           "columns": array(string(), "from's category column, then series columns; default all.",
                            optional=True),
           "date_format": string("add from: category dates' pattern, e.g. d mmmm yyyy.",
-                                optional=True)},
+                                optional=True),
+          "blanks": string("How null values draw; span joins lines across. New charts: "
+                           "gap.",
+                           enum=list(BLANKS), optional=True)},
          group=MISC, mutates=True, refs=("target",), sources=("from",),
          reads=_reading_action, wrap=lambda fn: _chart_rows(fn),
          action_roles={"read": REVIEW},
@@ -601,6 +613,15 @@ def _chart_rows(handler: Callable[..., Any]) -> Callable[..., Any]:
     Its result gets ``from``: the source, its document and version, and per category and
     series column the rows placed (from 1, as runs) and their sources, merged.  A series
     value that is not a number is refused, naming its cell: text is never converted.
+    A blank cell (nothing, or only spaces) is a blank point (``None``), and the result's
+    ``blank_points`` say per series how many and in which rows of the source, never a
+    value; a blank category or scatter x value is still refused.
+
+    ``blanks`` (``gap``, ``zero``, ``span``: :data:`BLANKS`) on an action that gives values
+    (:data:`BLANKS_ACTIONS`), with ``from`` or without, sets how the chart draws its blank
+    points (``c:dispBlanksAs``) once the kind's handler has run, in the same undo step: the
+    chart is the one the handler used (``ooxml_edit.charts`` notes it), and the result's
+    ``blanks`` says it.  The handler never sees ``blanks``.
 
     The placement is also kept in the saved document, in the call's undo step: its
     :mod:`ooxml_edit.provenance` record goes into the chart part (``ooxml_edit.charts``
@@ -615,6 +636,18 @@ def _chart_rows(handler: Callable[..., Any]) -> Callable[..., Any]:
 
     @functools.wraps(handler)
     def run(call: Any, **arguments: Any) -> Any:
+        blanks = arguments.pop("blanks", None)
+        if blanks is None:
+            return placed(call, **arguments)
+        if arguments.get("action") not in BLANKS_ACTIONS:
+            raise ToolError("invalid_arguments", f"blanks is for {', '.join(BLANKS_ACTIONS)}: "
+                            f"how the values' blank points draw; {arguments.get('action')} "
+                            "gives no values", field="blanks", valid_options=list(BLANKS_ACTIONS))
+        with provenance.watch() as used:
+            returned = placed(call, **arguments)
+        return _set_blanks(returned, used, blanks)
+
+    def placed(call: Any, **arguments: Any) -> Any:
         source = arguments.pop("from", None)
         columns = arguments.pop("columns", None)
         date_format = arguments.pop("date_format", None)
@@ -634,6 +667,22 @@ def _chart_rows(handler: Callable[..., Any]) -> Callable[..., Any]:
         return _from_rows(handler, call, source, columns, arguments, date_format)
 
     return run
+
+
+def _set_blanks(returned: Any, used: list[Any], blanks: str) -> Any:
+    """``blanks`` set on the one chart the call used, after the format's handler made or
+    changed it (in the call's undo step, as its record is kept), and in the result."""
+    result = returned if isinstance(returned, Result) else Result(data=returned)
+    if not result.ok:
+        return returned
+    charts = {holder.key: holder.target for holder in used if holder.target is not None}
+    if len(charts) != 1:
+        raise ToolError("internal", f"blanks: the call used {len(charts)} charts, not one")
+    chart = next(iter(charts.values()))
+    chart.set_blanks(blanks)
+    if isinstance(result.data, dict):
+        result.data["blanks"] = chart.blanks
+    return result
 
 
 def _read_record(handler: Callable[..., Any], call: Any, arguments: dict[str, Any]) -> Any:
@@ -700,7 +749,7 @@ def _from_rows(handler: Callable[..., Any], call: Any, source: str, columns: Any
             raise ToolError("refused", f"{rows.address} has no rows", field="from")
         order = list(range(len(rows.dataset.rows)))
         if chart_type == "scatter":
-            arguments["values"] = _numbers(rows, at[0], order, fields[0])
+            arguments["values"] = _numbers(rows, at[0], order, fields[0], blanks=False)
         else:
             arguments["categories"] = (
                 _dates(call, rows, at[0], order, fields[0], date_format) if date_format
@@ -735,7 +784,29 @@ def _from_rows(handler: Callable[..., Any], call: Any, source: str, columns: Any
         result.data["from"] = placed
     else:
         result.data = {"chart": result.data, "from": placed}
+    _blank_rows(result.data, rows, order, list(zip(series, at[1:])))
     return result
+
+
+def _blank_rows(data: dict[str, Any], rows: Any, order: list[int],
+                series: list[tuple[Any, int]]) -> None:
+    """The result's ``blank_points`` for the series placed from rows: by the source's rows
+    (from 1), in place of the chart's category positions; the chart's other series keep
+    theirs."""
+    names = _series_names(data) or []
+    found = {}
+    for name, column in series:
+        gaps = sorted(row for row in order if _blank(rows.dataset.rows[row][column]))
+        if not gaps:
+            continue
+        key = str(name)
+        if key not in names and key.isdigit() and int(key) < len(names):
+            key = names[int(key)]           # set_values' series given by position
+        found[key] = sources.blank_text(gaps, "row", "rows", start=1)
+    if not found:
+        return
+    points = data.get("blank_points")
+    data["blank_points"] = {**(points if isinstance(points, dict) else {}), **found}
 
 
 #: The ``edit_chart`` actions without ``from`` that change what a chart's record says:
@@ -872,11 +943,21 @@ def _keep(call: Any, rows: Any, placed: Mapping[str, Any], used: list[Any],
         call.store_provenance(address, found)
 
 
-def _numbers(rows: Any, column: int, order: list[int], field: str) -> list[Any]:
-    """A series' values from a column, in ``order``: numbers, or a refusal naming the cell."""
-    out = []
+def _blank(value: Any) -> bool:
+    """Whether a source cell is blank: nothing, or text of only spaces."""
+    return value is None or (isinstance(value, str) and not value.strip())
+
+
+def _numbers(rows: Any, column: int, order: list[int], field: str, *,
+             blanks: bool = True) -> list[Any]:
+    """A series' values from a column, in ``order``: numbers, ``None`` for a blank cell
+    (with ``blanks``; a scatter's x values have none), or a refusal naming the cell."""
+    out: list[Any] = []
     for row in order:
         value = rows.dataset.rows[row][column]
+        if blanks and _blank(value):
+            out.append(None)
+            continue
         if not sources.number(value):
             choose = ("name the category and series columns in columns, as without columns "
                       "every column after the first is a series" if field == "from"
