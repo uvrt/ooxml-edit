@@ -46,7 +46,7 @@ on and its container's CPU quota (cgroup v2 ``cpu.max``, v1 ``cpu.cfs_quota_us``
 :data:`MAX_DEFAULT_WORKERS`.  :func:`run_all` runs several tasks at once over a pool's
 workers, results in order: one call's views, in chunks.
 
-**Three runners.**
+**Three runners** (and a fourth, below).
 
 * :class:`WorkerPool` -- :mod:`multiprocessing` workers, the default.  ``spawn`` is the
   start method on every platform: it behaves the same on Linux, macOS and Windows, and
@@ -67,6 +67,15 @@ workers, results in order: one call's views, in chunks.
   so a runaway task delays later ones -- each still bounded by its own deadline -- rather
   than piling up CPU work.  The deadline bounds the *wait*, not the work; and work that
   holds the GIL stops the threads serving other calls while it runs.
+
+**A fourth, opt-in: threads with the GIL off.**  On a free-threaded Python with the GIL off
+(``python3.15t``, ``PYTHON_GIL=0``, lxml 7: :func:`gil_enabled`), threads of one process
+run side by side, so :class:`ThreadRunner` (``Toolbox(runner="threads")``) runs the work
+there: no worker to start, warm-up once per process (:func:`warm_once`), nothing pickled
+across but the arguments that could change.  Its deadlines are :class:`InProcess`'s -- a
+task past one is abandoned, not stopped, and keeps its slot until it ends -- with a cap on
+how many may be running before new work is refused.  The process pool stays the default:
+only a process can be stopped at a deadline.
 """
 
 from __future__ import annotations
@@ -1035,11 +1044,10 @@ class SubprocessPool(_Pool):
 # -- in-process --------------------------------------------------------------------------------
 
 
-class InProcess:
-    """Tasks run in threads of this process, at most ``size`` at a time, each waited for at
-    most its deadline.  A task past its deadline is abandoned, not stopped: it runs on, in its
-    slot, until it ends (see the module's notes).  The same ``run`` and ``close`` as
-    :class:`WorkerPool`, so an application may pass one as a toolbox's ``runner``."""
+class _Threads:
+    """Tasks in threads of this process, at most ``size`` at a time, each waited for at most
+    its deadline; a task past it is abandoned, not stopped: it runs on, in its slot, until
+    it ends.  What :class:`InProcess` and :class:`ThreadRunner` share."""
 
     def __init__(self, size: int = 1) -> None:
         self.size = max(1, size)
@@ -1050,15 +1058,26 @@ class InProcess:
         self.abandoned = 0
         self.running_abandoned = 0
 
-    def run(self, fn: Callable[..., Any], *args: Any, timeout: float,
-            queue_timeout: float | None = None, **kwargs: Any) -> Any:
+    #: What a thread serving a task is called.
+    _thread_name = "ooxml-edit-tools-inprocess"
+
+    def _timed_out(self, timeout: float) -> ToolError:
+        return ToolError("timeout", f"the work did not finish within {timeout:g} s; "
+                         "it was abandoned (in-process work cannot be stopped)",
+                         details={"timeout": timeout, "in_process": True})
+
+    def _busy(self, wait: float) -> ToolError:
+        return ToolError("timeout", f"no worker was free within {wait:g} s",
+                         details={"timeout": wait, "in_process": True})
+
+    def _run(self, fn: Callable[..., Any], args: tuple, kwargs: dict, timeout: float,
+             queue_timeout: float | None) -> Any:
         if self._closed:
             raise RuntimeError("the worker pool is closed")
         wait = timeout if queue_timeout is None else queue_timeout
         deadline = time.monotonic() + timeout
         if not self._slots.acquire(timeout=max(0.0, wait)):
-            raise ToolError("timeout", f"no worker was free within {wait:g} s",
-                            details={"timeout": wait, "in_process": True})
+            raise self._busy(wait)
         if queue_timeout is not None:
             deadline = time.monotonic() + timeout     # from when a slot took it
         outcome: dict[str, Any] = {}
@@ -1077,7 +1096,7 @@ class InProcess:
                     done.set()
                 self._slots.release()
 
-        thread = threading.Thread(target=work, name="ooxml-edit-tools-inprocess", daemon=True)
+        thread = threading.Thread(target=work, name=self._thread_name, daemon=True)
         try:
             thread.start()
         except BaseException:
@@ -1090,9 +1109,7 @@ class InProcess:
                     self.abandoned += 1
                     self.running_abandoned += 1
             if state["abandoned"]:
-                raise ToolError("timeout", f"the work did not finish within {timeout:g} s; "
-                                "it was abandoned (in-process work cannot be stopped)",
-                                details={"timeout": timeout, "in_process": True})
+                raise self._timed_out(timeout)
         if "error" in outcome:
             raise outcome["error"]
         return outcome.get("value")
@@ -1100,13 +1117,194 @@ class InProcess:
     def pids(self) -> list[int]:
         return []
 
-    def warm(self, count: int | None = None, *, wait: bool = False) -> None:
-        """Nothing to start: the work runs in this process."""
-
     def close(self) -> None:
         self._closed = True
 
+
+class InProcess(_Threads):
+    """Tasks run in threads of this process, at most ``size`` at a time, each waited for at
+    most its deadline.  A task past its deadline is abandoned, not stopped: it runs on, in its
+    slot, until it ends (see the module's notes).  The same ``run`` and ``close`` as
+    :class:`WorkerPool`, so an application may pass one as a toolbox's ``runner``."""
+
+    def run(self, fn: Callable[..., Any], *args: Any, timeout: float,
+            queue_timeout: float | None = None, **kwargs: Any) -> Any:
+        return self._run(fn, args, kwargs, timeout, queue_timeout)
+
+    def warm(self, count: int | None = None, *, wait: bool = False) -> None:
+        """Nothing to start: the work runs in this process."""
+
     def __enter__(self) -> "InProcess":
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        self.close()
+
+
+# -- threads, with the GIL off -----------------------------------------------------------------
+
+
+def gil_enabled() -> bool:
+    """Whether this interpreter runs with the GIL: always on a regular build; on a
+    free-threaded one (``python3.15t``) unless it was turned back on -- ``PYTHON_GIL=1``,
+    or an extension module imported that needs it (lxml before 7 does), which Python
+    announces with a ``RuntimeWarning``."""
+    enabled = getattr(sys, "_is_gil_enabled", None)
+    return True if enabled is None else bool(enabled())
+
+
+#: Warm-up tasks already run in this process, each with the event set once it ended (a
+#: failure included: it is logged, and not tried again).
+_WARMED: dict[Any, threading.Event] = {}
+_WARMED_LOCK = threading.Lock()
+
+
+def warm_once(tasks: Sequence[Callable[[], Any]], timeout: float = START_TIMEOUT) -> None:
+    """Run each of ``tasks`` once in this process, whichever thread asks first; another
+    thread asking meanwhile waits for that run, at most ``timeout`` s each, then goes on
+    without it (logged).  A failure is logged, not raised, and not tried again: the work
+    still runs, as a worker process's does after a failed warm-up."""
+    for fn in tasks:
+        with _WARMED_LOCK:
+            event = _WARMED.get(fn)
+            mine = event is None
+            if mine:
+                event = _WARMED[fn] = threading.Event()
+        assert event is not None
+        if not mine:
+            if not event.wait(timeout):
+                logger.warning("the warm-up %s did not end within %g s; the work goes on "
+                               "without waiting for it", getattr(fn, "__qualname__", fn),
+                               timeout)
+            continue
+        try:
+            fn()
+        except Exception as exc:  # noqa: BLE001 -- the work still runs
+            logger.warning("a warm-up %s failed: %s: %s",
+                           getattr(fn, "__qualname__", fn), type(exc).__name__, exc)
+        finally:
+            event.set()
+
+
+#: Types a :class:`ThreadRunner` hands a task as they are: nothing in them can change.
+_IMMUTABLE = (bytes, str, int, float, complex, bool, type(None), range)
+
+
+def _own_copy(value: Any) -> Any:
+    """``value`` for one task alone: as it is when nothing in it can change, else a copy
+    made as a worker process gets its arguments (a pickle round trip)."""
+    if isinstance(value, _IMMUTABLE):
+        return value
+    if type(value) is tuple and all(isinstance(item, _IMMUTABLE) for item in value):
+        return value
+    return pickle.loads(pickle.dumps(value, protocol=_PROTOCOL))
+
+
+class ThreadRunner(_Threads):
+    """Tasks in threads of this process, side by side, for a free-threaded Python with the
+    GIL off (``python3.15t``, lxml 7): opt in with ``Toolbox(runner="threads")``.
+
+    The same ``run``, ``warm`` and ``close`` as :class:`WorkerPool`: at most ``size`` tasks
+    run at once, each waited for at most its deadline; ``queue_timeout`` bounds the wait for
+    a slot as there.  What changes is what a deadline does.  A thread cannot be stopped,
+    so a task past its deadline is reported as ``timeout`` and its result is thrown away
+    when it ends, but it keeps its slot until then: a runaway task makes the runner
+    smaller, never busier.  At most ``max_abandoned`` (default ``size``) such tasks may be
+    running: past that, ``run`` refuses new work at once (:class:`ToolError` ``limit``,
+    saying why) rather than queueing it behind work nothing can stop.  Where deadlines
+    must stop the work, use the default :class:`WorkerPool`.
+
+    Warm-up runs once per process, not per worker (:func:`warm_once`): the formats'
+    imports and font scans are shared by every task, and there is no worker to start, no
+    module to import again and nothing to pickle across.  Each task still gets its own
+    arguments: those that could change (a list, a dict, an object) are copied for it as a
+    worker process would get them (pickled), so no two tasks share one; bytes, strings and
+    numbers are handed over as they are.  Results are not copied.
+
+    With the GIL on, threads take turns: the runner works, but no faster than one thread,
+    and a task that holds the GIL (resvg's rasterise) stops every other.  It warns once
+    when it finds the GIL on; ``Toolbox(runner="threads")`` does not use it then."""
+
+    _thread_name = "ooxml-edit-tools-thread"
+
+    def __init__(self, size: int = 2, *, warm_up: Sequence[Callable[[], Any]] = (),
+                 start_timeout: float = START_TIMEOUT, max_abandoned: int | None = None) -> None:
+        if size < 1:
+            raise ArgumentError("a thread runner has at least one thread")
+        if max_abandoned is not None and max_abandoned < 0:
+            raise ArgumentError("max_abandoned is 0 or more (None: the runner's size)")
+        super().__init__(size)
+        #: What runs once in this process before the first task (:func:`warm_once`).
+        self.warm_up: list[Callable[[], Any]] = list(warm_up)
+        self.start_timeout = start_timeout
+        #: Tasks past their deadline that may still be running before new work is refused.
+        self.max_abandoned = self.size if max_abandoned is None else max_abandoned
+        self._warned_gil = False
+
+    @property
+    def in_process(self) -> bool:
+        """``False``: tasks run side by side, each bounded by its deadline, as in worker
+        processes -- not one at a time in the calling thread (:class:`InProcess`)."""
+        return False
+
+    @property
+    def runner(self) -> str:
+        return "threads"
+
+    def _timed_out(self, timeout: float) -> ToolError:
+        return ToolError("timeout", f"the work did not finish within {timeout:g} s; it was "
+                         "abandoned: a thread cannot be stopped, so it runs on and keeps its "
+                         "slot until it ends, and its result is thrown away",
+                         details={"timeout": timeout, "threads": True})
+
+    def _busy(self, wait: float) -> ToolError:
+        return ToolError("timeout", f"no thread was free within {wait:g} s",
+                         details={"timeout": wait, "threads": True})
+
+    def _check_gil(self) -> None:
+        if self._warned_gil or not gil_enabled():
+            return
+        self._warned_gil = True
+        logger.warning("ooxml-edit's thread runner finds the GIL on: its tasks take turns "
+                       "(a free-threaded Python, python3.15t with PYTHON_GIL=0 and lxml 7, "
+                       "runs them side by side; worker processes do on any Python)")
+
+    def run(self, fn: Callable[..., Any], *args: Any, timeout: float,
+            queue_timeout: float | None = None, **kwargs: Any) -> Any:
+        """``fn(*args, **kwargs)`` in a thread, waited for at most ``timeout`` s (see the
+        class's notes); warming up first is not the call's time."""
+        if self._closed:
+            raise RuntimeError("the worker pool is closed")
+        self._check_gil()
+        warm_once(self.warm_up, self.start_timeout)
+        with self._lock:
+            stuck = self.running_abandoned
+        if stuck and stuck >= self.max_abandoned:
+            raise ToolError(
+                "limit", f"{stuck} task(s) past their deadline are still running in this "
+                "process's threads, which cannot stop them, so new work is refused until "
+                "they end; try again later. The application may allow more "
+                "(ThreadRunner(max_abandoned=...)) or run the work in worker processes, the "
+                "default runner, whose deadlines stop it",
+                details={"abandoned_running": stuck, "max_abandoned": self.max_abandoned,
+                         "threads": True})
+        args = tuple(_own_copy(arg) for arg in args)
+        kwargs = {name: _own_copy(value) for name, value in kwargs.items()}
+        return self._run(fn, args, kwargs, timeout, queue_timeout)
+
+    def warm(self, count: int | None = None, *, wait: bool = False) -> None:
+        """Run the warm-up once in this process (:func:`warm_once`), in a background thread;
+        ``wait`` returns when it has (a failure is logged).  ``count`` is not used: there
+        is no worker to start."""
+        if self._closed:
+            return
+        thread = threading.Thread(target=warm_once, args=(self.warm_up, self.start_timeout),
+                                  daemon=True, name="ooxml-edit-tools-warm")
+        thread.start()
+        if wait:
+            thread.join()
+
+    def __enter__(self) -> "ThreadRunner":
         return self
 
     def __exit__(self, *exc: Any) -> None:

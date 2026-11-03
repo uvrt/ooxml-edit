@@ -71,6 +71,9 @@ class Limits:
     #: Workers :meth:`~.dispatch.Call.on_snapshot` tasks (checks) may hold at once; ``None``:
     #: all of the pool's but one, so a render need not queue behind a turn of checks.
     snapshot_workers: int | None = None
+    #: Tasks past their deadline a ``runner="threads"`` toolbox lets run on before it refuses
+    #: new work (:class:`~.worker.ThreadRunner`'s ``max_abandoned``); ``None``: its size.
+    max_abandoned_threads: int | None = None
     # caches, in entries per document
     #: Per document: SVG reads, contact images and other derived views by version.
     render_cache_size: int = 16

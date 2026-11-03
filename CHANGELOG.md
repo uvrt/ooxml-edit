@@ -4,6 +4,25 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet. Each vers
 reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
 earlier ones were never tagged.
 
+## 0.76.0 -- unreleased
+- **An opt-in thread runner for a free-threaded Python** (free threading, step 3; the
+  production team asked): `Toolbox(runner="threads")` runs the work in `ThreadRunner`, threads
+  of this process side by side, where the GIL is off (`python3.15t`, `PYTHON_GIL=0`, lxml 7;
+  `tools.gil_enabled()`); with the GIL on it uses the default worker pool instead, with a
+  warning once. The same `run(fn, *args, timeout=..., queue_timeout=...)`, `warm` and
+  `close` as `WorkerPool`, and `on_snapshot`'s queue bound and slots as with the pool. Warm-up
+  runs once per process (`worker.warm_once`), not per worker. Each task gets its own copy of
+  the arguments that could change (pickled, as a worker process gets them); bytes, strings
+  and numbers go as they are. A thread cannot be stopped: a task past its deadline is
+  reported as `timeout`, its result thrown away, and it keeps its slot until it ends; while
+  `max_abandoned` of them (default: the runner's size; a toolbox's from
+  `Limits.max_abandoned_threads`) are still running, `run` refuses new work at once with a
+  `limit` error saying why. The process pool stays the default.
+  `InProcess` is unchanged (it and `ThreadRunner` share `worker._Threads`).
+  `Toolbox(runner="processes")` names the default; any other name is refused.
+- New `tests/test_tools_threads.py`; `tests/test_tools_snapshot.py` runs its cases with a
+  thread runner too.
+
 ## 0.75.0 -- unreleased
 - **Blank chart points** (production round 29, C1). `edit_chart` from a source takes a blank
   cell (nothing, or only spaces) as a blank point (`None`) instead of refusing it. Text and

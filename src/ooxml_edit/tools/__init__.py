@@ -87,8 +87,8 @@ from .session import (DEFAULT_LOCALE, LOCALE_FIELDS, Blob, DefaultLocale, Docume
                       DocumentFormat, Output, Session, SessionView, StepOwner, doc_order,
                       fold_ref, locale_of, part_entries)
 from .rendercache import ContentStore, content_key
-from .worker import (InProcess, SubprocessPool, WorkerPool, available_cpus, default_workers,
-                     run_all, worker_task)
+from .worker import (InProcess, SubprocessPool, ThreadRunner, WorkerPool, available_cpus,
+                     default_workers, gil_enabled, run_all, worker_task)
 
 __all__ = [
     "ACCEPT", "ANY_ROLE", "EDIT", "RESOLVE", "REVIEW", "ROLES", "role_set",
@@ -96,11 +96,11 @@ __all__ = [
     "DATASET_PREFIX", "DEFAULT_LOCALE", "Dataset", "DatasetEntry", "DefaultLocale", "DocumentEntry", "DocumentFormat",
     "ERROR_CODES", "LOCALE_FIELDS", "REF", "Image", "LimitError", "Limits", "Output", "Param",
     "Result", "Rows", "SYSTEM", "TYPE_LABELS",
-    "InProcess", "Session", "SessionView", "StepOwner", "StrictProblem", "SubprocessPool", "SubsetError", "Tool", "ToolError", "ToolGroup", "Toolbox",
+    "InProcess", "Session", "SessionView", "StepOwner", "StrictProblem", "SubprocessPool", "SubsetError", "ThreadRunner", "Tool", "ToolError", "ToolGroup", "Toolbox",
     "WorkerPool", "ContentStore", "available_cpus", "content_key", "default_workers",
     "render", "rendercache", "run_all",
     "anthropic_image_tokens", "array", "boolean", "build_schema", "canonical", "check_subset",
-    "collect_warnings", "dataset_id", "doc_order", "fold_ref", "free_object", "integer", "locale_of",
+    "collect_warnings", "dataset_id", "doc_order", "fold_ref", "free_object", "gil_enabled", "integer", "locale_of",
     "row_range",
     "names_as", "number", "obj", "openai_image_tokens",
     "page_list", "page_text", "part_entries", "hints", "shared", "textfacts", "tiles", "strict_problems", "string", "system_prompt", "tool", "truncate", "validate_call",

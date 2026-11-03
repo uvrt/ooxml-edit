@@ -99,8 +99,8 @@ from .session import (NO_CONTEXT, REF, REF_USE, Clock, DocumentEntry, DocumentFo
 from .session import _folded_use, _misspelt_ref
 from .sources import Rows, qualify, resolve as resolve_rows
 from .rendercache import ContentStore
-from .worker import (InProcess, SubprocessPool, WorkerPool, default_workers,
-                     refuse_while_bootstrapping, run_all)
+from .worker import (InProcess, SubprocessPool, ThreadRunner, WorkerPool, default_workers,
+                     gil_enabled, refuse_while_bootstrapping, run_all)
 
 #: A ref's name (``REF``) and a ref's use, ``$name`` or ``$name/rest`` (:mod:`.session`'s,
 #: whose :meth:`~.session.Session.resolve_ref` reads them as a call does).
@@ -632,7 +632,9 @@ class Call:
         ``timeout`` counts from when a worker takes the task; the wait for one has its own
         bound, :attr:`~.limits.Limits.worker_queue_timeout` (300 s), so a busy pool does
         not time out work that never started (an application's own runner: ``timeout``
-        bounds both, as for :meth:`run`).  ``fn`` is a module-level :func:`~.worker.worker_task`; its
+        bounds both, as for :meth:`run`).  A :class:`~.worker.ThreadRunner` runs it as the
+        pool does, in one of its threads, with the same slots and bounds.  ``fn`` is a
+        module-level :func:`~.worker.worker_task`; its
         arguments and result pickle.  Where the pool runs in this process (``workers=0``,
         an :class:`~.worker.InProcess` runner, or no worker could start) ``fn`` runs in
         this thread, still unlocked and without a deadline: a thread cannot be stopped at
@@ -653,7 +655,7 @@ class Call:
                                 details={"timeout": queue})
             try:
                 timeout = timeout or self.limits.render_timeout
-                if not isinstance(pool, (WorkerPool, SubprocessPool)):
+                if not isinstance(pool, (WorkerPool, SubprocessPool, ThreadRunner)):
                     return pool.run(fn, data, *args, timeout=timeout, **kwargs)
                 return pool.run(fn, data, *args, timeout=timeout,
                                 queue_timeout=max(0.0, queue - (time.monotonic() - began)),
@@ -781,6 +783,22 @@ def _served(tools: dict[str, Tool]) -> dict[str, Tool]:
     return tools
 
 
+#: The runners ``Toolbox(runner=...)`` takes by name: the default pool, or threads.
+RUNNERS = ("processes", "threads")
+
+_THREADS_GIL_WARNED: list[bool] = []
+
+
+def _warn_threads_gil() -> None:
+    """Once per process: ``runner="threads"`` asked for, the GIL on."""
+    if _THREADS_GIL_WARNED:
+        return
+    _THREADS_GIL_WARNED.append(True)
+    logger.warning("Toolbox(runner=\"threads\") needs a free-threaded Python with the GIL off "
+                   "(python3.15t, PYTHON_GIL=0, lxml 7 or later); this one has the GIL on, "
+                   "where threads take turns, so the work runs in worker processes instead")
+
+
 class Toolbox:
     """The tools of one or more libraries, ready for a provider and a session."""
 
@@ -808,6 +826,12 @@ class Toolbox:
         **kwargs)`` and ``close()`` -- a :class:`~.worker.SubprocessPool`, an
         :class:`~.worker.InProcess`, a ``WorkerPool(fallback=...)`` of the application's
         choice, or its own executor (with a ``size``, its work is spread over that many).
+        ``runner="threads"`` opts in to :class:`~.worker.ThreadRunner`: ``workers``
+        threads of this process instead of processes, for a free-threaded Python with the
+        GIL off (``python3.15t``, ``PYTHON_GIL=0``, lxml 7) -- warmed once per process, no
+        worker to start, but a task past its deadline is abandoned, not stopped.  With the
+        GIL on, threads would take turns, so the default pool runs the work instead, with a
+        warning once.  ``runner="processes"`` is the default pool by name.
 
         ``prewarm`` starts every worker in the background when the pool is first needed,
         each running the formats' warm-up (:attr:`~.session.DocumentFormat.warm_up`), so
@@ -863,7 +887,12 @@ class Toolbox:
         self._workers = default_workers() if workers is None else workers
         self._start_method = start_method
         self._prewarm = prewarm
-        self._pool: Any = runner
+        if isinstance(runner, str) and runner not in RUNNERS:
+            raise ArgumentError(f"runner is one of {RUNNERS}, or a runner object, "
+                                f"not {runner!r}")
+        #: ``"threads"`` when the application asked for :class:`~.worker.ThreadRunner`.
+        self._runner_name = runner if isinstance(runner, str) else None
+        self._pool: Any = None if isinstance(runner, str) else runner
         self._pool_lock = threading.Lock()
         self._snapshot_slots: threading.BoundedSemaphore | None = None
         #: Rendered images by content key, every session's and view's (:mod:`.rendercache`).
@@ -1126,9 +1155,17 @@ class Toolbox:
         needed, or the ``runner`` the application gave."""
         with self._pool_lock:
             if self._pool is None:
-                self._pool = WorkerPool(self._workers, start_method=self._start_method,
-                                        warm_up=self.warm_ups,
-                                        start_timeout=self.limits.worker_start_timeout)
+                if self._runner_name == "threads" and not gil_enabled():
+                    self._pool = ThreadRunner(
+                        max(1, self._workers), warm_up=self.warm_ups,
+                        start_timeout=self.limits.worker_start_timeout,
+                        max_abandoned=self.limits.max_abandoned_threads)
+                else:
+                    if self._runner_name == "threads":
+                        _warn_threads_gil()
+                    self._pool = WorkerPool(self._workers, start_method=self._start_method,
+                                            warm_up=self.warm_ups,
+                                            start_timeout=self.limits.worker_start_timeout)
                 if self._prewarm:
                     self._pool.warm()
             return self._pool
