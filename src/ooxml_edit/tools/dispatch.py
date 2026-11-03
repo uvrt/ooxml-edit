@@ -137,6 +137,10 @@ class CallContext:
         self.states: dict[str, tuple[int, Any]] = {}
         #: In a batch, ``(op, doc_id, change)`` for each op that changed a document.
         self.op_changes: list[tuple[int, str, Any]] = []
+        #: In a batch, ``(op, tool, work, result, at, count)`` for each op that deferred
+        #: work (:meth:`Call.defer`): its result, and where its warnings are in the
+        #: batch's (``at``, ``count`` of them).
+        self.deferred: list[tuple[int, str, list[Callable[[Result], None]], Result, int, int]] = []
 
     def mark(self) -> tuple[Any, ...]:
         """What the ops so far defined and touched, for :meth:`reset` after a failed op."""
@@ -202,6 +206,8 @@ class Call:
         #: Whether :meth:`unlocked` let the locks go at some point: another call may have
         #: changed the documents meanwhile, so what changed is not this call's to report.
         self.released = False
+        #: Work for the result after the handler (:meth:`defer`).
+        self.deferred: list[Callable[[Result], None]] = []
 
     @property
     def in_batch(self) -> bool:
@@ -227,6 +233,17 @@ class Call:
         """Whether this call changes its document (:meth:`Tool.changes`): false for a
         changing tool's reading mode."""
         return self.tool.changes(self.arguments)
+
+    def defer(self, work: Callable[[Result], None]) -> None:
+        """Do ``work(result)`` once the document is as the call leaves it: a call alone runs
+        it as the handler returns, a batch after its last op (before the checks), for each
+        op in order, each given its op's own result -- whose warnings it may add to, kept
+        in their place among the batch's.  For what the whole document has to be read
+        (laid out) for: done after every op, a batch would cost the document's size per op;
+        deferred, the ops after the first find the reading done (round 28, W8).  What it
+        says is of the document after the batch, which the ops after this one may have
+        changed."""
+        self.deferred.append(work)
 
     def touch(self, *scopes: Any, doc: str | None = None) -> None:
         """Say what this call changed (pages, blocks): the checks after it cover them."""
@@ -749,6 +766,11 @@ def _served(tools: dict[str, Tool]) -> dict[str, Tool]:
 
 class Toolbox:
     """The tools of one or more libraries, ready for a provider and a session."""
+
+    #: Whether a batch does the work its ops deferred (:meth:`Call.defer`) once, after its
+    #: last op; ``False`` does each op's after it, as a call alone does -- the same results
+    #: where no later op changes what the work reads (for comparing the two).
+    batch_defers: bool = True
 
     def __init__(self, tools: Iterable[Tool], *, formats: Iterable[DocumentFormat] = (),
                  groups: Iterable[ToolGroup] = (), limits: Limits | None = None,
@@ -1410,6 +1432,8 @@ class Toolbox:
                 else:
                     returned = handler(call, **arguments)
             result = _as_result(returned, call.result)
+            if result.ok and call.deferred:
+                self._do_deferred(tool.name, call.deferred, result)
             if result.ok and primary is not None and not call.released:
                 # (A call that let its lock go -- a reading one, working on a snapshot --
                 # changes nothing, and another call's change meanwhile is not its.)
@@ -1747,16 +1771,20 @@ class Toolbox:
                         stack.enter_context(entries[doc].batch(owner))
                     for index, tool, clean in prepared:
                         context.op = index
-                        if time.perf_counter() - started > limits.batch_timeout:
+                        elapsed = time.perf_counter() - started
+                        if elapsed > limits.batch_timeout:
+                            note, not_run = _not_run(limits.batch_timeout, index, len(prepared),
+                                                     elapsed)
                             raise _OpFailed(index, tool.name, ToolError(
                                 "timeout", f"the batch passed its {limits.batch_timeout:g} s "
-                                "deadline"))
+                                f"deadline: {note}", details={"not_run": not_run}))
                         self._op_states(index, tool, clean, entries, context)
                         done.append(self._run_op(session, index, tool, clean, entries, context,
                                                  combined, reading or {}))
                         if tool.changes(clean):
                             for doc in tool.doc_ids(clean):
                                 context.changed_at[doc] = index
+                    self._run_deferred(context, combined)
                     self._op_states(len(prepared), None, {}, entries, context)
             except _OpFailed as failed:
                 error = failed.error
@@ -1767,7 +1795,9 @@ class Toolbox:
                     field=f"ops[{failed.index}]" + (f".arguments.{error.field}"
                                                     if error.field else ""),
                     details={"op": failed.index, "tool": failed.tool, "error": error.to_json(),
-                             "completed_before": failed.index}) from None
+                             "completed_before": failed.index,
+                             **({"not_run": error.details["not_run"]}
+                                if error.details and "not_run" in error.details else {})}) from None
             for doc in sorted(entries, key=doc_order):
                 entries[doc].bump()
             self._keep_refs(entries, context, list(entries))
@@ -1798,6 +1828,8 @@ class Toolbox:
         errors: dict[int, ToolError] = {}
         changing = False
         combined = Result()
+        #: The first op the deadline stopped, and the time it was stopped at.
+        stopped: tuple[int, float] | None = None
         with collect_warnings() as caught:
             with ExitStack() as stack:
                 changes = {doc: stack.enter_context(entries[doc].watch())
@@ -1808,7 +1840,9 @@ class Toolbox:
                     context.op = index
                     name = op.get("tool", "") if isinstance(op, Mapping) else ""
                     try:
-                        if time.perf_counter() - started > limits.batch_timeout:
+                        elapsed = time.perf_counter() - started
+                        if stopped is not None or elapsed > limits.batch_timeout:
+                            stopped = stopped or (index, elapsed)
                             raise ToolError("timeout", "not run: the batch passed its "
                                             f"{limits.batch_timeout:g} s deadline")
                         read: list[str] = []
@@ -1830,9 +1864,12 @@ class Toolbox:
                         changing = True
                         for doc in tool.doc_ids(clean):
                             context.changed_at[doc] = index
+                self._run_deferred(context, combined)
                 self._op_states(len(ops), None, {}, entries, context)
+            not_run = (_not_run(limits.batch_timeout, stopped[0], len(ops), stopped[1])
+                       if stopped is not None else None)
             if errors and len(errors) == len(outcomes):
-                raise _none_applied(outcomes, errors)
+                raise _none_applied(outcomes, errors, not_run)
             for doc in sorted(entries, key=doc_order):
                 if doc in context.changed_at:
                     entries[doc].bump()
@@ -1845,14 +1882,43 @@ class Toolbox:
         self._batch_touched(session, entries, changes, context, combined)
         done = [outcome for outcome in outcomes if "error" not in outcome]
         if errors:
-            combined.summary = (f"Ran {len(done)} of {len(outcomes)} ops as one step: "
-                                + _summaries(done) + ". Not applied -- fix and resend only "
-                                "these: " + _failures(outcomes, errors))
+            failures = {index: error for index, error in errors.items()
+                        if stopped is None or index < stopped[0]}
+            said = [f"Ran {len(done)} of {len(outcomes)} ops as one step: " + _summaries(done)]
+            if failures:
+                said.append("Not applied -- fix and resend only these: "
+                            + _failures(outcomes, failures))
             combined.data = {"applied": len(done), "failed": list(errors), "ops": outcomes}
+            if not_run is not None:
+                said.append(f"Not run: {not_run[0]}")
+                combined.data["not_run"] = not_run[1]
+            combined.summary = ". ".join(said)
         else:       # every op applied: the result an all-or-none batch gives
             combined.summary = f"Ran {len(done)} op(s) as one step: " + _summaries(done)
             combined.data = {"ops": outcomes}
         return combined
+
+    def _run_deferred(self, context: CallContext, combined: Result) -> None:
+        """After a batch's last op: the work its ops deferred (:meth:`Call.defer`), in op
+        order, each op's warnings then put back where they were among the batch's.  Work
+        that fails is said in a warning: its op applied."""
+        placed: list[tuple[int, int, list[str]]] = []
+        for index, name, work, result, at, count in context.deferred:
+            self._do_deferred(name, work, result)
+            placed.append((at, count, [f"ops[{index}]: {w}" for w in result.warnings]))
+        for at, count, said in reversed(placed):
+            combined.warnings[at:at + count] = said
+        context.deferred = []
+
+    def _do_deferred(self, name: str, work: Sequence[Callable[[Result], None]],
+                     result: Result) -> None:
+        for item in work:
+            try:
+                item(result)
+            except Exception as exc:  # noqa: BLE001 -- the op applied; said, not raised
+                error = exc if isinstance(exc, ToolError) else self.map_exception(exc)
+                result.warnings.append(f"{name}: what it says once it is done could not be "
+                                       f"found: {error.message}")
 
     def _run_alone(self, session: Session, index: int, tool: Tool, arguments: dict[str, Any],
                    entries: dict[str, DocumentEntry], context: CallContext,
@@ -1919,6 +1985,11 @@ class Toolbox:
         combined.renamed.update(result.renamed)
         combined.refs.update(result.refs)
         combined.datasets += [a for a in result.datasets if a not in combined.datasets]
+        if call.deferred and not self.batch_defers:
+            self._do_deferred(tool.name, call.deferred, result)
+        elif call.deferred:
+            context.deferred.append((index, tool.name, call.deferred, result,
+                                     len(combined.warnings), len(result.warnings)))
         combined.warnings += [f"ops[{index}]: {w}" for w in result.warnings]
         entry: dict[str, Any] = {"op": index, "tool": tool.name, "summary": result.summary}
         if result.created:
@@ -2247,16 +2318,49 @@ def _failures(outcomes: Sequence[Mapping[str, Any]], errors: Mapping[int, ToolEr
     return "; ".join(said) + (f"; and {more} more (data.ops)" if more > 0 else "")
 
 
-def _none_applied(outcomes: list[dict[str, Any]], errors: Mapping[int, ToolError]) -> ToolError:
+def _none_applied(outcomes: list[dict[str, Any]], errors: Mapping[int, ToolError],
+                  not_run: tuple[str, dict[str, Any]] | None = None) -> ToolError:
     """A batch none of whose ops applied: the first failure's code, field and options, and
-    every op's error in ``details``."""
+    every op's error in ``details``; with ``not_run`` (:func:`_not_run`), what the deadline
+    stopped."""
     index, first = next(iter(errors.items()))
     lead = (f"ops[{index}] ({outcomes[index]['tool'] or '?'}) failed, so nothing was "
             f"applied: {first.message}" if len(errors) == 1
             else f"none of the {len(errors)} ops applied: " + _failures(outcomes, errors))
+    details: dict[str, Any] = {"applied": 0, "failed": list(errors), "ops": outcomes}
+    if not_run is not None:
+        lead += f". Not run: {not_run[0]}"
+        details["not_run"] = not_run[1]
     return ToolError(first.code, lead, valid_options=first.valid_options,
                      field=f"ops[{index}]" + (f".{first.field}" if first.field else ""),
-                     details={"applied": 0, "failed": list(errors), "ops": outcomes})
+                     details=details)
+
+
+#: The share of a batch's deadline a suggested batch size is to fill (the checks after
+#: the last op, and ops slower than the average, take the rest).
+FILL = 0.8
+
+
+def _not_run(timeout: float, first: int, total: int, elapsed: float
+             ) -> tuple[str, dict[str, Any]]:
+    """What a batch's deadline stopped -- ops ``first`` to ``total - 1``, the batch having
+    run for ``elapsed`` s -- as a sentence and as ``data.not_run`` (round 28, W8): how many,
+    the first and last index, and the batch size that would have fitted at the rate the ops
+    before ran (:data:`FILL` of the deadline), or none when none ran."""
+    count = total - first
+    data: dict[str, Any] = {"count": count, "first": first, "last": total - 1,
+                            "ran": first, "seconds": round(elapsed, 1)}
+    span = f"ops[{first}]" if count == 1 else f"ops[{first}]..ops[{total - 1}]"
+    text = (f"{count} op(s), {span}, after the batch passed its {timeout:g} s deadline "
+            f"({first} op(s) ran in {elapsed:.1f} s)")
+    if first > 0 and elapsed > 0:
+        size = max(1, int(timeout * FILL / (elapsed / first)))
+        data["batch_size"] = size
+        text += (f"; resend them as batches of at most {size} ops (about {elapsed / first:.2f} s "
+                 "an op so far)")
+    else:
+        text += "; resend them as smaller batches"
+    return text, data
 
 
 def moved_on(doc: str, used: int, now: int) -> str:
