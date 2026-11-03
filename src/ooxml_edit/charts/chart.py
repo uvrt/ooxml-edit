@@ -69,6 +69,10 @@ _CACHE_OF = {"strRef": "c:strCache", "numRef": "c:numCache",
 from .errors import ChartDataError, ChartDataWarning  # noqa: E402  (re-exported)
 from .styling import KEEP, ChartStyling  # noqa: E402,F401  (KEEP re-exported)
 
+#: How a chart may draw its blank points (ECMA-376 Part 1, 21.2.2, ``dispBlanksAs``):
+#: :attr:`Chart.blanks`.
+BLANKS = ("gap", "zero", "span")
+
 
 # ------------------------------------------------------------------------------------------
 # Data sources
@@ -518,7 +522,7 @@ class Chart(ChartStyling):
         part = chart_part(host)
         if part is None:
             raise ValueError(f"{host.address}: the chart's part is missing")
-        _record.note(host.package, part)  # for a placement watching (record.py)
+        _record.note(host.package, part, self)  # for a placement watching (record.py)
         return part
 
     @property
@@ -939,6 +943,45 @@ class Chart(ChartStyling):
                 remove(chart.find(qn("c:legend")))
             editor.changed = True
         return self
+
+    # -- blank points ------------------------------------------------------------------------
+
+    @property
+    def blanks(self) -> str:
+        """How the chart draws a blank point (``c:dispBlanksAs``): ``"gap"`` (a line breaks,
+        no marker), ``"zero"`` (drawn as 0) or ``"span"`` (a line joins the points either
+        side).  A chart that does not say -- no element, or one without ``val`` -- draws
+        zero: measured in PowerPoint and Word 16 (Mac), 2026-11-03, on line, radar, scatter
+        and area charts, the schema's default for ``val``.  Office's own new charts say
+        gap.  An area chart draws span as zero (measured too); this reports what the file
+        says."""
+        node = find(self._root(), "c:chart/c:dispBlanksAs")
+        value = node.get("val") if node is not None else None
+        return value if value in BLANKS else "zero"
+
+    def set_blanks(self, how: str) -> "Chart":
+        """Draw blank points as ``how``: ``"gap"``, ``"zero"`` or ``"span"`` (:attr:`blanks`)."""
+        if how not in BLANKS:
+            raise ChartDataError(f"{self.address}: blanks is gap, zero or span, not {how!r}")
+        node = find(self._root(), "c:chart/c:dispBlanksAs")
+        if node is not None and node.get("val") == how:
+            return self
+        with self._edit() as editor:
+            chart = find(editor.root, "c:chart")
+            assert chart is not None  # a chart part's root holds its c:chart
+            subelement(chart, "c:dispBlanksAs").set("val", how)
+            editor.changed = True
+        return self
+
+    def blank_points(self) -> dict[int, list[int]]:
+        """Each series' blank points: ``{series position: [category positions]}``, from 0,
+        for the series that have any."""
+        out = {}
+        for series in self.series:
+            gaps = [index for index, value in enumerate(series.values) if value is None]
+            if gaps:
+                out[series.index] = gaps
+        return out
 
     # -- editing: formatting -------------------------------------------------------------------
 

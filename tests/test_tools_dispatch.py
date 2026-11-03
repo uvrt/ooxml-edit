@@ -6,6 +6,7 @@ import datetime as dt
 import io
 import json
 import logging
+import pickle
 import warnings
 import zipfile
 from pathlib import Path
@@ -80,6 +81,24 @@ def test_errors_carry_a_code_a_field_and_the_valid_options(toolbox, session, nam
         assert result.error.valid_options == options
     block = toolbox.render_result("anthropic", result, "t")
     assert block["is_error"] is True
+
+
+def test_a_tool_error_takes_none_as_no_options(session):
+    # Round 29, W11: a handler with no smaller choice to offer passed valid_options=None,
+    # which crashed as an internal error; None is no options, as () is.
+    error = ToolError("limit", "too many rows", valid_options=None)
+    assert error.valid_options == [] and error.to_json()["valid_options"] == []
+    assert pickle.loads(pickle.dumps(error)).valid_options == []
+
+    @tool("toy_none", "Refuses with nothing to offer.", {"doc": string("Doc.")}, mutates=True)
+    def toy_none(call, doc):
+        raise ToolError("limit", "the table is too big for one call", valid_options=None)
+
+    with Toolbox([toy_none], formats=tools_toys.FORMATS) as box:
+        own = box.session()
+        own.open(synthetic.outer_package(), "deck.pptx")
+        result = box.dispatch(own, "toy_none", {"doc": "d1"})
+    assert result.error.code == "limit" and result.error.valid_options == []
 
 
 def test_an_unknown_tool_suggests_near_names(toolbox, session):

@@ -65,8 +65,12 @@ SUBSET_KEYWORDS = frozenset({
 #: one it may give -- an application's own word for an enum value (``shrink`` for
 #: ``normal``): the dispatcher reads the alias, matched ignoring case, as its value and says
 #: so in the result's warnings.  The provider is never sent them, so they cost no tokens.
+#: ``orNull`` (``true``, on an array's items) lets the dispatcher take ``null`` for an item,
+#: kept ``None``: a chart's blank point among its values.  The subset has no unions, so the
+#: canonical schema says nothing of it and the description says ``null``; the OpenAI strict
+#: form makes such items nullable (:func:`~.adapters.openai_strict_schema`'s ``nulls``).
 BOUND_KEYWORDS = frozenset({"minimum", "maximum", "minLength", "maxLength", "maxItems",
-                            "orInteger", "valueAliases"})
+                            "orInteger", "valueAliases", "orNull"})
 
 #: Words that make a property name a file-system path.  The tool layer has no paths: inputs
 #: are blob handles, outputs go to the application.
@@ -173,6 +177,8 @@ def _check_node(node: Any, where: str, depth: int, problems: list[str], enum_tot
     if "orInteger" in node and (kind != "string" or isinstance(node["orInteger"], bool)
                                 or not isinstance(node["orInteger"], int)):
         problems.append(f"{where}: orInteger must be a whole number, on a string")
+    if "orNull" in node and node["orNull"] is not True:
+        problems.append(f"{where}: orNull must be true")
     if "valueAliases" in node:
         aliases = node["valueAliases"]
         if kind != "string" or not isinstance(aliases, Mapping) or not aliases or not all(
@@ -474,6 +480,8 @@ def _validate(node: Mapping[str, Any], value: Any, where: str, notes: list[str],
     schema and place, for an unknown key that belongs there (:func:`_misplaced`)."""
     kind = node.get("type")
     label = where or "the arguments"
+    if value is None and node.get("orNull"):
+        return None
     if kind == "object":
         if not isinstance(value, Mapping):
             raise CallError(f"{label} must be an object", where or None)

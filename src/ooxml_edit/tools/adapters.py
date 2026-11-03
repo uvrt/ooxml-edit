@@ -262,16 +262,23 @@ def anthropic_problems(definitions: Sequence[Mapping[str, Any]],
 # -- OpenAI ------------------------------------------------------------------------------------
 
 
-def openai_strict_schema(schema: Mapping[str, Any]) -> dict[str, Any]:
-    """The canonical schema in OpenAI's strict form: all required, optional ones nullable."""
+def openai_strict_schema(schema: Mapping[str, Any],
+                         nulls: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """The canonical schema in OpenAI's strict form: all required, optional ones nullable.
 
-    def convert(node: Mapping[str, Any]) -> dict[str, Any]:
+    ``nulls`` is the tool's validation schema (:attr:`~.registry.Tool.schema`): an array's
+    items it marks ``orNull`` (a chart's blank points) are made nullable too, so a strict
+    decoder can write the ``null`` the dispatcher takes."""
+
+    def convert(node: Mapping[str, Any], valid: Mapping[str, Any] | None) -> dict[str, Any]:
         node = dict(node)
+        valid = valid if isinstance(valid, Mapping) else None
         if node.get("type") == "object":
             required = set(node.get("required", ()))
+            known = (valid or {}).get("properties") or {}
             properties = {}
             for name, child in node.get("properties", {}).items():
-                child = convert(child)
+                child = convert(child, known.get(name))
                 if name not in required:
                     child = _nullable(child)
                 properties[name] = child
@@ -279,10 +286,15 @@ def openai_strict_schema(schema: Mapping[str, Any]) -> dict[str, Any]:
             node["required"] = list(properties)
             node["additionalProperties"] = False
         elif node.get("type") == "array" and isinstance(node.get("items"), Mapping):
-            node["items"] = convert(node["items"])
+            items = (valid or {}).get("items")
+            node["items"] = convert(node["items"], items)
+            if isinstance(items, Mapping) and items.get("orNull"):
+                kind = node["items"].get("type")
+                if isinstance(kind, str):
+                    node["items"]["type"] = [kind, "null"]
         return node
 
-    return convert(required_first(schema))
+    return convert(required_first(schema), nulls)
 
 
 def _nullable(node: dict[str, Any]) -> dict[str, Any]:
@@ -303,7 +315,7 @@ def _function(tool: Tool) -> dict[str, Any]:
         return {"type": "function", "name": tool.name, "description": tool.description,
                 "parameters": required_first(tool.canonical), "strict": False}
     return {"type": "function", "name": tool.name, "description": tool.description,
-            "parameters": openai_strict_schema(tool.canonical), "strict": True}
+            "parameters": openai_strict_schema(tool.canonical, tool.schema), "strict": True}
 
 
 def to_openai_responses(tools: Iterable[Tool], *, defer: bool = False,

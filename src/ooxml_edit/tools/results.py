@@ -32,14 +32,15 @@ ERROR_CODES: dict[str, str] = {
 class ToolError(Exception):
     """An error a tool reports to the model, with the options it could use instead."""
 
-    def __init__(self, code: str, message: str, *, valid_options: Sequence[Any] = (),
+    def __init__(self, code: str, message: str, *, valid_options: Sequence[Any] | None = (),
                  field: str | None = None, details: dict[str, Any] | None = None) -> None:
         if code not in ERROR_CODES:
             raise ValueError(f"unknown error code {code!r}; one of {sorted(ERROR_CODES)}")
         super().__init__(message)
         self.code = code
         self.message = message
-        self.valid_options = list(valid_options)
+        # None is no options, as () is: a caller with nothing to offer may pass either.
+        self.valid_options = list(valid_options or ())
         self.field = field
         self.details = dict(details or {})
 
