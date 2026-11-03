@@ -15,7 +15,8 @@ import time
 
 import pytest
 
-from ooxml_edit.tools import Result, Toolbox, integer, shared, string, tool
+from ooxml_edit.tools import InProcess, Limits, Result, ToolError, Toolbox, integer, shared, string, tool
+from ooxml_edit.tools.worker import WorkerPool
 from ooxml_edit.tools.dispatch import moved_on
 
 import synthetic
@@ -126,8 +127,8 @@ def test_an_edit_after_a_read_runs_while_the_read_works_and_the_order_holds(tool
     assert read.data["title"] == title and read.version == before
     assert edit.version == before + 1
     assert after.data["title"] == "New" and after.version == before + 1
-    assert read.warnings == [moved_on(doc, before, before + 1)]
-    assert after.warnings == []
+    # The turn's own later edit moved it: its order already says so, no warning.
+    assert read.warnings == [] and after.warnings == []
     assert edit.duration < STALL - 0.5, "the edit waited for the read's work"
 
 
@@ -154,3 +155,57 @@ def test_side_by_side_is_for_plain_reads_only(toolbox):
         assert not side(name, {"doc": "d1"}), name
     assert not side("no_such_tool", {"doc": "d1"})
     assert not side("toy_ppt_slow_read", "not json")
+
+
+def test_a_turns_read_still_says_so_when_another_caller_moved_the_document(toolbox):
+    session, doc = _open(toolbox)
+    before = session.entry(doc).version
+    other: dict = {}
+
+    def edit_elsewhere():
+        time.sleep(0.5)                              # the turn's read has its snapshot
+        other["result"] = toolbox.dispatch(session, "toy_ppt_set_title",
+                                           {"doc": doc, "page": 2, "text": "Elsewhere"})
+
+    thread = threading.Thread(target=edit_elsewhere)
+    thread.start()
+    read, edit = toolbox.dispatch_many(session, [
+        ("toy_ppt_slow_read", {"doc": doc, "page": 1, "stall": STALL}),
+        ("toy_ppt_set_title", {"doc": doc, "page": 1, "text": "In the turn"})])
+    thread.join()
+    assert read.ok and edit.ok and other["result"].ok
+    now = session.entry(doc).version
+    assert read.version == before and now == before + 2
+    assert read.warnings == [moved_on(doc, before, now)]
+
+
+def test_snapshot_workers_sets_the_slots():
+    with Toolbox(tools_toys.TOOLS, formats=tools_toys.FORMATS, groups=tools_toys.GROUPS,
+                 workers=3, limits=Limits(snapshot_workers=3)) as box:
+        assert box.snapshot_slots._value == 3
+
+
+@pytest.mark.parametrize("runner", ["workers", "in-process"])
+def test_a_queue_timeout_keeps_the_wait_for_a_worker_out_of_the_deadline(runner):
+    pool = WorkerPool(1) if runner == "workers" else InProcess(1)
+    with pool:
+        if runner == "workers":
+            pool.warm(wait=True)
+        busy = threading.Thread(target=pool.run, args=(tools_toys.read_title,
+                                                       synthetic.outer_package(), 1, 3),
+                                kwargs={"timeout": 30})
+        busy.start()
+        time.sleep(0.5)                               # the one worker is busy for ~2.5 s
+        # Waits ~2.5 s for the worker, then runs in well under its 2 s: no timeout.
+        pool.run(tools_toys.read_title, synthetic.outer_package(), 1, timeout=2,
+                 queue_timeout=30)
+        busy.join()
+        busy = threading.Thread(target=pool.run, args=(tools_toys.read_title,
+                                                       synthetic.outer_package(), 1, 3),
+                                kwargs={"timeout": 30})
+        busy.start()
+        time.sleep(0.5)
+        with pytest.raises(ToolError) as caught:      # the wait counts: as before
+            pool.run(tools_toys.read_title, synthetic.outer_package(), 1, timeout=1)
+        assert caught.value.code == "timeout"
+        busy.join()

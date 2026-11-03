@@ -849,10 +849,14 @@ a thread of this process: concurrent ones took turns at the GIL. `call.on_snapsh
 them), the locks are let go, `fn(data, *args)` runs in the pool, and the result reports the
 snapshot's version. Each worker opens its own copy and drops it with the task, so there are
 no more copies than workers; these tasks hold all the workers but one
-(`Toolbox.snapshot_slots`), so a render does not queue behind a turn of checks. In process (`workers=0`, an `InProcess` runner, the fallback)
+(`Toolbox.snapshot_slots`), so a render does not queue behind a turn of checks.
+`Limits(snapshot_workers=N)` sets how many workers such tasks may hold at once (default: all but one).
+A task's deadline counts from when a worker takes it; the wait for a worker has its own
+bound, `Limits.worker_queue_timeout` (300 s). In process (`workers=0`, an `InProcess` runner, the fallback)
 `fn` runs in the calling thread, unlocked, without a deadline, as the work did before. When
 the document changed before an unlocked read ended, the result warns, naming both versions
-(`moved_on`): it stands for the version it read. And `dispatch_many` no longer queues one
+(`moved_on`): it stands for the version it read. A change made by a later call of the same
+`dispatch_many` turn alone is not warned about, since the turn's order already says so. And `dispatch_many` no longer queues one
 turn's reads of a document behind each other: a call that only reads (a reading tool of no
 role of its own -- not `undo`, `close_document`, `save_document` -- taking no datasets,
 sources or text facts) waits for the turn's earlier edits of its documents only; an edit

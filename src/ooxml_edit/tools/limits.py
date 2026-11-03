@@ -64,6 +64,13 @@ class Limits:
     #: Starting one worker process and warming it (its imports, the renderers' font
     #: index), apart from any call's deadline.
     worker_start_timeout: float = 120.0
+    #: Waiting for a free worker, for work whose own deadline counts from when a worker takes
+    #: it (:meth:`~.dispatch.Call.on_snapshot`: a check), so a busy pool does not time out
+    #: work that never started.
+    worker_queue_timeout: float = 300.0
+    #: Workers :meth:`~.dispatch.Call.on_snapshot` tasks (checks) may hold at once; ``None``:
+    #: all of the pool's but one, so a render need not queue behind a turn of checks.
+    snapshot_workers: int | None = None
     # caches, in entries per document
     #: Per document: SVG reads, contact images and other derived views by version.
     render_cache_size: int = 16

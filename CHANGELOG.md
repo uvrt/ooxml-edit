@@ -11,14 +11,20 @@ earlier ones were never tagged.
   by every reader of that version), lets the call's locks go and runs `fn(data, *args)` in a
   worker process; the result reports the snapshot's version. Each worker opens its own copy
   and drops it with the task, so copies are bounded by the pool. Such tasks hold all the
-  pool's workers but one (`Toolbox.snapshot_slots`), so a render does not queue behind a
-  turn of checks. In process (`workers=0`, an `InProcess` runner, the fallback) `fn` runs in
+  pool's workers but one (`Toolbox.snapshot_slots`; `Limits.snapshot_workers` sets how
+  many), so a render does not queue behind a turn of checks. The task's `timeout` counts
+  from when a worker takes it; the wait for one has its own bound,
+  `Limits.worker_queue_timeout` (300 s), so a busy pool does not time out work that never
+  started (`WorkerPool.run`, `SubprocessPool.run` and `InProcess.run` take
+  `queue_timeout`; without it the wait counts against `timeout`, as before). In process (`workers=0`, an `InProcess` runner, the fallback) `fn` runs in
   the calling thread, unlocked and without a deadline, as before. Inside a batch or a
   changing call the locks stay held.
 - **A read that let its lock go says when the document moved on**: the result keeps the
   version it read and warns "d1 changed while this call read it: the result is of version 5,
   the document is at version 6 now; call again for the latest" (`dispatch.moved_on`). For
-  every unlocked read: renders and checks of decks and Word documents alike.
+  every unlocked read: renders and checks of decks and Word documents alike. Not when the
+  change came from a later call of the same `dispatch_many` turn alone: the turn's order
+  already says the read sees the document before it.
 - **`dispatch_many` runs one turn's reads of a document side by side.** A call that only
   reads (`Toolbox._side_by_side`: a reading tool with no role of its own -- not `undo`,
   `close_document`, `save_document` -- taking no datasets, sources or text facts) waits for
