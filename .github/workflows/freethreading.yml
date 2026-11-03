@@ -1,0 +1,62 @@
+name: Free threading
+
+# The suite on the free-threaded build of Python (3.15t), with the GIL off.  A separate
+# workflow on purpose: ci.yml's jobs are the required checks of branch protection, and
+# this one is not required (yet).  lxml 6 turns the GIL back on when it is imported on
+# 3.15t; lxml 7 (a pre-release for now, hence --pre, in this workflow only) does not, so
+# it is installed first and the other installs find it already there.  The first check
+# is that importing the package and its dependencies leaves the GIL off, without
+# PYTHON_GIL set (an extension that has not declared itself free-threading safe turns the
+# GIL back on, with a RuntimeWarning).  The suite then runs with PYTHON_GIL=0 and
+# RuntimeWarning an error.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: test (${{ matrix.os }}, 3.15t)
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.15t"
+          allow-prereleases: true
+
+      # As ci.yml installs them, after lxml 7.
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --pre "lxml>=7"
+          python -m pip install "ooxml-common @ git+https://github.com/uvrt/ooxml-common@main"
+          python -m pip install -e .[dev]
+
+      - name: Importing the package leaves the GIL off
+        run: |
+          python -W error::RuntimeWarning - <<'PY'
+          import importlib, pkgutil, sys
+          assert hasattr(sys, "_is_gil_enabled"), "not a free-threaded build"
+          import ooxml_edit as package
+          for module in pkgutil.walk_packages(package.__path__, package.__name__ + "."):
+              if not module.name.endswith("__main__"):
+                  importlib.import_module(module.name)
+          import lxml.etree, lxml.html
+          assert lxml.etree.LXML_VERSION >= (7,), lxml.etree.LXML_VERSION
+          print(sys.version, "lxml", lxml.etree.__version__)
+          sys.exit("the GIL is enabled" if sys._is_gil_enabled() else 0)
+          PY
+
+      - name: Test
+        env:
+          PYTHON_GIL: "0"
+        run: python -W error::RuntimeWarning -m pytest -q -W error::RuntimeWarning

@@ -46,3 +46,7 @@ package.mark_dirty(part)
 history.undo()                            # the original bytes again
 package.save("out.zip")
 ```
+
+**Threads.** An `OpcPackage` and its `History` are one thread's at a time: nothing in them
+locks. Through the tools a session's entry lock gives each call its document alone; used
+directly, from several threads, hold a lock of your own around every use.
