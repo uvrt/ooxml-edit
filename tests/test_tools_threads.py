@@ -1,5 +1,4 @@
-"""The opt-in thread runner (``Toolbox(runner="threads")``, :class:`ThreadRunner`), and the
-whole-document render's images drawn in the layout's worker when the GIL is off.
+"""The opt-in thread runner (``Toolbox(runner="threads")``, :class:`ThreadRunner`).
 
 A thread cannot be stopped: a task past its deadline is reported as ``timeout``, its result
 dropped, and it keeps its slot until it ends; past ``max_abandoned`` of them, new work is
@@ -16,7 +15,7 @@ import time
 import pytest
 
 from ooxml_edit.errors import ArgumentError
-from ooxml_edit.tools import ThreadRunner, ToolError, Toolbox, WorkerPool, gil_enabled, render
+from ooxml_edit.tools import Limits, ThreadRunner, ToolError, Toolbox, WorkerPool, gil_enabled
 from ooxml_edit.tools import worker
 from ooxml_edit.tools.dispatch import RUNNERS
 
@@ -167,6 +166,14 @@ def test_a_toolbox_runs_threads_when_asked_and_the_gil_is_off(monkeypatch):
             assert result.ok and result.data["drawn"] == [1, 2], result.to_json()
 
 
+def test_limits_set_the_cap_of_a_toolboxs_thread_runner(monkeypatch):
+    monkeypatch.setattr("ooxml_edit.tools.dispatch.gil_enabled", lambda: False)
+    with _box(runner="threads", workers=3) as box:
+        assert box.pool.max_abandoned == 3
+    with _box(runner="threads", workers=3, limits=Limits(max_abandoned_threads=1)) as box:
+        assert box.pool.max_abandoned == 1
+
+
 def test_with_the_gil_on_a_toolbox_asked_for_threads_uses_worker_processes(monkeypatch, caplog):
     monkeypatch.setattr("ooxml_edit.tools.dispatch.gil_enabled", lambda: True)
     monkeypatch.setattr("ooxml_edit.tools.dispatch._THREADS_GIL_WARNED", [])
@@ -182,62 +189,6 @@ def test_a_runner_by_name_is_one_of_these():
         assert isinstance(box.pool, WorkerPool)
     with pytest.raises(ArgumentError, match="runner is one of"):
         _box(runner="fibres")
-
-
-class _Inline:
-    """A runner that says it runs worker processes but runs the task here, so a test sees
-    what a worker with the GIL off does (``gil_enabled`` patched in this process)."""
-
-    runner = "processes"
-    size = 3
-    in_process = False
-
-    def __init__(self):
-        self.tasks = []
-
-    def run(self, fn, *args, timeout, **kwargs):
-        self.tasks.append((fn.__name__, args[-1] if fn is render.lay_out_views else None,
-                           timeout))
-        return fn(*args, **kwargs)
-
-    def close(self):
-        pass
-
-
-@pytest.mark.parametrize("gil", [True, False], ids=["gil-on", "gil-off"])
-def test_with_the_gil_off_the_layouts_worker_draws_the_images_in_threads(monkeypatch, gil):
-    monkeypatch.setattr("ooxml_edit.tools.worker.gil_enabled", lambda: gil)
-    runner = _Inline()
-    with _box(runner=runner) as box:
-        session = box.session()
-        doc = session.open(synthetic.outer_package(), "deck.pptx")
-        result = box.dispatch(session, "toy_draw", {"doc": doc, "pages": [1, 2],
-                                                    "shape": "whole"})
-        assert result.ok, result.to_json()
-        images = [image.data for image in result.images]
-    names = [name for name, _, _ in runner.tasks]
-    if gil:     # as before: the layout, then a chunk of images per worker
-        assert names == ["lay_out_views", "rasterise_views", "rasterise_views"]
-        assert runner.tasks[0][1] == 0
-    else:       # one task: the layout and every image, its deadline covering both
-        assert names == ["lay_out_views"] and runner.tasks[0][1] == 3
-        assert runner.tasks[0][2] == 2 * box.limits.render_timeout
-    assert result.data["meta"] == {1: {"page": 1}, 2: {"page": 2}}
-    assert len(images) == 2
-
-
-def test_the_images_drawn_in_threads_are_those_drawn_one_by_one(monkeypatch):
-    monkeypatch.setattr("ooxml_edit.tools.worker.gil_enabled", lambda: False)
-    toy = tools_toys.RENDERERS["whole"]
-    data = synthetic.outer_package()
-    laid = render.lay_out_views(toy, data, [1, 2], 64, [], threads=2)
-    alone = render.rasterise_views(toy, [(svg, info) for _, _, svg, info in laid["views"]],
-                                   laid["raster"])
-    assert len(alone) == 2 and laid["drawn"] == alone
-    held = render.lay_out_views(toy, data, [1, 2], 64, [], known=[key for _, key, _, _ in
-                                                                  laid["views"]], threads=2)
-    assert held["drawn"] == [] and all(svg is None for _, _, svg, _ in held["views"])
-    assert "drawn" not in render.lay_out_views(toy, data, [1, 2], 64, [])
 
 
 @pytest.mark.skipif(gil_enabled(), reason="needs a free-threaded Python with the GIL off")

@@ -234,52 +234,18 @@ def _rasterised(renderer: Renderer, views: "list[View]", raster: Any) -> list:
     return [(checked_png(png, renderer), meta) for png, meta in drawn]
 
 
-def _rasterised_in_threads(renderer: Renderer, views: "list[View]", raster: Any,
-                           threads: int) -> list:
-    """:func:`_rasterised` of ``views`` in chunks over ``threads`` threads of this process
-    (the GIL off: they run side by side), in order -- the chunks the caller would have
-    sent to as many workers."""
-    from concurrent.futures import ThreadPoolExecutor
-
-    count = max(1, min(threads, len(views)))
-    if count == 1:
-        return _rasterised(renderer, views, raster)
-    chunks = [views[start::count] for start in range(count)]
-    with ThreadPoolExecutor(max_workers=count,
-                            thread_name_prefix="ooxml-edit-tools-raster") as executor:
-        drawn = list(executor.map(lambda chunk: _rasterised(renderer, chunk, raster), chunks))
-    out: list = [None] * len(views)
-    for start, images in enumerate(drawn):
-        out[start::count] = images
-    return out
-
-
 @worker_task
 def lay_out_views(renderer: Renderer, data: bytes, items: list, width: int,
                   font_dirs: "list[str]", locale: Any = None, known: Sequence[str] = (),
-                  state: Any = None, threads: int = 0) -> dict:
+                  state: Any = None) -> dict:
     """In a worker: the document laid out once (:meth:`Renderer.lay_out`), and each of
     ``items`` it has as ``(item, key, svg, info)`` -- ``key`` its image's
     (:func:`raster_key`), ``svg`` ``None`` where the key is in ``known`` (the caller holds
-    that image).  Also ``raster`` (for :func:`rasterise_views`) and ``facts``.
-
-    ``threads`` (from 1) asks for the views' images here too, over that many threads,
-    when this interpreter has the GIL off (:func:`~.worker.gil_enabled`): then ``drawn``
-    is ``(png, meta)`` of each view with an ``svg``, in order, and the caller sends no
-    :func:`rasterise_views`.  With the GIL on, threads would take turns: no ``drawn``,
-    and the caller rasterises over its workers as without ``threads``."""
-    from .worker import gil_enabled
-
+    that image).  Also ``raster`` (for :func:`rasterise_views`) and ``facts``."""
     layout = renderer.lay_out(data, list(items), int(width), list(font_dirs), locale, state)
-    keyed = _keyed(renderer, layout, known)
     views = [(view.item, key, None if held else view.svg, view.info)
-             for view, key, held in keyed]
-    out = {"views": views, "raster": layout.raster, "facts": renderer.facts(layout)}
-    if threads >= 1 and not gil_enabled():
-        fresh = [view for view, _, held in keyed if not held]
-        out["drawn"] = (_rasterised_in_threads(renderer, fresh, layout.raster, int(threads))
-                        if fresh else [])
-    return out
+             for view, key, held in _keyed(renderer, layout, known)]
+    return {"views": views, "raster": layout.raster, "facts": renderer.facts(layout)}
 
 
 @worker_task
@@ -334,21 +300,6 @@ def warm_up(renderer: Renderer) -> None:
 # -- the caller's side ---------------------------------------------------------------------------
 
 
-def _raster_threads(call: Any) -> int:
-    """How many threads the worker laying out a whole document is asked to rasterise its
-    views over (:func:`lay_out_views`' ``threads``): the call's parallelism, where this
-    interpreter has the GIL off and the work goes to worker processes; else 0, and the
-    views are rasterised over the workers, a chunk each, as with the GIL on.  A thread
-    runner (or an in-process one) spreads the chunks over its own threads already."""
-    from .worker import gil_enabled
-
-    if gil_enabled():
-        return 0
-    if getattr(call.toolbox.pool, "runner", None) not in ("processes", "subprocesses"):
-        return 0
-    return max(1, call.parallelism)
-
-
 def draw(call: Any, renderer: Renderer, items: Sequence[Any], width: int, *,
          ids: Mapping[Any, Any], fonts: Sequence[str], locale: Any,
          wire: "Mapping[Any, Any] | None" = None, state: Any = None, first_alone: bool = False,
@@ -400,25 +351,18 @@ def draw(call: Any, renderer: Renderer, items: Sequence[Any], width: int, *,
     views: dict = {}                     # sent item -> (key, png, meta, new)
     failed: "BaseException | None" = None
     if renderer.whole_document:
-        threads = _raster_threads(call)
-        timeout = limits.render_timeout_for(len(todo))
-        if threads:              # the images too, in that worker: its deadline covers both
-            timeout += limits.render_timeout_for(-(-len(todo) // threads))
         with call.unlocked():
             laid = call.run(lay_out_views, renderer, data, sent, width, list(fonts), locale,
-                            list(held), state, threads, timeout=timeout)
+                            list(held), state, timeout=limits.render_timeout_for(len(todo)))
             fresh = [view for view in laid["views"] if view[2] is not None]
-            if "drawn" in laid:
-                chunks, results = [fresh], [laid["drawn"]]
-            else:
-                parallel = min(call.parallelism, len(fresh)) or 1
-                chunks = [chunk for chunk in (fresh[start::parallel]
-                                              for start in range(parallel)) if chunk]
-                results = call.run_all(rasterise_views,
-                                       [(renderer, [(svg, info) for _, _, svg, info in chunk],
-                                         laid["raster"]) for chunk in chunks],
-                                       timeouts=[limits.render_timeout_for(len(chunk))
-                                                 for chunk in chunks])
+            parallel = min(call.parallelism, len(fresh)) or 1
+            chunks = [chunk for chunk in (fresh[start::parallel] for start in range(parallel))
+                      if chunk]
+            results = call.run_all(rasterise_views,
+                                   [(renderer, [(svg, info) for _, _, svg, info in chunk],
+                                     laid["raster"]) for chunk in chunks],
+                                   timeouts=[limits.render_timeout_for(len(chunk))
+                                             for chunk in chunks])
         facts.append(laid["facts"])
         note(laid["facts"], False)
         for item, key, svg, _ in laid["views"]:

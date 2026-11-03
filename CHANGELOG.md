@@ -15,18 +15,13 @@ earlier ones were never tagged.
   the arguments that could change (pickled, as a worker process gets them); bytes, strings
   and numbers go as they are. A thread cannot be stopped: a task past its deadline is
   reported as `timeout`, its result thrown away, and it keeps its slot until it ends; while
-  `max_abandoned` of them (default: the runner's size) are still running, `run` refuses new
-  work at once with a `limit` error saying why. The process pool stays the default.
+  `max_abandoned` of them (default: the runner's size; a toolbox's from
+  `Limits.max_abandoned_threads`) are still running, `run` refuses new work at once with a
+  `limit` error saying why. The process pool stays the default.
   `InProcess` is unchanged (it and `ThreadRunner` share `worker._Threads`).
   `Toolbox(runner="processes")` names the default; any other name is refused.
-- **A whole document's images drawn in the layout's worker, in threads, with the GIL off**
-  (step 2): with worker processes on a free-threaded Python, `render.draw` asks the worker
-  that lays a document out to rasterise its pages too, over as many threads as the pool has
-  workers (`lay_out_views(..., threads=n)`, which returns them as `drawn`), with one
-  deadline covering both; a worker with the GIL on returns no `drawn`, and the pages go to
-  the workers in chunks as before. With the GIL on nothing changes. The images are the same,
-  byte for byte. New `tests/test_tools_threads.py`; `tests/test_tools_snapshot.py` runs its
-  cases with a thread runner too.
+- New `tests/test_tools_threads.py`; `tests/test_tools_snapshot.py` runs its cases with a
+  thread runner too.
 
 ## 0.74.0 -- unreleased
 - **Slow reads on a snapshot in the worker pool, side by side** (production round 28, P2:

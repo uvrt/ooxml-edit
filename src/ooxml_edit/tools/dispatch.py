@@ -1156,8 +1156,10 @@ class Toolbox:
         with self._pool_lock:
             if self._pool is None:
                 if self._runner_name == "threads" and not gil_enabled():
-                    self._pool = ThreadRunner(max(1, self._workers), warm_up=self.warm_ups,
-                                              start_timeout=self.limits.worker_start_timeout)
+                    self._pool = ThreadRunner(
+                        max(1, self._workers), warm_up=self.warm_ups,
+                        start_timeout=self.limits.worker_start_timeout,
+                        max_abandoned=self.limits.max_abandoned_threads)
                 else:
                     if self._runner_name == "threads":
                         _warn_threads_gil()
