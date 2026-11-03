@@ -4,6 +4,30 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet. Each vers
 reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
 earlier ones were never tagged.
 
+## 0.76.0 -- unreleased
+- **An opt-in thread runner for a free-threaded Python** (free threading, step 3; the
+  production team asked): `Toolbox(runner="threads")` runs the work in `ThreadRunner`, threads
+  of this process side by side, where the GIL is off (`python3.15t`, `PYTHON_GIL=0`, lxml 7;
+  `tools.gil_enabled()`); with the GIL on it uses the default worker pool instead, with a
+  warning once. The same `run(fn, *args, timeout=..., queue_timeout=...)`, `warm` and
+  `close` as `WorkerPool`, and `on_snapshot`'s queue bound and slots as with the pool. Warm-up
+  runs once per process (`worker.warm_once`), not per worker. Each task gets its own copy of
+  the arguments that could change (pickled, as a worker process gets them); bytes, strings
+  and numbers go as they are. A thread cannot be stopped: a task past its deadline is
+  reported as `timeout`, its result thrown away, and it keeps its slot until it ends; while
+  `max_abandoned` of them (default: the runner's size) are still running, `run` refuses new
+  work at once with a `limit` error saying why. The process pool stays the default.
+  `InProcess` is unchanged (it and `ThreadRunner` share `worker._Threads`).
+  `Toolbox(runner="processes")` names the default; any other name is refused.
+- **A whole document's images drawn in the layout's worker, in threads, with the GIL off**
+  (step 2): with worker processes on a free-threaded Python, `render.draw` asks the worker
+  that lays a document out to rasterise its pages too, over as many threads as the pool has
+  workers (`lay_out_views(..., threads=n)`, which returns them as `drawn`), with one
+  deadline covering both; a worker with the GIL on returns no `drawn`, and the pages go to
+  the workers in chunks as before. With the GIL on nothing changes. The images are the same,
+  byte for byte. New `tests/test_tools_threads.py`; `tests/test_tools_snapshot.py` runs its
+  cases with a thread runner too.
+
 ## 0.74.0 -- unreleased
 - **Slow reads on a snapshot in the worker pool, side by side** (production round 28, P2:
   checks of one deck took turns). `Call.on_snapshot(fn, *args, timeout=...)` takes the

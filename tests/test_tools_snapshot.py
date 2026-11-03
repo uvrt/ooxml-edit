@@ -16,7 +16,7 @@ import time
 import pytest
 
 from ooxml_edit.tools import InProcess, Limits, Result, ToolError, Toolbox, integer, shared, string, tool
-from ooxml_edit.tools.worker import WorkerPool
+from ooxml_edit.tools.worker import ThreadRunner, WorkerPool
 from ooxml_edit.tools.dispatch import moved_on
 
 import synthetic
@@ -36,11 +36,12 @@ def slow_read(call, doc, page, stall=0):
                                                      "may_unlock": call.may_unlock})
 
 
-@pytest.fixture(params=[0, 3], ids=["in-process", "workers"])
+@pytest.fixture(params=[0, 3, "threads"], ids=["in-process", "workers", "threads"])
 def toolbox(request):
+    how = ({"runner": ThreadRunner(3)} if request.param == "threads"
+           else {"workers": request.param})
     with Toolbox(tools_toys.TOOLS + [slow_read, *shared.SESSION_TOOLS],
-                 formats=tools_toys.FORMATS, groups=tools_toys.GROUPS,
-                 workers=request.param) as box:
+                 formats=tools_toys.FORMATS, groups=tools_toys.GROUPS, **how) as box:
         if request.param:
             box.warm(wait=True)
         yield box
@@ -61,7 +62,7 @@ def test_the_work_gets_this_versions_bytes_shared_by_its_readers(toolbox):
     kept = entry.snapshot()
     toolbox.dispatch(session, "toy_ppt_slow_read", {"doc": doc, "page": 2})
     assert entry.snapshot() is kept                  # one snapshot per version, not per call
-    if toolbox.parallelism > 1:
+    if toolbox.parallelism > 1 and toolbox.pool.runner != "threads":
         assert first.data["pid"] != __import__("os").getpid()   # in a worker process
 
 
@@ -185,9 +186,9 @@ def test_snapshot_workers_sets_the_slots():
         assert box.snapshot_slots._value == 3
 
 
-@pytest.mark.parametrize("runner", ["workers", "in-process"])
+@pytest.mark.parametrize("runner", ["workers", "in-process", "threads"])
 def test_a_queue_timeout_keeps_the_wait_for_a_worker_out_of_the_deadline(runner):
-    pool = WorkerPool(1) if runner == "workers" else InProcess(1)
+    pool = {"workers": WorkerPool, "in-process": InProcess, "threads": ThreadRunner}[runner](1)
     with pool:
         if runner == "workers":
             pool.warm(wait=True)

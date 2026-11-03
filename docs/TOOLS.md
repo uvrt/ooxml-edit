@@ -759,6 +759,7 @@ serving other calls. There are three runners, all with `run(fn, *args, timeout=.
 | `WorkerPool(n)`: `n` multiprocessing workers (`spawn`) | the default (`Toolbox(workers=None)`: the CPUs the process may use, its container's CPU quota included, at most 8; warmed before their first task, the warm-up no call's time) | kills the worker and replaces it; the call reports `timeout` |
 | `SubprocessPool(n)`: `n` workers started with `subprocess` | by itself, in a daemonic process (below); or `Toolbox(runner=SubprocessPool(n))` anywhere | the same: the worker is killed and replaced |
 | `InProcess(n)`: threads of this process | `Toolbox(workers=0)`, `runner=InProcess(n)`, `WorkerPool(fallback="in-process")`, or where no subprocess can be started either | bounds the *wait* only: the call reports `timeout`, the task runs on to its end in the background, keeping its slot |
+| `ThreadRunner(n)`: `n` threads of this process, side by side | opted in: `Toolbox(runner="threads")` on a free-threaded Python with the GIL off (`python3.15t`, `PYTHON_GIL=0`, lxml 7); with the GIL on, the default pool instead, with a warning once | as `InProcess`: the call reports `timeout`, the task runs on in its slot and its result is thrown away; past `max_abandoned` (default `n`) such tasks still running, new work is refused at once (`limit`) |
 
 A daemonic process may not start multiprocessing children -- a Celery prefork worker's child
 is one, and `Process.start` fails there with "daemonic processes are not allowed to have
@@ -771,6 +772,34 @@ chooses: `True` (the default) or `"subprocess"`, `"in-process"` (the behaviour b
 in a daemonic process with work that holds the GIL for 1 s: two such renders at once took
 1.08 s with subprocess workers and 2.08 s in-process, and an edit asked for during a render
 returned in 8 ms with subprocess workers and 831 ms in-process.
+
+**Threads with the GIL off (free threading, 0.76.0).** On a free-threaded Python with the
+GIL off (`ooxml_edit.tools.gil_enabled()` false: `python3.15t`, `PYTHON_GIL=0`, and lxml 7,
+since lxml 6 turns the GIL back on), threads of one process run side by side, so the work
+need not cross to worker processes. `Toolbox(runner="threads")` opts in to `ThreadRunner`:
+`workers` threads, the same `run`, `warm` and `close`, `queue_timeout` and the snapshot
+slots (`on_snapshot`, `Limits.snapshot_workers`) as with the pool. Warm-up -- the formats'
+imports and font scans -- runs once per process (`worker.warm_once`), not once per worker;
+there is no worker to start or to replace after a timeout, and nothing to pickle across but
+a task's arguments that could change, which each task gets its own copy of (bytes, strings
+and numbers are handed over as they are), so no two tasks share one. A deadline cannot stop a thread: a
+task past it is reported as `timeout` and its result thrown away when it ends, and it keeps
+its slot until then, so a runaway task makes the runner smaller, never busier. While
+`max_abandoned` such tasks (by default as many as the runner has threads) are still
+running, new work is refused at once with a `limit` error saying why, rather than queued
+behind work nothing can stop. Where a deadline must stop the work, keep the default
+`WorkerPool`: it stays the default. With the GIL on, threads would take turns, so
+`runner="threads"` uses the default pool then, with a warning once; a `ThreadRunner` made
+directly still runs (one task at a time in effect), and warns once that the GIL is on.
+
+The same holds for a whole document's images (a Word document's pages) with worker
+processes: with the GIL off, the worker that lays the document out rasterises the pages
+too, over as many threads as the pool has workers (`render.lay_out_views(...,
+threads=n)`), instead of handing them to the other workers in chunks: one task, one
+deadline covering both, no SVGs crossing between processes and no other worker needing to
+be warm. A worker that finds the GIL on returns the SVGs, and the chunks go to the workers
+as before; with the GIL on in the caller nothing changes. Measured on 3.15t: `timings-23.md`
+in the work notes of this change (the numbers are in its pull request).
 
 **A worker that exits as it starts** (round 13, R6, 0.58.0). Under `spawn` a worker first
 imports the program's main module again, so a script with no `if __name__ == "__main__":`
