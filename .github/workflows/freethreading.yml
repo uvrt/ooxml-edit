@@ -3,7 +3,7 @@ name: Free threading
 # The suite on the free-threaded build of Python (3.15t), with the GIL off.  A separate
 # workflow on purpose: ci.yml's jobs are the required checks of branch protection, and
 # this one is not required (yet).  lxml 6 turns the GIL back on when it is imported on
-# 3.15t; lxml 7 (a pre-release for now, hence --pre, in this workflow only) does not, so
+# 3.15t; lxml 7 (a pre-release for now, hence --pre and 7.0.0b1, in this workflow only) does not, so
 # it is installed first and the other installs find it already there.  The first check
 # is that importing the package and its dependencies leaves the GIL off, without
 # PYTHON_GIL set (an extension that has not declared itself free-threading safe turns the
@@ -37,7 +37,7 @@ jobs:
       - name: Install
         run: |
           python -m pip install --upgrade pip
-          python -m pip install --pre "lxml>=7"
+          python -m pip install --pre "lxml>=7.0.0b1"
           python -m pip install "ooxml-common @ git+https://github.com/uvrt/ooxml-common@main"
           python -m pip install -e .[dev]
 
