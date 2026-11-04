@@ -72,9 +72,8 @@ them only when the user's task asks you to. If you decline part of a request, sa
 #: The line the shared fragment gets where ``read_batch`` is sent (round 32, R15), after
 #: ``batch``'s: reading many things is one call too.
 READS = """\
-- read_batch reads many things in one call: describe, read, find, check, query... calls, \
-of any open document, each answered with its own size budget. Use it whenever you need \
-more than one read.
+- read_batch makes many reads, of any documents, one call, each with its own size budget: \
+use it whenever you need more than one read.
 """
 
 

@@ -89,7 +89,7 @@ def test_read_batch_is_a_readers_tool_that_changes_nothing_and_says_it_is_for_ma
 def test_a_reviewer_is_sent_read_batch_and_told_of_it(toolbox):
     names = [tool["name"] for tool in toolbox.definitions("anthropic", roles=["review"])]
     assert "read_batch" in names
-    assert "read_batch reads many things" in toolbox.system_prompt(roles=["review"])
+    assert "read_batch makes many reads" in toolbox.system_prompt(roles=["review"])
     assert "read_batch" in toolbox.system_prompt()
     # Not where it is not sent: a toolbox without it, or tools sent without it.
     assert "read_batch" not in toolbox.system_prompt(tools=["t_record", "batch"])
