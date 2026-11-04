@@ -152,7 +152,7 @@ def call(toolbox, session, tool_name, **arguments):
 def test_every_shared_definition_is_in_the_subset_and_batch_alone_is_not_strict():
     for name, spec in shared.SPECS.items():
         definition = shared.definition(name)
-        if name == "batch":
+        if name in ("batch", "read_batch"):     # and read_batch (round 32): free-form ops
             assert not definition.strict and definition.composite
             with pytest.raises(SubsetError):
                 check_subset(definition.canonical)
@@ -162,12 +162,12 @@ def test_every_shared_definition_is_in_the_subset_and_batch_alone_is_not_strict(
     assert set(shared.SPECS) >= {
         "open_document", "new_document", "save_document", "close_document",
         "undo", "describe", "find_text", "replace_text", "render", "check", "edit_chart",
-        "edit_smartart", "set_properties", "batch"}
+        "edit_smartart", "set_properties", "batch", "read_batch"}
     assert "read_chart" not in shared.SPECS          # edit_chart's read action (T5b)
     assert "list_documents" not in shared.SPECS      # the application names them (post-T4)
     assert shared.CORE_NAMES == ["open_document", "new_document", "save_document", "undo",
                                  "describe", "find_text", "replace_text", "render", "check",
-                                 "batch"]
+                                 "batch", "read_batch"]
 
 
 def test_edit_chart_reads_without_changing():

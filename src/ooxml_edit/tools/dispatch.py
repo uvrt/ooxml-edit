@@ -65,6 +65,11 @@ rolls the whole batch back.  Each op is validated against its own tool's schema 
 model's malformed op is caught by the dispatcher, not by constrained decoding.  That is the
 trade-off: one round trip instead of forty, at the price of strict decoding for the ops.
 Checks run once, at the end.
+
+**Read batch.**  ``read_batch`` (round 32) runs reading calls the same way, under the locks
+of the documents they name, each as it would run alone -- no undo step, no checks -- and
+answers each within ``max_result_chars``, all of them within ``max_read_batch_chars``; what
+does not fit is listed with the call that asks for it (:meth:`Toolbox._run_reads`).
 """
 
 from __future__ import annotations
@@ -954,21 +959,23 @@ class Toolbox:
         return self.tools[name]
 
     def _no_tool(self, name: Any, roles: Sequence[str] | None, *,
-                 batch: bool = False) -> ToolError:
+                 batch: bool = False, within: str = "batch") -> ToolError:
         """``invalid_arguments`` for a name that is no tool: the tools, and their actions,
         it most likely means (:func:`.hints.tool_hints`: ``x_add_chart``, ``edit_chart``
         with action ``add``), else the names close to it -- of ``roles``' tools (all
         without).  A hint outside the roles is named with the role it needs, never in
-        ``valid_options``; inside ``batch``, one batch cannot run is to be called alone."""
+        ``valid_options``; inside ``batch`` (or ``within``: ``read_batch``, whose options
+        are the reading tools), one it cannot run is to be called alone."""
         roles = tuple(ROLES if roles is None else roles)
-        within = [tool for tool in self.tools.values() if tool.roles & set(roles)]
+        tools = [tool for tool in self.tools.values() if tool.roles & set(roles)
+                 and (within != "read_batch" or _reads_some(tool))]
         found = tool_hints(name, self.tools, self.tool_hints)
         usable = [hint for hint in found if self._hint_role(hint, roles) is None]
-        near = difflib.get_close_matches(str(name), [tool.name for tool in within], 5, 0.5)
+        near = difflib.get_close_matches(str(name), [tool.name for tool in tools], 5, 0.5)
         message = f"no tool {name!r}"
         if usable:
             message += ": use " + ", or ".join(
-                f"{hint} on its own (batch cannot run it)"
+                f"{hint} on its own ({within} cannot run it)"
                 if batch and (not self.tools[hint.tool].batchable
                               or self.tools[hint.tool].composite) else str(hint)
                 for hint in usable)
@@ -979,13 +986,13 @@ class Toolbox:
         elif batch and not difflib.get_close_matches(str(name), self.tools, 1, 0.8):
             # No name this close is a slip: likely a tool the application runs itself,
             # outside the toolbox, which a batch cannot reach.
-            message += (" that batch can run: it runs only the tools in valid_options; "
+            message += (f" that {within} can run: it runs only the tools in valid_options; "
                         f"call {name} on its own")
         barred = {hint.tool for hint in found} - {hint.tool for hint in usable}
         options = list(dict.fromkeys([hint.tool for hint in usable]
                                      + [name for name in near if name not in barred]))[:5]
         if not options and not found:
-            options = sorted(tool.name for tool in within if tool.batchable or not batch)
+            options = sorted(tool.name for tool in tools if tool.batchable or not batch)
         return ToolError("invalid_arguments", message, field="tool" if batch else None,
                          valid_options=options)
 
@@ -1091,8 +1098,11 @@ class Toolbox:
         # with a resolve (accept) action has them.
         comments = any(_needs(tool, RESOLVE) for tool in sent)
         tracked = any(_needs(tool, ACCEPT) for tool in sent)
+        # read_batch is named where it is sent, and a role set has it (round 32, R15).
+        reads = any(tool.name == "read_batch" and tool.roles & set(roles) for tool in sent)
         return prompts.system_prompt(*(fmt.prompt for fmt in self.formats.values()), extra=extra,
-                                     roles=roles, comments=comments, tracked=tracked)
+                                     roles=roles, comments=comments, tracked=tracked,
+                                     reads=reads)
 
     def _sent(self, tools: Iterable[Any]) -> list[Tool]:
         """The toolbox's tools among ``tools``: names, :class:`Tool` objects (an
@@ -1463,6 +1473,8 @@ class Toolbox:
         # turn's, for its reads that let their locks go meanwhile (never warned about).
         since = turn.mark() if turn is not None else 0
         before = {doc: entry.version for doc, entry in entries.items()}
+        if tool.composite and not tool.mutates:
+            return self._run_reads(session, arguments, entries, roles=roles, caller=caller)
         if tool.composite:
             edited = {doc: entry for doc, entry in entries.items() if doc not in reading}
             outcome = self._run_batch(session, arguments, edited, primary,
@@ -1755,17 +1767,19 @@ class Toolbox:
     # -- batch -------------------------------------------------------------------------------
 
     def _prepare(self, op: Any, notes: list[str] | None = None,
-                 roles: Sequence[str] | None = None) -> tuple[Tool, dict[str, Any]]:
+                 roles: Sequence[str] | None = None,
+                 within: str = "batch") -> tuple[Tool, dict[str, Any]]:
         """One op's tool and its validated arguments (the aliases read added to ``notes``),
         refused when the call is outside ``roles``.  A :class:`ToolError`'s ``field`` is the
-        op's own: ``tool``, or ``arguments`` and the path in them."""
+        op's own: ``tool``, or ``arguments`` and the path in them.  ``within``: the tool
+        running the op, ``batch`` or ``read_batch``, as the refusals name it."""
         name = self.tool_named(op.get("tool", "") if isinstance(op, Mapping) else "", notes)
         if name not in self.tools:
-            raise self._no_tool(name, roles, batch=True)
+            raise self._no_tool(name, roles, batch=True, within=within)
         tool = self.tools[name]
         if not tool.batchable or tool.composite:
-            raise ToolError("invalid_arguments", f"{name} cannot run inside a batch; call it "
-                            "on its own", field="tool")
+            raise ToolError("invalid_arguments", f"{name} cannot run inside a {within}; call "
+                            "it on its own", field="tool")
         if roles is not None:
             _check_role(tool, None, roles, field="tool")
         try:
@@ -1970,6 +1984,96 @@ class Toolbox:
             combined.summary = f"Ran {len(done)} op(s) as one step: " + _summaries(done)
             combined.data = {"ops": outcomes}
         return combined
+
+    # -- read_batch ---------------------------------------------------------------------------
+
+    def _run_reads(self, session: Session, arguments: Mapping[str, Any],
+                   entries: Mapping[str, DocumentEntry], *, roles: Sequence[str] = ROLES,
+                   caller: Mapping[str, Any] = NO_CONTEXT) -> Result:
+        """``read_batch`` (round 32, R15): reading calls run one after another, each as the
+        same call alone would run (:meth:`_run`: no undo step, no version, no checks), under
+        the locks of every document they name (``entries``: the dispatcher took them).
+
+        Each op is answered within ``max_result_chars``, as alone; the answers together
+        within ``max_read_batch_chars`` (:attr:`Result.budget`, so the reply is not cut to
+        one call's limit).  One that does not fit what is left, and every op the batch's
+        deadline stopped, is listed in ``not_returned`` and in ``resend``, the call that
+        asks for them; an op whose own answer has a next page gets ``next``, the call for
+        it.  A failing op -- a changing call among them: refused, pointing at ``batch`` --
+        is answered with its error; the others still run."""
+        ops = list(arguments.get("ops") or [])
+        limits = session.limits
+        if len(ops) > limits.max_batch_ops:
+            raise ToolError("limit", f"{len(ops)} ops; at most {limits.max_batch_ops} per "
+                            "read_batch: send the rest in another", field="ops")
+        own = limits.max_result_chars
+        cap = max(limits.max_read_batch_chars, own)
+        started = time.perf_counter()
+        answers: list[tuple[dict[str, Any], int, Result]] = []
+        left: list[tuple[int, str]] = []      # (op, why)
+        used = _READ_MARGIN
+        for index, op in enumerate(ops):
+            if time.perf_counter() - started > limits.batch_timeout:
+                left.append((index, "deadline"))
+                continue
+            result, paged = self._read_op(session, op, entries, roles, caller)
+            answer = _read_answer(index, result, op, own, paged)
+            size = _size(answer)
+            if used + size > cap:
+                left.append((index, "budget"))
+                continue
+            used += size
+            answers.append((answer, index, result))
+        combined = _read_result(ops, answers, left, cap, limits.batch_timeout)
+        while answers and len(combined.to_text()) > cap:
+            # What was left out, listed with its call, did not fit beside the answers: the
+            # last answer goes to it too.
+            _, index, _ = answers.pop()
+            left = sorted([*left, (index, "budget")])
+            combined = _read_result(ops, answers, left, cap, limits.batch_timeout)
+        return combined
+
+    def _read_op(self, session: Session, op: Any, entries: Mapping[str, DocumentEntry],
+                 roles: Sequence[str], caller: Mapping[str, Any]) -> tuple[Result, bool]:
+        """One op of a ``read_batch``: its result, or its error as a failed one; and
+        whether its tool takes a ``cursor`` (the next page's call is its own)."""
+        notes: list[str] = []
+        primary: DocumentEntry | None = None
+        tool: Tool | None = None
+        try:
+            tool, clean = self._prepare(op, notes, roles, "read_batch")
+            if tool.changes(clean):
+                raise ToolError(
+                    "refused", f"{tool.name} changes the document, and read_batch only "
+                    "reads: send this op in batch (with the other changes), or call it on its "
+                    "own", field="tool", valid_options=["batch", tool.name])
+            doc_ids = tool.doc_ids(clean)
+            for doc in doc_ids:
+                if doc not in entries:
+                    session.entry(doc)      # not_found, naming the open documents
+                    raise ToolError("refused", f"{doc} was opened after the read_batch "
+                                    "began: read it in another call", field="arguments.doc")
+            clean, found = self._sources(
+                session, tool, clean,
+                hint=lambda value: self._source_hint(session, doc_ids, value))
+            held = {doc: entries[doc] for doc in [*doc_ids, *found] if doc in entries}
+            primary = held[doc_ids[0]] if doc_ids else None
+            result = self._run(session, tool, clean, held, primary,
+                               [doc for doc in found if doc not in doc_ids],
+                               roles=roles, caller=caller)
+        except ToolError as error:
+            result = Result.failure(error)
+        except Exception as exc:  # noqa: BLE001 -- the op's error, the others still run
+            result = Result.failure(self.map_exception(exc))
+        result.warnings[:0] = notes
+        if primary is not None:
+            result.doc = primary.doc_id
+            if result.version is None:
+                result.version = primary.version
+        given = op.get("tool") if isinstance(op, Mapping) else None
+        result.tool = tool.name if tool is not None else given if isinstance(given, str) else ""
+        paged = tool is not None and "cursor" in tool.schema.get("properties", {})
+        return result, paged
 
     def _run_deferred(self, context: CallContext, combined: Result) -> None:
         """After a batch's last op: the work its ops deferred (:meth:`Call.defer`), in op
@@ -2277,6 +2381,12 @@ def _context(roles: Sequence[str], caller: Mapping[str, Any]) -> CallContext:
     return context
 
 
+def _reads_some(tool: Tool) -> bool:
+    """Whether some call of ``tool`` only reads, and may run in a ``read_batch``."""
+    return tool.batchable and not tool.composite and (
+        not tool.mutates or tool.reads is not None)
+
+
 def _needs(tool: Tool, role: str) -> bool:
     """Whether some call of ``tool`` needs ``role`` itself (not every role's)."""
     return tool.base_role == role or role in tool.action_roles.values()
@@ -2364,6 +2474,69 @@ def _op_error(failure: ToolError | _OpFailed) -> ToolError:
     return ToolError(error.code, error.message, valid_options=error.valid_options,
                      field=f"arguments.{error.field}" if error.field else None,
                      details=error.details)
+
+
+#: What a ``read_batch``'s reply needs besides its ops' answers: its envelope, summary and
+#: what was left out, in characters.
+_READ_MARGIN = 2_000
+
+
+def _size(value: Any) -> int:
+    return len(json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str))
+
+
+def _read_answer(index: int, result: Result, op: Any, limit: int,
+                 paged: bool) -> dict[str, Any]:
+    """A ``read_batch`` op's answer: its result as the model reads a lone call's -- cut to
+    ``limit`` as one would be -- without what a reading call never has (an empty
+    ``changed``, ``created``...), led by ``op`` and ``tool``; with ``next``, the call for
+    the next page, when there is one and its tool takes a ``cursor`` (``paged``)."""
+    envelope = json.loads(result.to_text(limit))
+    answer: dict[str, Any] = {"op": index, "tool": result.tool}
+    for key, value in envelope.items():
+        if key == "ok" or value is None or value in ([], {}, ""):
+            continue
+        answer[key] = value
+    cursor = result.next_cursor
+    arguments = op.get("arguments") if isinstance(op, Mapping) else None
+    if cursor and paged and isinstance(arguments, Mapping):
+        answer["next"] = {"tool": result.tool, "arguments": {**arguments, "cursor": cursor}}
+    return answer
+
+
+def _read_result(ops: Sequence[Any], answers: Sequence[tuple[dict[str, Any], int, Result]],
+                 left: Sequence[tuple[int, str]], cap: int, timeout: float) -> Result:
+    """A ``read_batch``'s result: the answers in op order, then what was left out."""
+    failed = sum(not result.ok for _, _, result in answers)
+    combined = Result(budget=cap)
+    for _, _, result in answers:
+        combined.images += result.images
+    data: dict[str, Any] = {"ops": [answer for answer, _, _ in answers]}
+    said = [f"Read {len(answers) - failed} of {len(ops)} op(s)"]
+    if failed:
+        errors = [answer for answer, _, result in answers if not result.ok]
+        shown = "; ".join(f"ops[{answer['op']}] ({answer['tool'] or '?'}): "
+                          f"{answer.get('error', {}).get('message', '')}"
+                          for answer in errors[:3])
+        said.append(f"{failed} failed: {shown}" + (f"; and {failed - 3} more"
+                                                   if failed > 3 else ""))
+    if left:
+        budget = [index for index, why in left if why == "budget"]
+        late = [index for index, why in left if why == "deadline"]
+        data["not_returned"] = [{"op": index, "why": (
+            f"over the reply's {cap:,}-character budget" if why == "budget"
+            else f"not run: past the {timeout:g} s deadline")} for index, why in left]
+        data["resend"] = {"tool": "read_batch",
+                          "arguments": {"ops": [ops[index] for index, _ in left]}}
+        parts = []
+        if budget:
+            parts.append(f"{len(budget)} did not fit the {cap:,}-character reply")
+        if late:
+            parts.append(f"{len(late)} not run before the {timeout:g} s deadline")
+        said.append(f"Not returned: {' and '.join(parts)}; send data.resend for them")
+    combined.summary = ". ".join(said)
+    combined.data = data
+    return combined
 
 
 def _brief(error: ToolError) -> dict[str, Any]:

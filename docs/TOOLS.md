@@ -91,6 +91,30 @@ with neither keeps what a failing op did. Its ops' arguments are free-form objec
 `batch` is the one tool never sent strict: each op is validated by the dispatcher against
 its own tool's schema instead of by constrained decoding.
 
+*Reading many things in one call* (0.78.0, round 32, R15). `read_batch`
+(`shared.READ_BATCH`) takes the same `ops`, every one a reading call -- `describe`,
+`find_text`, `check`, a library's read and query tools, a mixed tool's reading action
+(`edit_chart` `read`) -- and answers each as the same call alone would be answered: no undo
+step, no version, no checks, its result cut to `max_result_chars` as alone. Its reply holds
+the answers together, in op order, within `Limits.max_read_batch_chars` (96,000 by default;
+`Result.budget`, so a sender's per-call limit does not cut it to one call's): an answer is
+`op`, `tool` and the lone call's envelope without what a reading call never has (`ok`, an
+empty `changed`...); one with a next page also has `next`, the same call with the
+`cursor`. An answer that does not fit what is left, and every op the deadline
+(`batch_timeout`) stopped, is in `data.not_returned` (`op`, `why`) and in `data.resend`, the
+`read_batch` call that asks for them; the summary says so. Nothing is cut silently. A
+changing op is refused alone (`refused`, field `tool`, `valid_options` `batch` and the
+tool: send it in `batch`), an unknown one names the reading tools, and the others still
+run. Its role is `review`: a reader is sent it -- `mutates` is false, so an application
+that gives a reader the tools that change nothing gives it this one -- and a builder too.
+The shared prompt fragment names it where it is sent (`system_prompt(tools=...)` decides
+over the tools sent, as for the role line). It is not in `SESSION_TOOLS`: a library lists
+it in its tools when it offers it (the three agents do from their 0.1.37, 0.1.16 and 0.1.15).
+Why a tool of its own and not `batch` reading when all its ops read: what a tool is -- its
+`mutates`, its role, its description -- is fixed, so an application's reader list and a
+model reading the description see a tool that changes nothing; and its reply keeps a budget
+per op, which a batch of changes, answered as one step, does not.
+
 *Refs outside a call* (0.70.0, round 23, V5). The application reads a document's refs with
 `session.refs("d1")` -- `{name: address}`, a copy taken under the document's lock, as they
 are now (an undo takes back the refs of what it undoes) -- and resolves one with
@@ -647,6 +671,7 @@ without roles -- the same definitions byte for byte, the same strict set, the sa
 
 Every role set has the session's documents -- `open_document`, `save_document`,
 `close_document`, `read_blob` -- and `batch`: a reviewer saves the copy it commented.
+`read_batch` (0.78.0), many reads in one call, is `review`'s.
 Editing a comment's text is every role's too (the user's decision, 2026-10-17: who wrote a
 comment is not known, and keeping a model from rewording one is not the library's aim), so
 every role set that has a comments tool can edit comment text.

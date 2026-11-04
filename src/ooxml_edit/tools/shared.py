@@ -18,7 +18,9 @@ and a document library loaded together give the model one ``render``.
 
 ``batch`` runs other calls as one (see :mod:`.dispatch`); it is never sent strict, because
 its ops' arguments are free-form objects, and the dispatcher validates each op against its
-own tool instead.
+own tool instead.  ``read_batch`` (:data:`READ_BATCH`, round 32) runs reading calls the same
+way, each answered as if alone; it is a reader's (``review``), changes nothing, and a library
+lists it in its tools itself.
 
 How a call finds its handler:
 
@@ -541,6 +543,15 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
           "atomic": boolean("All or none.", optional=True)},
          documents=_no_documents, mutates=True, strict=False, batchable=False,
          composite=True, role=ANY_ROLE),
+    # round 32, R15: many reads in one turn, for a reader too
+    Spec("read_batch",
+         "Read many things in one call: reading calls (describe, read, find, check, "
+         "query...), each answered as alone, with its own size budget. Use it for any two or "
+         "more reads. Changes nothing.",
+         {"ops": array(obj({"tool": string(),
+                            "arguments": free_object("That tool's arguments.")}),
+                       "The reading calls, at most 200.", min_items=1)},
+         documents=_no_documents, strict=False, batchable=False, composite=True),
 ]}
 
 # -- edit_chart's rows from a source ------------------------------------------------------------
@@ -1121,7 +1132,7 @@ def definition(name: str) -> Tool:
 
 
 def _composite(call: Any, **arguments: Any) -> None:
-    raise ToolError("internal", "batch is run by the toolbox itself")
+    raise ToolError("internal", "batch and read_batch are run by the toolbox itself")
 
 
 def _open_document(call: Any, blob: str) -> Result:
@@ -1219,5 +1230,10 @@ SESSION_TOOLS: list[Tool] = [
     SPECS["read_blob"].make({None: _read_blob}),
 ]
 
-__all__ = ["COMMENT_ACTION_ROLES", "CORE_NAMES", "FROM_ACTIONS", "GROUPS", "KINDS", "MISC", "SESSION_TOOLS", "SPECS", "Spec",
-           "comment_role", "definition", "handler"]
+#: ``read_batch`` (round 32, R15): many reading calls in one, each with its own budget, in
+#: the ``review`` role -- so a reader has it.  Not in :data:`SESSION_TOOLS`: a library lists
+#: it in its tools when it offers it, as the agents do.
+READ_BATCH: Tool = SPECS["read_batch"].make({None: _composite})
+
+__all__ = ["COMMENT_ACTION_ROLES", "CORE_NAMES", "FROM_ACTIONS", "GROUPS", "KINDS", "MISC", "READ_BATCH",
+           "SESSION_TOOLS", "SPECS", "Spec", "comment_role", "definition", "handler"]

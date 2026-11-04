@@ -69,6 +69,18 @@ them only when the user's task asks you to. If you decline part of a request, sa
 """
 
 
+#: The line the shared fragment gets where ``read_batch`` is sent (round 32, R15), after
+#: ``batch``'s: reading many things is one call too.
+READS = """\
+- read_batch makes many reads, of any documents, one call, each with its own size budget: \
+use it whenever you need more than one read.
+"""
+
+
+_AFTER_BATCH = "apply. Prefer these to a call per object.\n"
+assert _AFTER_BATCH in SYSTEM
+
+
 #: The role line of a role set without ``edit`` (a reviewer's), after the formats' fragments.
 REVIEW_ONLY = """\
 Role: review. Do not change the document; the tools that would are not yours. Report each \
@@ -104,10 +116,12 @@ def role_line(roles: Iterable[str], *, comments: bool = True, tracked: bool = Tr
 
 def system_prompt(*fragments: str, extra: str | None = None,
                   roles: Iterable[str] | None = None, comments: bool = True,
-                  tracked: bool = True) -> str:
+                  tracked: bool = True, reads: bool = False) -> str:
     """The shared fragment, then each format's, the role set's line (none for one with
-    ``edit``), then the application's own guidance."""
-    parts = [SYSTEM.strip()] + [fragment.strip() for fragment in fragments if fragment.strip()]
+    ``edit``), then the application's own guidance.  ``reads``: whether ``read_batch`` is
+    sent, which the shared fragment then names (:data:`READS`)."""
+    shared = SYSTEM.replace(_AFTER_BATCH, _AFTER_BATCH + READS) if reads else SYSTEM
+    parts = [shared.strip()] + [fragment.strip() for fragment in fragments if fragment.strip()]
     line = role_line(roles, comments=comments, tracked=tracked) if roles is not None else ""
     if line:
         parts.append(line)

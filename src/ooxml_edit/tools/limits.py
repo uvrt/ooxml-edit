@@ -47,6 +47,11 @@ class Limits:
     image_budget_per_round: int | None = None
     # batches
     max_batch_ops: int = 200
+    #: The whole reply of one ``read_batch`` (round 32, R15), in characters: each op is
+    #: answered within ``max_result_chars``, as if called alone, and its answers together
+    #: within this; what does not fit is listed, with the call that asks for it.  At most
+    #: about 24,000 tokens.  Never less than ``max_result_chars``.
+    max_read_batch_chars: int = 96_000
     # datasets (``d:<id>``, :mod:`.datasets`)
     #: Datasets a session keeps at once; defining an id that exists replaces it.
     max_datasets: int = 50

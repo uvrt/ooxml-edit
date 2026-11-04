@@ -4,6 +4,24 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet. Each vers
 reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
 earlier ones were never tagged.
 
+## 0.78.0 -- unreleased
+- **`read_batch`: many reads in one call, each with its own budget** (production round 32,
+  R15). Builders read one record at a time, a model turn each, and put no reads in `batch`:
+  its description reads as an edit tool's, it changes documents (`mutates`), so a reader is
+  not given it, and its reply shares one `max_result_chars`, so several large reads were cut
+  as one. `shared.READ_BATCH` takes `ops` as `batch` does, every one a reading call of any
+  library's (describe, find, check, read, query, trace, a reading action), and answers each
+  as the call alone: no undo step, no version, no checks, cut to `max_result_chars` as
+  alone. The answers together fit the new `Limits.max_read_batch_chars` (96,000), which the
+  new `Result.budget` carries past a sender's per-call limit; one that does not fit, and any
+  op past `batch_timeout`, is listed in `data.not_returned` with `data.resend`, the call
+  that asks for them, and a paged answer has `next`, its next page's call. A changing op is
+  refused alone with the way out (`batch`); an unknown op's options are the reading tools.
+  It is `review`'s, `mutates` false, not strict (free-form ops: no strict parameters), in
+  the core, and not in `SESSION_TOOLS` (a library lists it, so the agents' definitions
+  change only when they do). The shared prompt fragment gets one line naming it where it is
+  sent (`prompts.READS`, `system_prompt(reads=...)`). `batch` is unchanged.
+
 ## 0.77.0 -- unreleased
 - **Another kind's parameter at its default is ignored with a warning, not refused**
   (production round 31, R5e). A strict decoder writes every optional field, and a toolbox
