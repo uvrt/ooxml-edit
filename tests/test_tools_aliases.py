@@ -428,3 +428,16 @@ def test_nested_alias_definitions_are_checked():
         tool("t_x", "X.", params, aliases={"items[].b": "c"})(lambda call, doc, items: None)
     with pytest.raises(SubsetError, match="in no object parameter"):
         tool("t_x", "X.", params, aliases={"rows[].b": "a"})(lambda call, doc, items: None)
+
+
+def test_edit_chart_ignores_an_empty_columns_or_date_format(toolbox, session):
+    """Round 31, R5e: a strict decoder writes every optional field; an empty one asks
+    nothing, so it is left out with a warning instead of refused."""
+    result = toolbox.dispatch(session, "edit_chart", {
+        "doc": "d1", "action": "set_title", "target": "c:1", "text": "T",
+        "columns": [], "date_format": ""})
+    assert result.ok and result.warnings == [
+        "columns ignored: it is empty", "date_format ignored: it is empty"]
+    result = toolbox.dispatch(session, "edit_chart", {
+        "doc": "d1", "action": "set_title", "target": "c:1", "columns": ["a"]})
+    assert result.error.field == "columns" and "give from too" in result.error.message

@@ -40,7 +40,11 @@ A parameter that applies to one format says so in its description (``slides`` fo
 range or table); the handler of another kind answers ``invalid_arguments`` naming the field
 to use instead.  A spec names such parameters in ``kind_fields`` (and enum values in
 ``kind_values``, one-kind descriptions in ``kind_descriptions``; round 23), so a library's
-toolbox is not even sent another kind's: :attr:`~.registry.Tool.kind_fields`.
+toolbox is not even sent another kind's: :attr:`~.registry.Tool.kind_fields`.  Such a
+parameter given at its default for a kind it does not apply to -- empty, ``false``, or a
+value of ``kind_neutral`` (``find_text``'s ``stories: "body"`` for a workbook) -- is
+ignored with a warning instead (round 31, R5e: :meth:`~.registry.Tool.ignored_for`): a
+strict decoder writes every optional field.
 Lengths are points, as everywhere in the tool layer.
 
 The kinds (:data:`KINDS`) are ``ooxml_common.kinds``' main kind per application: ``pptx``,
@@ -137,7 +141,8 @@ class Spec:
                  action_roles: Mapping[str, str] | None = None,
                  kind_fields: Mapping[str, tuple[str, ...]] | None = None,
                  kind_values: Mapping[str, Mapping[str, tuple[str, ...]]] | None = None,
-                 kind_descriptions: Mapping[str, Mapping[str, str]] | None = None) -> None:
+                 kind_descriptions: Mapping[str, Mapping[str, str]] | None = None,
+                 kind_neutral: Mapping[str, tuple[Any, ...]] | None = None) -> None:
         self.name = name
         self.description = description
         self.params = dict(params)
@@ -168,6 +173,9 @@ class Spec:
                             for param, values in (kind_values or {}).items()}
         self.kind_descriptions = {param: dict(texts)
                                   for param, texts in (kind_descriptions or {}).items()}
+        #: Values of those that ask nothing of another kind, ignored with a warning there
+        #: (:attr:`~.registry.Tool.kind_neutral`, round 31).
+        self.kind_neutral = {param: tuple(values) for param, values in (kind_neutral or {}).items()}
         named = ({kind for kinds in self.kind_fields.values() for kind in kinds}
                  | {kind for values in self.kind_values.values() for kinds in values.values()
                     for kind in kinds}
@@ -192,7 +200,7 @@ class Spec:
                     reads=self.reads,
                     aliases=self.aliases, role=self.role, action_roles=self.action_roles,
                     kind_fields=self.kind_fields, kind_values=self.kind_values,
-                    kind_descriptions=self.kind_descriptions)
+                    kind_descriptions=self.kind_descriptions, kind_neutral=self.kind_neutral)
 
     @property
     def schema(self) -> dict[str, Any]:
@@ -316,7 +324,10 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
          kind_values={"stories": _STORY_VALUES},
          kind_descriptions={"stories": _STORY_TEXTS,
                             "range": {"docx": "Only within this block or span (p:A..t:B).",
-                                      "xlsx": "Only within this sheet, range or table."}}),
+                                      "xlsx": "Only within this sheet, range or table."}},
+         # Round 31 (R5e): a workbook's search is all its text, so body and all ask it
+         # nothing; layouts and masters are still refused there.
+         kind_neutral={"stories": ("body", "all")}),
     # S7
     Spec("replace_text",
          "Replace text, keeping its formatting. expect=one needs exactly one match (else the "
@@ -648,6 +659,13 @@ def _chart_rows(handler: Callable[..., Any]) -> Callable[..., Any]:
         return _set_blanks(returned, used, blanks)
 
     def placed(call: Any, **arguments: Any) -> Any:
+        # Round 31 (R5e): an empty columns or date_format, as a strict decoder writes every
+        # optional field, asks for nothing: left out, with a warning, not refused.  (An
+        # empty from is the dispatcher's to refuse, as every source is: not a source.)
+        for name in ("columns", "date_format"):
+            if name in arguments and arguments[name] in ("", []):
+                del arguments[name]
+                call.warn(f"{name} ignored: it is empty")
         source = arguments.pop("from", None)
         columns = arguments.pop("columns", None)
         date_format = arguments.pop("date_format", None)

@@ -1472,6 +1472,8 @@ class Toolbox:
                 turn.made(entries, before)
             return outcome
         handler = self._handler(session, tool, arguments, primary)
+        arguments = dict(arguments)
+        ignored = tool.ignored_for(primary.kind if primary else None, arguments)
         changing = tool.changes(arguments)
         key = arguments.get("key") if changing and isinstance(arguments.get("key"), str) else None
         if key is not None and primary is not None and (tool.name, key) in primary.keys:
@@ -1484,7 +1486,7 @@ class Toolbox:
             read: list[str] = []
             arguments = self._with_refs(tool, arguments, entries, primary, context, read)
             call = Call(self, session, tool, arguments, entries, primary, context)
-            call.result.warnings += read
+            call.result.warnings += ignored + read
             self._with_datasets(tool, arguments, call)
             arguments = self._with_facts(tool, arguments, call)
             call.held = list(entries.values())   # dispatch() holds each once
@@ -2028,7 +2030,8 @@ class Toolbox:
                     raise ToolError("refused", f"{doc} was opened after the batch began: "
                                     "call it on its own", field="doc")
             handler = self._handler(session, tool, arguments, primary)
-            read: list[str] = []
+            arguments = dict(arguments)
+            read = tool.ignored_for(primary.kind if primary else None, arguments)
             arguments = self._with_refs(tool, arguments, entries, primary, context, read)
             arguments, found = self._sources(
                 session, tool, arguments,

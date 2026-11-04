@@ -4,6 +4,26 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet. Each vers
 reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
 earlier ones were never tagged.
 
+## 0.77.0 -- unreleased
+- **Another kind's parameter at its default is ignored with a warning, not refused**
+  (production round 31, R5e). A strict decoder writes every optional field, and a toolbox
+  of several kinds is sent every kind's (`Tool.kind_fields`), so `find_text` on a workbook
+  came with `"stories": "body"` and was refused. Now a `kind_fields` parameter that does
+  not apply to the document's kind and asks nothing of it -- `false`, `""`, `[]`, `{}`, or
+  a value of the spec's new `kind_neutral` -- is taken out before the handler runs, with a
+  warning naming it (`stories ignored: it applies to pptx and docx, not to this xlsx
+  document`), in a call and in a batch's op alike (`Tool.ignored_for`). Any other value
+  reaches the handler and its refusal, as before: `slides: [2]` on a document, `boxes:
+  true`, `stories: "layouts"` on a workbook, and every number (`spacing`, `contrast`,
+  `min_size`: `0` is a measure, not "none"). The fields handled: `find_text`'s `slides`
+  (`[]`), `range` (`""`) and `stories` (`""`, and `body` or `all` on a workbook, whose
+  search is all its text: `kind_neutral`); `replace_text`'s `slides`, `range` and
+  `stories` (empty); `render`'s `slides` and `pages` (`[]`); `check`'s `slides`, `pages`
+  and `styles` (`[]`) and `boxes` (`false`); `save_document`'s `clean` (`false`, which
+  was already dropped silently and now says so); `undo`'s `scope` (`""`). `edit_chart` leaves
+  out an empty `columns` or `date_format` with a warning (an empty `from` is still not a
+  source). No definition changed.
+
 ## 0.76.0 -- unreleased
 - **An opt-in thread runner for a free-threaded Python** (free threading, step 3; the
   production team asked): `Toolbox(runner="threads")` runs the work in `ThreadRunner`, threads
