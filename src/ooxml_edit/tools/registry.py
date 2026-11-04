@@ -275,6 +275,14 @@ class Tool:
     #: ``{parameter: {kind: description}}``, where the shared one names every kind's case
     #: (``include``'s defaults per kind).  A tool of several kinds is sent the shared one.
     kind_descriptions: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
+    #: Round 31 (R5e): the values of a :attr:`kind_fields` parameter that ask nothing of a
+    #: kind it does not apply to, besides the empty ones (``false``, ``""``, ``[]``, ``{}``):
+    #: ``{"stories": ("body", "all")}`` on ``find_text``, for a kind whose search is all of
+    #: its text.  A call that gives such a value for a document of another kind -- as a
+    #: strict decoder that writes every optional field does -- has it ignored, with a
+    #: warning, instead of refused (:meth:`ignored_for`); any other value still
+    #: reaches the handler, whose refusal names the field to use.
+    kind_neutral: Mapping[str, Sequence[Any]] = field(default_factory=dict)
     #: For a tool with a handler for any kind (``None``: the session tools, ``undo``): the
     #: kinds it serves in a toolbox -- those its other tools' handlers serve, the libraries
     #: loaded -- which :class:`~.dispatch.Toolbox` sets on its own copy so that
@@ -330,6 +338,29 @@ class Tool:
         if served is None:
             return []
         return [name for name, applies in self.kind_fields.items() if not served & set(applies)]
+
+    def ignored_for(self, kind: str | None, arguments: dict[str, Any]) -> list[str]:
+        """Round 31 (R5e): take out of ``arguments`` the :attr:`kind_fields` parameters
+        that do not apply to a ``kind`` document and ask nothing of it -- an empty value
+        (``false``, ``""``, ``[]``, ``{}``) or one of :attr:`kind_neutral` -- and return a
+        warning for each.  A strict decoder writes every optional field, a toolbox of
+        several kinds is sent them all, and the field at its default is no request the
+        other kind could fail.  Any other value is kept, for the handler to refuse: one
+        that narrows a search, say, so that a handler never does more than asked."""
+        if kind is None or not self.kind_fields:
+            return []
+        notes = []
+        for name, applies in self.kind_fields.items():
+            if name not in arguments or kind in applies:
+                continue
+            value = arguments[name]
+            if not (_empty(value) or any(_same(value, neutral)
+                                         for neutral in self.kind_neutral.get(name, ()))):
+                continue
+            del arguments[name]
+            notes.append(f"{name} ignored: it applies to {' and '.join(applies)}, not to "
+                         f"this {kind} document")
+        return notes
 
     @property
     def core(self) -> bool:
@@ -449,6 +480,8 @@ class Tool:
             and _kind_map(self.kind_values) == _kind_map(other.kind_values) \
             and {k: dict(v) for k, v in self.kind_descriptions.items()} \
             == {k: dict(v) for k, v in other.kind_descriptions.items()} \
+            and {k: tuple(v) for k, v in self.kind_neutral.items()} \
+            == {k: tuple(v) for k, v in other.kind_neutral.items()} \
             and tuple(self.sources) == tuple(other.sources) \
             and tuple(self.facts) == tuple(other.facts) \
             and dict(self.aliases) == dict(other.aliases)
@@ -466,6 +499,17 @@ class Tool:
         combined = copy.copy(self)
         combined.handlers = {**self.handlers, **other.handlers}
         return combined
+
+
+def _empty(value: Any) -> bool:
+    """A value that asks for nothing: ``false``, ``""`` or an empty array or object (not 0,
+    which is a measure)."""
+    return value is False or (isinstance(value, (str, list, tuple, dict)) and not value)
+
+
+def _same(value: Any, other: Any) -> bool:
+    """Equal and of one type (``0`` is not ``false``)."""
+    return type(value) is type(other) and value == other
 
 
 def _enum_holder(schema: Any) -> dict[str, Any] | None:
@@ -564,6 +608,11 @@ def definition_problems(tool: Tool) -> list[str]:
                                 "not in its enum")
             if isinstance(applies, str) or not applies:
                 problems.append(f"kind_values gives {name}={value!r} {applies!r}: a list of kinds")
+    for name, neutral in tool.kind_neutral.items():
+        if name not in tool.kind_fields:
+            problems.append(f"kind_neutral names {name!r}, which is not in kind_fields")
+        if isinstance(neutral, str):
+            problems.append(f"kind_neutral gives {name!r} {neutral!r}: a list of values")
     for name, texts in tool.kind_descriptions.items():
         if name not in properties:
             problems.append(f"kind_descriptions names {name!r}, which is not a parameter")

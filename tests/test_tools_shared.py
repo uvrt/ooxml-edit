@@ -385,6 +385,84 @@ def test_a_call_may_still_name_a_value_its_kind_is_not_sent():
         assert call(box, session, "check", doc="d1", include=["reflow"]).data == {"given": ["include"]}
 
 
+def test_another_kinds_parameter_at_its_default_is_ignored_with_a_warning():
+    """Round 31, R5e: a strict decoder writes every optional field, so a document's check
+    comes with a deck's boxes: false and slides: [] -- ignored, each with a warning, where
+    any other value still reaches the handler and its refusal."""
+    text = shared.handler("check", kind="docx")(_text_check)
+    deck = shared.handler("check", kind="pptx")(_deck_check)
+    with Toolbox([text, deck, *TEXT_TOOLS, *DECK_TOOLS], formats=[DECK, TEXT]) as box:
+        session = box.session(clock=CLOCK)
+        session.open(synthetic.outer_package(), "text.docx")      # d1
+        session.open(synthetic.outer_package(), "deck.pptx")      # d2
+        strict = dict(slides=[], pages=[], include=[], boxes=False, styles=[])
+        documents = call(box, session, "check", doc="d1", **strict, min_size=9)
+        assert documents.ok and documents.data == {"given": ["include", "min_size", "pages", "styles"]}
+        assert documents.warnings == [
+            "slides ignored: it applies to pptx, not to this docx document",
+            "boxes ignored: it applies to pptx, not to this docx document"]
+        decks = call(box, session, "check", doc="d2", **strict)
+        assert decks.ok and decks.data == {"given": ["boxes", "include", "slides"]}
+        assert decks.warnings == [
+            "pages ignored: it applies to docx, not to this pptx document",
+            "styles ignored: it applies to docx, not to this pptx document"]
+        # a value that asks for something is the handler's to refuse, as before
+        for name, value in (("boxes", True), ("slides", ["1"]), ("spacing", 0), ("contrast", 4.5)):
+            refused = call(box, session, "check", doc="d1", **{name: value})
+            assert refused.error.field == name, name
+        assert call(box, session, "check", doc="d2", styles=["Body"]).error.field == "styles"
+        # in a batch, the op's warning names the op, and the op applies
+        ops = _ops(("check", {"doc": "d1", "boxes": False}))
+        done = call(box, session, "batch", ops=ops)
+        assert done.ok and done.warnings == [
+            "ops[0]: boxes ignored: it applies to pptx, not to this docx document"]
+
+
+def test_undo_and_save_document_ignore_another_kinds_empty_parameter():
+    with Toolbox(TEXT_TOOLS + DECK_TOOLS, formats=[DECK, TEXT]) as box:
+        session = box.session(clock=CLOCK)
+        session.open(synthetic.outer_package(), "text.docx")      # d1
+        session.open(synthetic.outer_package(), "deck.pptx")      # d2
+        call(box, session, "t_add", doc="d1", items=[{"text": "a"}])
+        undone = call(box, session, "undo", doc="d1", scope="")
+        assert undone.ok and undone.warnings == [
+            "scope ignored: it applies to pptx and xlsx, not to this docx document"]
+        assert call(box, session, "undo", doc="d1", scope="1").error.field == "scope"
+        saved = call(box, session, "save_document", doc="d2", name="a.pptx", format="pptx", clean=False)
+        assert saved.ok and saved.warnings == [
+            "clean ignored: it applies to docx, not to this pptx document"]
+        assert call(box, session, "save_document", doc="d2", name="a.pptx", format="pptx",
+                    clean=True).error.field == "clean"
+
+
+def test_find_texts_stories_body_or_all_ask_nothing_of_a_kind_without_stories():
+    """find_text's kind_neutral: on a kind stories does not apply to (a workbook), body and
+    all are its whole search; layouts and masters are still refused there."""
+    find = shared.definition("find_text")
+    assert find.kind_neutral == {"stories": ("body", "all")}
+    for value in ("body", "all"):
+        arguments = {"doc": "d1", "text": "x", "stories": value, "slides": [], "range": "A1"}
+        assert find.ignored_for("xlsx", arguments) == [
+            "slides ignored: it applies to pptx, not to this xlsx document",
+            "stories ignored: it applies to pptx and docx, not to this xlsx document"]
+        assert arguments == {"doc": "d1", "text": "x", "range": "A1"}
+    kept = {"doc": "d1", "text": "x", "stories": "layouts", "slides": [2], "regex": False}
+    assert find.ignored_for("xlsx", kept) == [] and set(kept) == {"doc", "text", "stories", "slides", "regex"}
+    # where it applies, nothing is taken out
+    kept = {"doc": "d1", "text": "x", "stories": "body", "range": ""}
+    assert find.ignored_for("docx", kept) == [] and kept["range"] == ""
+    assert find.ignored_for("docx", {"slides": False}) == ["slides ignored: it applies to pptx, not to this docx document"]
+    # 0 is a measure, not false
+    check = shared.definition("check")
+    assert check.ignored_for("docx", {"spacing": 0}) == []
+    with pytest.raises(SubsetError, match="kind_neutral names 'doc', which is not in kind_fields"):
+        Tool(name="t", description="A tool.", schema=shared.SPECS["check"].schema,
+             kind_neutral={"doc": ("d1",)})
+    with pytest.raises(SubsetError, match="a list of values"):
+        Tool(name="t", description="A tool.", schema=shared.SPECS["check"].schema,
+             kind_fields={"boxes": ("pptx",)}, kind_neutral={"boxes": "no"})
+
+
 def test_kind_fields_name_optional_parameters_and_known_kinds():
     with pytest.raises(SubsetError, match="kind_fields names 'doc'"):
         Tool(name="t", description="A tool.", schema=shared.SPECS["check"].schema,
