@@ -118,6 +118,11 @@ class Result:
     #: Set by the dispatcher: the tool's name and how long the call took.
     tool: str = ""
     duration: float = 0.0
+    #: The most characters this result may take when sent, where that is more than the
+    #: sender's limit (``Limits.max_result_chars``): a ``read_batch``'s, whose ops each kept
+    #: that limit and which fitted them into ``Limits.max_read_batch_chars`` itself (round
+    #: 32, R15).  ``None``: the sender's limit.  Never in :meth:`to_json`.
+    budget: int | None = None
 
     @classmethod
     def failure(cls, error: ToolError, **fields: Any) -> "Result":
@@ -158,7 +163,10 @@ class Result:
         return data
 
     def to_text(self, limit: int | None = None) -> str:
-        """The envelope as compact JSON, cut to ``limit`` characters by dropping ``data``."""
+        """The envelope as compact JSON, cut to ``limit`` characters by dropping ``data``
+        (to :attr:`budget`, where that is the larger)."""
+        if limit is not None and self.budget is not None:
+            limit = max(limit, self.budget)
         text = json.dumps(self.to_json(), ensure_ascii=False, separators=(",", ":"))
         if limit is None or len(text) <= limit:
             return text
