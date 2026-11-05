@@ -4,6 +4,29 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet. Each vers
 reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
 earlier ones were never tagged.
 
+## 0.80.0 -- unreleased
+- **`render` inside `read_batch`** (production round 35, R20): a reviewer's round -- pages
+  and slides drawn, checks, reads -- in one call. `Tool.read_batchable` (`tool(...,
+  read_batchable=True)`, `Spec`) lets `read_batch` run a tool `batch` refuses; the shared
+  `render` has it, so the libraries need no change. A render op runs as alone (image
+  budgets, its locks let go while it draws); its images follow the reply's text in op
+  order, each with `Image.caption` (`ops[2] d1 page 3`), which every adapter sends just
+  before the image (a lone call's images have none: unchanged). Images count toward
+  `max_read_batch_chars` as their tokens would (`dispatch.image_chars`, 4 characters a
+  token: a 1280 x 720 image 4,784); a render that does not fit is in `not_returned` /
+  `resend` and its images go back to the session's budget (`Session.release_images`).
+  `batch` refusing render now names `read_batch` (`valid_options`). `read_batch`'s
+  description names render among its examples, at the same length (185 characters: "read"
+  left out, "render" in, "with" -> "in"): offline tokens unchanged (194), since the
+  agents' guards had 1-10 tokens of headroom; no other definition changes.
+- **Fix: a hang between batches over two documents.** An op of a `read_batch` (or a
+  batch's read after its last change, 0.79.0) that let its locks go let its own document's
+  go only and took it back while the batch held another's: two `read_batch`es checking
+  `d1` and `d2` in opposite orders hung for good, as did a batch ending with checks of both
+  beside such a `read_batch` (on 0.79.0 with any check that lays out unlocked, as
+  docx-agent's). Now every lock the batch holds is let go and taken back in document order
+  (`docs/TOOLS.md`, "No layout under the lock").
+
 ## 0.79.0 -- unreleased
 - **No layout under the lock** (production round 33, R16c). A check inside a batch, and
   Word's field update, laid the document out holding its lock: a one-paragraph read waited

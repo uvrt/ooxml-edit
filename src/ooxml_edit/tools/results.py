@@ -73,6 +73,9 @@ class Image:
     height: int
     media_type: str = "image/png"
     label: str = ""
+    #: Text the adapters send right before the image, where a result carries the images of
+    #: several calls: a ``read_batch``'s, ``ops[2] d1 page 3`` (round 35).  Empty: none.
+    caption: str = ""
 
     def describe(self) -> dict[str, Any]:
         return {"label": self.label, "width": self.width, "height": self.height,

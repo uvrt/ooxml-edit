@@ -82,6 +82,7 @@ does not fit is listed with the call that asks for it (:meth:`Toolbox._run_reads
 from __future__ import annotations
 
 import copy
+import dataclasses
 import difflib
 import json
 import logging
@@ -103,7 +104,8 @@ from .limits import LimitError, Limits
 from .logs import CallRecord, digest, log_call, logger, shape
 from .registry import (ACCEPT, ANY_ROLE, CORE, EDIT, RESOLVE, ROLES, Tool, ToolGroup,
                        merge_tools, role_set)
-from .results import Image, Result, ToolError
+from .results import (Image, Result, ToolError, anthropic_image_tokens,
+                      openai_image_tokens)
 from .schema import CallError, validate_call
 from .session import (NO_CONTEXT, REF, REF_USE, Clock, DocumentEntry, DocumentFormat, Output,
                       Session, SessionView, StepOwner, doc_order, fold_ref, font_dirs_of,
@@ -207,7 +209,9 @@ class Call:
         self.result = Result()
         self.context = context or CallContext()
         #: The documents whose locks the dispatcher holds for this call, taken once each
-        #: (:meth:`unlocked` may let them go); empty inside a batch.
+        #: (:meth:`unlocked` may let them go): an op of a ``read_batch``'s, or a batch's
+        #: read after its last change, every lock of the batch (round 35); empty inside a
+        #: batch's run of changes.
         self.held: list[DocumentEntry] = []
         #: The version of the primary document the result describes, when the handler
         #: worked on a snapshot (:meth:`unlocked`); ``None``: the version after the call.
@@ -989,8 +993,7 @@ class Toolbox:
         if usable:
             message += ": use " + ", or ".join(
                 f"{hint} on its own ({within} cannot run it)"
-                if batch and (not self.tools[hint.tool].batchable
-                              or self.tools[hint.tool].composite) else str(hint)
+                if batch and not _runs_in(self.tools[hint.tool], within) else str(hint)
                 for hint in usable)
         elif found:
             message += (f": {found[0]} does that, and needs the "
@@ -1005,7 +1008,8 @@ class Toolbox:
         options = list(dict.fromkeys([hint.tool for hint in usable]
                                      + [name for name in near if name not in barred]))[:5]
         if not options and not found:
-            options = sorted(tool.name for tool in tools if tool.batchable or not batch)
+            options = sorted(tool.name for tool in tools
+                             if not batch or _runs_in(tool, within))
         return ToolError("invalid_arguments", message, field="tool" if batch else None,
                          valid_options=options)
 
@@ -1482,10 +1486,16 @@ class Toolbox:
              entries: dict[str, DocumentEntry], primary: DocumentEntry | None,
              reading: Sequence[str] = (), *, roles: Sequence[str] = ROLES,
              caller: Mapping[str, Any] = NO_CONTEXT, turn: "_Turn | None" = None,
-             failed_refs: Mapping[str, int] | None = None) -> Result:
+             failed_refs: Mapping[str, int] | None = None,
+             holding: Mapping[str, DocumentEntry] | None = None) -> Result:
         """One call, its documents' locks held (``entries``; ``reading``: those it only
         takes rows from).  ``failed_refs``: for a batch's read after its last change, the
-        refs its failed ops would have made (:meth:`CallContext.missing_ref`)."""
+        refs its failed ops would have made (:meth:`CallContext.missing_ref`).
+        ``holding``: every lock this thread holds, where that is more than ``entries`` --
+        an op of a ``read_batch`` or a batch's read after its last change: the whole
+        batch's.  :meth:`Call.unlocked` lets all of them go and takes them back in
+        document order (round 35: letting the op's alone go, and taking it back while
+        still holding another, waited on a call that held the one and wanted the other)."""
         # The turn's changes so far, and the versions now: what this call changes is the
         # turn's, for its reads that let their locks go meanwhile (never warned about).
         since = turn.mark() if turn is not None else 0
@@ -1529,7 +1539,8 @@ class Toolbox:
             call.result.warnings += ignored + early + read
             self._with_datasets(tool, arguments, call)
             arguments = self._with_facts(tool, arguments, call)
-            call.held = list(entries.values())   # dispatch() holds each once
+            # dispatch() holds each once; a batch's op lets every lock of the batch go.
+            call.held = list((entries if holding is None else holding).values())
             with ExitStack() as watching:
                 # Whatever the tool, what its document's content did (undo included).
                 change = (watching.enter_context(primary.watch()) if primary is not None
@@ -1821,7 +1832,12 @@ class Toolbox:
         if name not in self.tools:
             raise self._no_tool(name, roles, batch=True, within=within)
         tool = self.tools[name]
-        if not tool.batchable or tool.composite:
+        if not _runs_in(tool, within):
+            if _runs_in(tool, "read_batch"):
+                # render (round 35, R20): with the reads, never inside a batch's changes.
+                raise ToolError("invalid_arguments", f"{name} cannot run inside a {within}; "
+                                "call it in read_batch (with other reads), or on its own",
+                                field="tool", valid_options=["read_batch", name])
             raise ToolError("invalid_arguments", f"{name} cannot run inside a {within}; call "
                             "it on its own", field="tool")
         if roles is not None:
@@ -2146,11 +2162,16 @@ class Toolbox:
 
         Each op is answered within ``max_result_chars``, as alone; the answers together
         within ``max_read_batch_chars`` (:attr:`Result.budget`, so the reply is not cut to
-        one call's limit).  One that does not fit what is left, and every op the batch's
-        deadline stopped, is listed in ``not_returned`` and in ``resend``, the call that
-        asks for them; an op whose own answer has a next page gets ``next``, the call for
-        it.  A failing op -- a changing call among them: refused, pointing at ``batch`` --
-        is answered with its error; the others still run."""
+        one call's limit).  A ``render`` among them (round 35, R20) runs as alone too --
+        its locks let go while it draws -- and its images come in the reply, after the
+        text, in op order, each captioned with its op (:attr:`Image.caption`); each counts
+        toward the budget as its tokens would (:func:`image_chars`).  One that does not fit
+        what is left, and every op the batch's deadline stopped, is listed in
+        ``not_returned`` and in ``resend``, the call that asks for them; images not sent
+        are given back to the session's budget.  An op whose own answer has a next page
+        gets ``next``, the call for it.  A failing op -- a changing call among them:
+        refused, pointing at ``batch`` -- is answered with its error; the others still
+        run."""
         ops = list(arguments.get("ops") or [])
         limits = session.limits
         if len(ops) > limits.max_batch_ops:
@@ -2161,6 +2182,7 @@ class Toolbox:
         started = time.perf_counter()
         answers: list[tuple[dict[str, Any], int, Result]] = []
         left: list[tuple[int, str]] = []      # (op, why)
+        pictured: dict[int, int] = {}         # op -> what its images count, in characters
         used = _READ_MARGIN
         for index, op in enumerate(ops):
             if time.perf_counter() - started > limits.batch_timeout:
@@ -2168,19 +2190,23 @@ class Toolbox:
                 continue
             result, paged = self._read_op(session, op, entries, roles, caller)
             answer = _read_answer(index, result, op, own, paged)
-            size = _size(answer)
+            if result.images:
+                pictured[index] = image_chars(result.images)
+            size = _size(answer) + pictured.get(index, 0)
             if used + size > cap:
                 left.append((index, "budget"))
+                session.release_images(len(result.images))     # never sent
                 continue
             used += size
             answers.append((answer, index, result))
-        combined = _read_result(ops, answers, left, cap, limits.batch_timeout)
-        while answers and len(combined.to_text()) > cap:
+        combined = _read_result(ops, answers, left, cap, limits.batch_timeout, pictured)
+        while answers and (len(combined.to_text()) + image_chars(combined.images)) > cap:
             # What was left out, listed with its call, did not fit beside the answers: the
             # last answer goes to it too.
-            _, index, _ = answers.pop()
+            _, index, result = answers.pop()
+            session.release_images(len(result.images))
             left = sorted([*left, (index, "budget")])
-            combined = _read_result(ops, answers, left, cap, limits.batch_timeout)
+            combined = _read_result(ops, answers, left, cap, limits.batch_timeout, pictured)
         return combined
 
     def _read_op(self, session: Session, op: Any, entries: Mapping[str, DocumentEntry],
@@ -2232,7 +2258,8 @@ class Toolbox:
         primary = held[doc_ids[0]] if doc_ids else None
         result = self._run(session, tool, clean, dict(held), primary,
                            [doc for doc in found if doc not in doc_ids],
-                           roles=roles, caller=caller, failed_refs=failed_refs)
+                           roles=roles, caller=caller, failed_refs=failed_refs,
+                           holding=entries)
         return result, primary
 
     def _run_deferred(self, context: CallContext, combined: Result) -> None:
@@ -2543,8 +2570,16 @@ def _context(roles: Sequence[str], caller: Mapping[str, Any]) -> CallContext:
 
 def _reads_some(tool: Tool) -> bool:
     """Whether some call of ``tool`` only reads, and may run in a ``read_batch``."""
-    return tool.batchable and not tool.composite and (
-        not tool.mutates or tool.reads is not None)
+    return _runs_in(tool, "read_batch") and (not tool.mutates or tool.reads is not None)
+
+
+def _runs_in(tool: Tool, within: str) -> bool:
+    """Whether ``tool`` may run as an op of ``within`` (``batch`` or ``read_batch``): a
+    batchable tool, or in a ``read_batch`` one that is :attr:`~Tool.read_batchable` too
+    (``render``, round 35); never a composite one."""
+    if tool.composite:
+        return False
+    return tool.batchable or (within == "read_batch" and tool.read_batchable)
 
 
 def _needs(tool: Tool, role: str) -> bool:
@@ -2665,12 +2700,18 @@ def _read_answer(index: int, result: Result, op: Any, limit: int,
 
 
 def _read_result(ops: Sequence[Any], answers: Sequence[tuple[dict[str, Any], int, Result]],
-                 left: Sequence[tuple[int, str]], cap: int, timeout: float) -> Result:
-    """A ``read_batch``'s result: the answers in op order, then what was left out."""
+                 left: Sequence[tuple[int, str]], cap: int, timeout: float,
+                 pictured: Mapping[int, int] | None = None) -> Result:
+    """A ``read_batch``'s result: the answers in op order, then what was left out; the
+    images of the answers, each captioned with its op (``ops[2] d1 page 3``).
+    ``pictured``: what each op's images count toward ``cap``, by op."""
+    pictured = pictured or {}
     failed = sum(not result.ok for _, _, result in answers)
     combined = Result(budget=cap)
-    for _, _, result in answers:
-        combined.images += result.images
+    for _, index, result in answers:
+        combined.images += [dataclasses.replace(image, caption=" ".join(
+            part for part in (f"ops[{index}]", result.doc or "", image.label) if part))
+            for image in result.images]
     data: dict[str, Any] = {"ops": [answer for answer, _, _ in answers]}
     said = [f"Read {len(answers) - failed} of {len(ops)} op(s)"]
     if failed:
@@ -2684,8 +2725,10 @@ def _read_result(ops: Sequence[Any], answers: Sequence[tuple[dict[str, Any], int
         budget = [index for index, why in left if why == "budget"]
         late = [index for index, why in left if why == "deadline"]
         data["not_returned"] = [{"op": index, "why": (
-            f"over the reply's {cap:,}-character budget" if why == "budget"
-            else f"not run: past the {timeout:g} s deadline")} for index, why in left]
+            f"over the reply's {cap:,}-character budget" + (
+                f" (its images count {pictured[index]:,})" if index in pictured else "")
+            if why == "budget" else f"not run: past the {timeout:g} s deadline")}
+            for index, why in left]
         data["resend"] = {"tool": "read_batch",
                           "arguments": {"ops": [ops[index] for index, _ in left]}}
         parts = []
@@ -2694,9 +2737,27 @@ def _read_result(ops: Sequence[Any], answers: Sequence[tuple[dict[str, Any], int
         if late:
             parts.append(f"{len(late)} not run before the {timeout:g} s deadline")
         said.append(f"Not returned: {' and '.join(parts)}; send data.resend for them")
+    if combined.images:
+        said.append(f"{len(combined.images)} image(s) follow, in op order, each after its "
+                    "op's caption")
     combined.summary = ". ".join(said)
     combined.data = data
     return combined
+
+
+#: Characters an image counts for in a ``read_batch``'s reply, per token it costs: the rate
+#: ``Limits.max_read_batch_chars`` is set at (96,000 characters, about 24,000 tokens).
+CHARS_PER_IMAGE_TOKEN = 4
+
+
+def image_chars(images: Iterable[Image]) -> int:
+    """What ``images`` count toward a ``read_batch``'s character budget (round 35, R20):
+    each its tokens -- the larger of Claude's and OpenAI's count for its size
+    (:meth:`Image.describe`), the provider unknown here -- times
+    :data:`CHARS_PER_IMAGE_TOKEN`.  A 1280 x 720 image is 4,784; a 1000 x 1414 one 7,344."""
+    return sum(CHARS_PER_IMAGE_TOKEN * max(anthropic_image_tokens(image.width, image.height),
+                                           openai_image_tokens(image.width, image.height))
+               for image in images)
 
 
 def _brief(error: ToolError) -> dict[str, Any]:

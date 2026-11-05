@@ -134,8 +134,9 @@ class Spec:
     def __init__(self, name: str, description: str, params: Mapping[str, Param], *,
                  group: str = CORE, mutates: bool = False, exactly_one: tuple = (),
                  documents: Any = ("doc",), route: str | None = None, strict: bool = True,
-                 batchable: bool = True, composite: bool = False,
-                 refs: tuple[str, ...] = (), datasets: tuple[str, ...] = (),
+                 batchable: bool = True, read_batchable: bool = False,
+                 composite: bool = False, refs: tuple[str, ...] = (),
+                 datasets: tuple[str, ...] = (),
                  sources: tuple[str, ...] = (), facts: tuple[str, ...] = (),
                  reads: Callable[[Mapping[str, Any]], bool] | None = None,
                  wrap: Callable[[Callable[..., Any]], Callable[..., Any]] | None = None,
@@ -155,6 +156,7 @@ class Spec:
         self.route = route
         self.strict = strict
         self.batchable = batchable
+        self.read_batchable = read_batchable
         self.composite = composite
         self.refs = refs
         self.datasets = datasets
@@ -197,7 +199,8 @@ class Spec:
                     schema=build_schema(self.params), handlers=dict(handlers),
                     group=self.group, mutates=self.mutates, documents=self.documents,
                     exactly_one=self.exactly_one, route=self.route, strict=self.strict,
-                    batchable=self.batchable, composite=self.composite, refs=self.refs,
+                    batchable=self.batchable, read_batchable=self.read_batchable,
+                    composite=self.composite, refs=self.refs,
                     datasets=self.datasets, sources=self.sources, facts=self.facts,
                     reads=self.reads,
                     aliases=self.aliases, role=self.role, action_roles=self.action_roles,
@@ -365,7 +368,8 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
                         "width": integer("Each tile's px.", minimum=160, maximum=1280,
                                          optional=True)},
                        "Up to 30 in one labelled image; {} for defaults.", optional=True)},
-         batchable=False, refs=("slides[]",),
+         # Round 35, R20: in read_batch too, its images in the reply within its budget.
+         batchable=False, read_batchable=True, refs=("slides[]",),
          kind_fields={"slides": _SLIDES, "pages": _PAGES}),
     # S9
     Spec("check",
@@ -545,8 +549,8 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
          composite=True, role=ANY_ROLE),
     # round 32, R15: many reads in one turn, for a reader too
     Spec("read_batch",
-         "Read many things in one call: reading calls (describe, read, find, check, "
-         "query...), each answered as alone, with its own size budget. Use it for any two or "
+         "Read many things in one call: reading calls (describe, find, check, query, "
+         "render...), each answered as alone, in its own size budget. Use it for any two or "
          "more reads. Changes nothing.",
          {"ops": array(obj({"tool": string(),
                             "arguments": free_object("That tool's arguments.")}),

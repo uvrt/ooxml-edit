@@ -172,9 +172,12 @@ def to_anthropic(tools: Iterable[Tool], *, defer: bool = False, cache: bool = Tr
 
 def anthropic_tool_result(result: Result, tool_use_id: str, *,
                           limit: int | None = None) -> dict[str, Any]:
-    """One ``tool_result`` block: the envelope as text, then any images."""
+    """One ``tool_result`` block: the envelope as text, then any images (each after its
+    caption, where it has one: :attr:`~.results.Image.caption`)."""
     content: list[dict[str, Any]] = [{"type": "text", "text": result.to_text(limit)}]
     for image in result.images:
+        if image.caption:
+            content.append({"type": "text", "text": image.caption})
         content.append({"type": "image", "source": {
             "type": "base64", "media_type": image.media_type,
             "data": base64.b64encode(image.data).decode("ascii")}})
@@ -387,6 +390,8 @@ def openai_function_call_output(result: Result, call_id: str, *,
         return {"type": "function_call_output", "call_id": call_id, "output": text}
     output: list[dict[str, Any]] = [{"type": "input_text", "text": text}]
     for image in result.images:
+        if image.caption:
+            output.append({"type": "input_text", "text": image.caption})
         output.append({"type": "input_image", "image_url": _data_url(image),
                        "detail": detail})
     return {"type": "function_call_output", "call_id": call_id, "output": output}
@@ -414,6 +419,8 @@ def openai_responses_items(results: Sequence[tuple[str, Result]], *,
             text += f"\n[{len(result.images)} image(s) from this call follow in the next user message]"
             parts.append({"type": "input_text", "text": f"Images from tool call {call_id}:"})
             for image in result.images:
+                if image.caption:
+                    parts.append({"type": "input_text", "text": image.caption})
                 parts.append({"type": "input_image", "image_url": _data_url(image),
                               "detail": detail})
         items.append({"type": "function_call_output", "call_id": call_id, "output": text})
@@ -508,6 +515,8 @@ def openai_chat_messages(results: Sequence[tuple[str, Result]], *, limit: int | 
             text += f"\n[{len(result.images)} image(s) from this call follow in the next user message]"
             parts.append({"type": "text", "text": f"Images from tool call {call_id}:"})
             for image in result.images:
+                if image.caption:
+                    parts.append({"type": "text", "text": image.caption})
                 parts.append({"type": "image_url",
                               "image_url": {"url": _data_url(image), "detail": detail}})
         messages.append({"role": "tool", "tool_call_id": call_id, "content": text})

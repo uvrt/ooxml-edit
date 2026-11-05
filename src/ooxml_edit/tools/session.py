@@ -1092,6 +1092,14 @@ class Session:
             self.images_used += count
             self.images_this_round += count
 
+    def release_images(self, count: int) -> None:
+        """Give back ``count`` images :meth:`reserve_images` counted that the model is never
+        sent (a ``read_batch`` op's that did not fit its reply, round 35): the budgets count
+        what is shown."""
+        with self._lock:
+            self.images_used = max(0, self.images_used - count)
+            self.images_this_round = max(0, self.images_this_round - count)
+
     def now(self) -> _dt.datetime:
         """The session clock's time: every date a tool writes comes from here."""
         return self.clock()
