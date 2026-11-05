@@ -203,6 +203,10 @@ class Tool:
     #: Whether the tool may run inside ``batch``: not batch itself, nor saving, rendering or
     #: the session's housekeeping.
     batchable: bool = True
+    #: Whether a tool ``batch`` refuses may run inside ``read_batch`` (round 35, R20):
+    #: ``render``, whose images come back in the reply within its budget, each op's work
+    #: as the same call alone (its locks let go while it draws).
+    read_batchable: bool = False
     #: A tool whose arguments are other calls (``batch``): the dispatcher runs it itself.
     composite: bool = False
     #: Argument paths (``target``, ``items[].target``, ``targets[]``) whose string values may
@@ -480,10 +484,10 @@ class Tool:
     def same_definition(self, other: "Tool") -> bool:
         return (self.name, self.description, self.schema, self.group, self.mutates,
                 self.route, self.strict, self.batchable, self.composite, tuple(self.refs),
-            self.reads) == (
+            self.reads, self.read_batchable) == (
             other.name, other.description, other.schema, other.group, other.mutates,
             other.route, other.strict, other.batchable, other.composite, tuple(other.refs),
-            other.reads) and tuple(self.datasets) == tuple(other.datasets) \
+            other.reads, other.read_batchable) and tuple(self.datasets) == tuple(other.datasets) \
             and (self.role, dict(self.action_roles), self.call_role, self.review_core) == (
                 other.role, dict(other.action_roles), other.call_role, other.review_core) \
             and {k: tuple(v) for k, v in self.action_fields.items()} \
@@ -680,7 +684,7 @@ def tool(name: str, description: str, params: Mapping[str, Param] | None = None,
          documents: Sequence[str] | Callable[[Mapping[str, Any]], list[str]] = ("doc",),
          exactly_one: Sequence[Sequence[str]] = (),
          priority: int | None = None, strict: bool = True, batchable: bool = True,
-         refs: Sequence[str] = (), datasets: Sequence[str] = (), sources: Sequence[str] = (),
+         read_batchable: bool = False, refs: Sequence[str] = (), datasets: Sequence[str] = (), sources: Sequence[str] = (),
          facts: Sequence[str] = (), reads: Callable[[Mapping[str, Any]], bool] | None = None,
          aliases: Mapping[str, Any] | None = None, role: str | None = None,
          action_roles: Mapping[str, str] | None = None,
@@ -699,14 +703,15 @@ def tool(name: str, description: str, params: Mapping[str, Param] | None = None,
     core (:attr:`Tool.review_core`); ``action_fields`` the parameters only some actions
     take, left out for a role set offered none of them (:attr:`Tool.action_fields`);
     ``ahead`` the work a changing call does before its change, which may let the locks go
-    (:attr:`Tool.aheads`)."""
+    (:attr:`Tool.aheads`); ``read_batchable`` lets ``read_batch`` run a tool ``batch``
+    refuses (:attr:`Tool.read_batchable`)."""
 
     def make(handler: Handler) -> Tool:
         return Tool(name=name, description=description, schema=build_schema(params or {}),
                     handlers={kind: handler}, group=group, mutates=mutates,
                     documents=documents, exactly_one=exactly_one, priority=priority,
-                    strict=strict, batchable=batchable, refs=tuple(refs),
-                    datasets=tuple(datasets), sources=tuple(sources), facts=tuple(facts),
+                    strict=strict, batchable=batchable, read_batchable=read_batchable,
+                    refs=tuple(refs), datasets=tuple(datasets), sources=tuple(sources), facts=tuple(facts),
                     reads=reads, aliases=dict(aliases or {}), role=role,
                     action_roles=dict(action_roles or {}), call_role=call_role,
                     review_core=review_core,

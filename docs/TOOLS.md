@@ -110,6 +110,32 @@ that gives a reader the tools that change nothing gives it this one -- and a bui
 The shared prompt fragment names it where it is sent (`system_prompt(tools=...)` decides
 over the tools sent, as for the role line). It is not in `SESSION_TOOLS`: a library lists
 it in its tools when it offers it (the three agents do from their 0.1.37, 0.1.16 and 0.1.15).
+
+*Renders in a read_batch* (0.80.0, round 35, R20). A reviewer's round -- pages or slides
+drawn, a check, a few reads -- was four turns: `read_batch` refused `render` ("call it on
+its own"), because `render` is `batchable=False` (it has no place among a batch's changes).
+`Tool.read_batchable` (`tool(..., read_batchable=True)`, `Spec(...)`) lets `read_batch` run
+a tool `batch` refuses; the shared `render` has it, so every library's render runs there
+with no change of its own. `batch` still refuses it, now with the way out (`valid_options`
+`read_batch` and `render`). A render op runs as the same call alone: its images counted
+against the session's and round's image budgets and `max_images_per_call` (per op), its
+locks let go while it draws. Its answer lists its images as alone (`images`: label, size,
+tokens); the images themselves follow the reply's text, in op order, each with a
+`caption` (`Image.caption`: `ops[2] d1 page 3`) that every adapter sends just before it --
+a text block in an Anthropic `tool_result`, an `input_text` in a Responses
+`function_call_output` (or in the user message with `images="message"`), a `text` part in
+the Chat Completions user message. A lone call's images have no caption: its result is
+sent as before. The summary says how many images follow. **Budget:** an image counts
+toward `max_read_batch_chars` as its tokens would (`dispatch.image_chars`: the larger of
+Claude's and OpenAI's count for its size, times 4, the rate the 96,000 characters are set
+at): a 1280 x 720 slide 4,784, a 1000 x 1414 page 7,344, so a round of four pages, a check
+and reads fits, and a render that does not fit what is left is in `not_returned` (its
+`why` says what its images count) and in `resend`, its images given back to the session's
+budget (`Session.release_images`). Its pixels are kept by content as always, so the
+resend draws nothing again. Several images in one tool result are what each provider
+documents: Claude's `tool_result` content holds text and image blocks (above 20 images in
+one request each must be at most 3,000 px a side, which `max_image_edge` 2,576 keeps);
+OpenAI's `function_call_output` takes an array of `input_text` and `input_image`.
 Why a tool of its own and not `batch` reading when all its ops read: what a tool is -- its
 `mutates`, its role, its description -- is fixed, so an application's reader list and a
 model reading the description see a tool that changes nothing; and its reply keeps a budget
@@ -928,6 +954,15 @@ document's lock -- and every other call on it waited, up to minutes on a long re
   its outcome. The batch's `version` is the one its changes made. A batch of reads only
   runs every op this way (its summary starts `Read:`); `read_batch` remains the tool for
   reads, sent to readers and with a budget per op.
+* *Every lock of a batch let go, not the op's alone* (0.80.0, round 35). An op of a
+  `read_batch`, or a batch's read after its last change, held the locks of every document
+  the batch names, and `call.unlocked()` let go of its own document's only: taking that one
+  back while still holding another's waited on any call that held the one and wanted the
+  other -- two `read_batch`es checking `d1` and `d2` in opposite orders, or a batch ending
+  with checks of both beside a `read_batch` of both, hung for good. Now such an op lets
+  every lock the batch holds go (`_run(..., holding=...)`, `Call.held`) and takes them back
+  in document order, as a lone call does; the other documents may move on meanwhile, and
+  each later op answers of the version it reads (its `version`, or a `moved_on` warning).
 * *A changing call's work ahead of its change.* `tool(..., ahead=fn)` (`Tool.aheads`, per
   kind as `handlers`; `Tool.ahead_for(kind)`): `fn(call, **arguments)` runs before the
   call's undo step, its arguments as given (refs not resolved), with `call.may_unlock`
