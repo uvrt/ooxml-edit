@@ -246,7 +246,7 @@ def test_definitions_meet_each_providers_rules_with_batch_sent_non_strict(toolbo
 
 
 DECK_CHECK = ("slides", "include", "boxes", "spacing", "contrast")
-TEXT_CHECK = ("pages", "include", "min_size", "styles")
+TEXT_CHECK = ("pages", "include", "min_size", "styles", "range", "copies")
 
 
 def _checked(kind, takes, given):
@@ -261,10 +261,11 @@ def _checked(kind, takes, given):
 
 
 def _text_check(call, doc, slides=None, pages=None, include=None, boxes=None, spacing=None,
-                contrast=None, min_size=None, styles=None):
+                contrast=None, min_size=None, styles=None, range=None, copies=None):
     return _checked("docx", TEXT_CHECK, dict(slides=slides, pages=pages, include=include,
                                              boxes=boxes, spacing=spacing, contrast=contrast,
-                                             min_size=min_size, styles=styles))
+                                             min_size=min_size, styles=styles, range=range,
+                                             copies=copies))
 
 
 def _deck_check(call, doc, slides=None, pages=None, include=None, boxes=None, spacing=None,
@@ -285,7 +286,8 @@ def test_each_kinds_toolbox_is_sent_check_with_its_own_parameters_only():
     deck = shared.handler("check", kind="pptx")(_deck_check)
     with Toolbox([text, *TEXT_TOOLS], formats=[TEXT]) as box:
         assert _check_params(box) == {"doc", *TEXT_CHECK}
-        assert set(box.tools["check"].optional_parameters()) == set(TEXT_CHECK)
+        assert set(box.tools["check"].optional_parameters()) == {
+            *TEXT_CHECK, "copies[].reference.doc"}
         session = box.session(clock=CLOCK)
         session.open(synthetic.outer_package(), "text.docx")
         # an older prompt's deck parameter still reaches the handler and its refusal
@@ -332,7 +334,7 @@ def test_find_replace_render_and_checks_include_are_sent_per_kind():
     assert _sent("find_text", "docx")["stories"]["enum"] == ["body", "all"]
     assert _sent("replace_text", "pptx")["stories"]["enum"] == ["body", "all", "layouts", "masters"]
     assert set(_sent("render", "pptx")) == {"doc", "slides", "width", "sheet"}
-    assert set(_sent("render", "docx")) == {"doc", "pages", "width", "sheet"}
+    assert set(_sent("render", "docx")) == {"doc", "pages", "width", "sheet", "range"}
     deck, text = _sent("check", "pptx")["include"], _sent("check", "docx")["include"]
     assert deck["items"]["enum"] == ["fit", "collisions", "facts", "design", "validate", "layout", "app"]
     assert text["items"]["enum"] == ["validate", "reflow", "fields", "layout", "app"]

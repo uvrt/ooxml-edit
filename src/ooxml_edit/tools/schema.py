@@ -69,8 +69,11 @@ SUBSET_KEYWORDS = frozenset({
 #: kept ``None``: a chart's blank point among its values.  The subset has no unions, so the
 #: canonical schema says nothing of it and the description says ``null``; the OpenAI strict
 #: form makes such items nullable (:func:`~.adapters.openai_strict_schema`'s ``nulls``).
+#: ``orSingle`` (``true``, on an array) lets the dispatcher take one item in the array's
+#: place, read as a one-item array: ``range: "A..B"`` for ``range: ["A..B"]`` (round 35).
+#: Never sent, so it costs no tokens.
 BOUND_KEYWORDS = frozenset({"minimum", "maximum", "minLength", "maxLength", "maxItems",
-                            "orInteger", "valueAliases", "orNull"})
+                            "orInteger", "valueAliases", "orNull", "orSingle"})
 
 #: Words that make a property name a file-system path.  The tool layer has no paths: inputs
 #: are blob handles, outputs go to the application.
@@ -179,6 +182,8 @@ def _check_node(node: Any, where: str, depth: int, problems: list[str], enum_tot
         problems.append(f"{where}: orInteger must be a whole number, on a string")
     if "orNull" in node and node["orNull"] is not True:
         problems.append(f"{where}: orNull must be true")
+    if "orSingle" in node and (node["orSingle"] is not True or kind != "array"):
+        problems.append(f"{where}: orSingle must be true, on an array")
     if "valueAliases" in node:
         aliases = node["valueAliases"]
         if kind != "string" or not isinstance(aliases, Mapping) or not aliases or not all(
@@ -505,6 +510,12 @@ def _validate(node: Mapping[str, Any], value: Any, where: str, notes: list[str],
             result[name] = _validate(child, value[name], path, notes, (node, where))
         return result
     if kind == "array":
+        if node.get("orSingle") and not isinstance(value, list):
+            try:            # one item in the array's place (round 35): a one-item array
+                _validate(node.get("items") or {}, value, f"{where}[0]", [], outer)
+                value = [value]
+            except CallError:
+                pass        # not an item either: refused as no array below
         if not isinstance(value, list):
             raise CallError(f"{label} must be an array", where)
         if "minItems" in node and len(value) < node["minItems"]:

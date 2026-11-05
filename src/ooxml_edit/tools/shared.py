@@ -212,6 +212,31 @@ class Spec:
         return build_schema(self.params)
 
 
+#: ``check``'s and ``render``'s ``range`` (round 35, R18): the blocks to check or draw the
+#: pages of, as a document's read tools take them; one string is read as a list of one.
+_BLOCK_RANGES = array(string(), "Documents: blocks, spans p:A..t:B or sections s:2; their "
+                      "facts, pages.", or_single=True, optional=True)
+#: ``check``'s ``copies`` (round 35, R19): each copy's blocks and what it was made from, in
+#: this document or another open one (:func:`_checked_documents` locks it too).
+_COPIES = array(obj({"blocks": string("The copy's block or span."),
+                     "reference": obj({"doc": string("Its document. Default doc.",
+                                                     optional=True),
+                                       "block": string("Its block or span.")},
+                                      "What it was made from.")}),
+                "Documents: copies compared with their reference.", optional=True)
+
+
+def _checked_documents(arguments: Mapping[str, Any]) -> list[str]:
+    """``check``'s documents: ``doc``, then each other one a copy's reference is in."""
+    found = [arguments["doc"]] if isinstance(arguments.get("doc"), str) else []
+    for item in arguments.get("copies") or []:
+        reference = item.get("reference") if isinstance(item, Mapping) else None
+        other = reference.get("doc") if isinstance(reference, Mapping) else None
+        if isinstance(other, str) and other and other not in found:
+            found.append(other)
+    return found
+
+
 def _no_documents(arguments: Mapping[str, Any]) -> list[str]:
     return []
 
@@ -367,10 +392,13 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
           "sheet": obj({"columns": integer(minimum=1, maximum=8, optional=True),
                         "width": integer("Each tile's px.", minimum=160, maximum=1280,
                                          optional=True)},
-                       "Up to 30 in one labelled image; {} for defaults.", optional=True)},
+                       "Up to 30 in one labelled image; {} for defaults.", optional=True),
+          # Round 35, R18: the pages some blocks fall on.
+          "range": _BLOCK_RANGES},
          # Round 35, R20: in read_batch too, its images in the reply within its budget.
          batchable=False, read_batchable=True, refs=("slides[]",),
-         kind_fields={"slides": _SLIDES, "pages": _PAGES}),
+         wrap=lambda fn: _with_taken(fn, "render", ("range",)),
+         kind_fields={"slides": _SLIDES, "pages": _PAGES, "range": ("docx",)}),
     # S9
     Spec("check",
          "Facts as the document will show: text that does not fit, collisions, validation "
@@ -400,15 +428,19 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
           "min_size": number("Documents: also text below this, pt.", minimum=1,
                              maximum=400, optional=True),
           "styles": array(string(), "Documents: the allowed paragraph and table styles; "
-                          "others listed.", optional=True)},
-         refs=("slides[]",), wrap=lambda fn: _with_layout_options(fn),
+                          "others listed.", optional=True),
+          # Round 35, R18 and R19: some blocks' facts; copies against their reference.
+          "range": _BLOCK_RANGES,
+          "copies": _COPIES},
+         refs=("slides[]",), documents=_checked_documents,
+         wrap=lambda fn: _with_layout_options(_with_taken(fn, "check", ("range", "copies"))),
          # Round 23, V3: each library's toolbox is sent only its kind's parameters; a call
          # that passes another's still gets that handler's refusal (kept, as before).
          # contrast stays a deck's: Word text against shading or a page colour is not
          # measured (docx-agent refuses it); add "docx" here when it is.
          kind_fields={"slides": _SLIDES, "boxes": ("pptx",), "spacing": ("pptx",),
                       "contrast": ("pptx",), "pages": _PAGES, "min_size": ("docx",),
-                      "styles": ("docx",)},
+                      "styles": ("docx",), "range": ("docx",), "copies": ("docx",)},
          # The facts each kind reports: a document's handler refuses a deck's; a deck's
          # notes reflow and fields as "documents only".  validate, layout and app are both's.
          kind_values={"include": {"fit": ("pptx",), "collisions": ("pptx",),
@@ -595,6 +627,27 @@ def _with_layout_options(handler: Callable[..., Any]) -> Callable[..., Any]:
             if name not in takes and arguments.pop(name, None) is not None:
                 raise ToolError("invalid_arguments", f"{name} measures a document's layout "
                                 "(docx, include layout); leave it out here", field=name)
+        return handler(call, **arguments)
+
+    return run
+
+
+def _with_taken(handler: Callable[..., Any], name: str,
+                fields: tuple[str, ...]) -> Callable[..., Any]:
+    """A kind's handler, ``fields`` handed on only when it takes them (round 35: ``range``
+    and ``copies``, docx-agent's).  Another kind's refuses one given -- ``invalid_arguments``
+    naming it, the way out said -- and never sees it left out, so a library that predates
+    them keeps working unchanged."""
+    takes = set(inspect.signature(handler).parameters)
+
+    @functools.wraps(handler)
+    def run(call: Any, **arguments: Any) -> Any:
+        for field in fields:
+            if field not in takes and arguments.pop(field, None) is not None:
+                raise ToolError("invalid_arguments", f"{name} {field} names a document's "
+                                "blocks (docx); leave it out here"
+                                + (": pages or slides say what to draw"
+                                   if name == "render" else ""), field=field)
         return handler(call, **arguments)
 
     return run
