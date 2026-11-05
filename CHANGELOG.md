@@ -4,6 +4,27 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet. Each vers
 reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
 earlier ones were never tagged.
 
+## 0.79.0 -- unreleased
+- **No layout under the lock** (production round 33, R16c). A check inside a batch, and
+  Word's field update, laid the document out holding its lock: a one-paragraph read waited
+  minutes behind them on a long report. Two mechanisms, `docs/TOOLS.md` ("No layout under
+  the lock"):
+  - A batch's reading ops after its last change run once its undo step is closed, its
+    checks done and its refs and datasets kept, each as the same call alone (as
+    `read_batch` runs them): `Call.may_unlock` is true there, so a `check` at the end lets
+    the locks go while it lays out, and answers of the batch's version. Reads before the
+    last change run inside the batch as before. **Semantic change:** a failing read after
+    the last change cannot undo the batch, atomic or not; it is reported as its op's error
+    (`data.failed`, `data.applied`, the summary's "resend only these on their own"). A read
+    that starts after another call moved the document on says its `version` in its outcome;
+    the batch's `version` is its own. A batch of reads only says `Read:`.
+  - `tool(..., ahead=fn)` / `Tool.aheads` / `Tool.ahead_for(kind)`: a changing call's work
+    ahead of its change, run before its undo step with `Call.may_unlock` true (outside a
+    batch; `Call.ahead`), so slow reading -- a layout -- runs with the locks let go. After
+    it the call goes on as if it had just taken its locks. Not part of the definition: no
+    tool definition changes.
+- Every tool definition is unchanged (offline token counts: no change).
+
 ## 0.78.0 -- unreleased
 - **`read_batch`: many reads in one call, each with its own budget** (production round 32,
   R15). Builders read one record at a time, a model turn each, and put no reads in `batch`:

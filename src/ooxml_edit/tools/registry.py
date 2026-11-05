@@ -289,6 +289,15 @@ class Tool:
     #: :attr:`kind_fields` apply to it too.  ``None``: every kind.
     #: Not part of the definition (:meth:`same_definition`).
     kinds_served: tuple[str, ...] | None = None
+    #: Round 33 (R16c): work a changing call does *ahead* of its change, per document kind
+    #: as :attr:`handlers`: ``ahead(call, **arguments)``, run before the call's undo step
+    #: with :attr:`~.dispatch.Call.may_unlock` true outside a batch, so that slow reading
+    #: work -- laying the document out -- runs with the locks let go
+    #: (:meth:`~.dispatch.Call.unlocked`) and the handler, run after, finds it done.  It
+    #: changes nothing (it may fill caches); another call may change the document while it
+    #: runs, so the handler reads the document as it finds it.  Not part of the definition
+    #: (:meth:`same_definition`).
+    aheads: dict[str | None, Handler] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         problems = definition_problems(self)
@@ -455,6 +464,10 @@ class Tool:
     def handler_for(self, kind: str | None) -> Handler | None:
         return self.handlers.get(kind) or self.handlers.get(None)
 
+    def ahead_for(self, kind: str | None) -> Handler | None:
+        """The work a changing call of ``kind`` does ahead of its change (:attr:`aheads`)."""
+        return self.aheads.get(kind) or self.aheads.get(None)
+
     def for_kind(self, kind: str) -> Callable[[Handler], Handler]:
         """Add the handler for another document kind to the same definition."""
 
@@ -498,6 +511,7 @@ class Tool:
             raise ValueError(f"{self.name!r} has two handlers for {sorted(map(str, clash))}")
         combined = copy.copy(self)
         combined.handlers = {**self.handlers, **other.handlers}
+        combined.aheads = {**self.aheads, **other.aheads}
         return combined
 
 
@@ -672,7 +686,8 @@ def tool(name: str, description: str, params: Mapping[str, Param] | None = None,
          action_roles: Mapping[str, str] | None = None,
          call_role: Callable[[Mapping[str, Any]], str | None] | None = None,
          review_core: bool = False,
-         action_fields: Mapping[str, Sequence[str]] | None = None) -> Callable[[Handler], Tool]:
+         action_fields: Mapping[str, Sequence[str]] | None = None,
+         ahead: Handler | None = None) -> Callable[[Handler], Tool]:
     """Make a :class:`Tool` of a handler.  ``kind`` restricts it to one document kind;
     ``reads`` marks the calls of a changing tool that only read (:attr:`Tool.reads`);
     ``aliases`` the argument names read as its own (:attr:`Tool.aliases`);
@@ -682,7 +697,9 @@ def tool(name: str, description: str, params: Mapping[str, Param] | None = None,
     ``call_role`` the roles its calls need (:attr:`Tool.role`; by default ``edit`` for a
     changing tool, ``review`` for a reading one); ``review_core`` puts it in a reviewer's
     core (:attr:`Tool.review_core`); ``action_fields`` the parameters only some actions
-    take, left out for a role set offered none of them (:attr:`Tool.action_fields`)."""
+    take, left out for a role set offered none of them (:attr:`Tool.action_fields`);
+    ``ahead`` the work a changing call does before its change, which may let the locks go
+    (:attr:`Tool.aheads`)."""
 
     def make(handler: Handler) -> Tool:
         return Tool(name=name, description=description, schema=build_schema(params or {}),
@@ -693,7 +710,8 @@ def tool(name: str, description: str, params: Mapping[str, Param] | None = None,
                     reads=reads, aliases=dict(aliases or {}), role=role,
                     action_roles=dict(action_roles or {}), call_role=call_role,
                     review_core=review_core,
-                    action_fields={k: tuple(v) for k, v in (action_fields or {}).items()})
+                    action_fields={k: tuple(v) for k, v in (action_fields or {}).items()},
+                    aheads={kind: ahead} if ahead is not None else {})
 
     return make
 
