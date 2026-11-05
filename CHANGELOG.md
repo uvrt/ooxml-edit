@@ -4,6 +4,25 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet. Each vers
 reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
 earlier ones were never tagged.
 
+## 0.81.0 -- unreleased
+- **`check` and `render` scoped to blocks; copies against their reference** (production
+  round 35, R18 and R19): the shared definitions of what docx-agent 0.1.41 serves.
+  - `check` `range` and `render` `range`: block ranges as a document's read tools take
+    them (blocks, spans, sections); one string is taken as a list of one.
+  - `check` `copies`: `[{blocks, reference: {doc?, block}}]`. `check`'s documents are
+    `doc` and every other document a reference names (`shared._checked_documents`), so
+    those are locked too: a `read_batch` or a lone call holds them all.
+  - All three are a document's parameters (`kind_fields` docx): a deck's or a workbook's
+    toolbox is not sent them, and a handler that does not take them refuses one given
+    (`invalid_arguments` naming it, "leave it out here"), never seeing them left out.
+  - `render(range=...)` runs in `read_batch` as any render (0.80.0).
+- **`orSingle`** (`array(..., or_single=True)`), a validation keyword: one item in an
+  array's place is read as a one-item array. Never sent: no token cost.
+- Offline tokens (characters / 3.5): a Word toolbox's `check` 238 -> 428, `render`
+  220 -> 260; docx-agent's core 2,642 -> 2,871, every definition 13,939 -> 14,168, a
+  reviewer's core 2,452 -> 2,682. Decks and workbooks: unchanged. `check` and `render`
+  are not in docx-agent's strict set (unchanged: 6 tools, 23 optional parameters).
+
 ## 0.80.0 -- unreleased
 - **`render` inside `read_batch`** (production round 35, R20): a reviewer's round -- pages
   and slides drawn, checks, reads -- in one call. `Tool.read_batchable` (`tool(...,

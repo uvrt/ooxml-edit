@@ -111,6 +111,17 @@ The shared prompt fragment names it where it is sent (`system_prompt(tools=...)`
 over the tools sent, as for the role line). It is not in `SESSION_TOOLS`: a library lists
 it in its tools when it offers it (the three agents do from their 0.1.37, 0.1.16 and 0.1.15).
 
+*Checks and renders of some blocks; copies against their reference* (0.81.0, round 35, R18
+and R19). `check` and `render` take `range`, a document's block ranges (blocks, spans
+`A..B`, sections) as its read tools take them: `check` reports the facts about those blocks
+on the pages they fall on, `render` draws those pages. `check` also takes `copies`, each a
+copy's `blocks` and the `reference` it was made from (`block`, and `doc` when it is in
+another open document): `check`'s `documents` is a function naming `doc` and every such
+`doc`, so the dispatcher locks them all. The three are docx-only (`kind_fields`): a deck's
+or a workbook's handler is wrapped (`shared._with_taken`) to refuse one given, naming it.
+`range` takes one string as a list of one: `orSingle`, a validation keyword
+(`array(..., or_single=True)`), never sent to a provider.
+
 *Renders in a read_batch* (0.80.0, round 35, R20). A reviewer's round -- pages or slides
 drawn, a check, a few reads -- was four turns: `read_batch` refused `render` ("call it on
 its own"), because `render` is `batchable=False` (it has no place among a batch's changes).
