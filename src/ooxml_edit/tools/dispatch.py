@@ -64,7 +64,14 @@ rolls the whole batch back.  Each op is validated against its own tool's schema 
 ``batch`` itself is never sent strict, since its ``arguments`` are free-form objects -- so a
 model's malformed op is caught by the dispatcher, not by constrained decoding.  That is the
 trade-off: one round trip instead of forty, at the price of strict decoding for the ops.
-Checks run once, at the end.
+Checks run once, at the end.  The reading ops after the last op that changes a document
+(round 33: a ``check`` at the end) run after that, the undo step closed, each as the same
+call alone -- so a slow one lets the locks go (:meth:`Call.unlocked`) -- and one that fails
+is reported as its op's error, atomic or not: the batch applied (:meth:`Toolbox._run_trailing`).
+
+**Work ahead.**  A changing tool may name work to do before its change (``Tool.aheads``,
+round 33): slow reading -- a layout -- run before the undo step with the locks let go where
+the call may (outside a batch), after which the call goes on as if it had just taken them.
 
 **Read batch.**  ``read_batch`` (round 32) runs reading calls the same way, under the locks
 of the documents they name, each as it would run alone -- no undo step, no checks -- and
@@ -214,6 +221,9 @@ class Call:
         self.released = False
         #: Work for the result after the handler (:meth:`defer`).
         self.deferred: list[Callable[[Result], None]] = []
+        #: Whether this is a changing call's work ahead of its change (:attr:`Tool.aheads`,
+        #: round 33): nothing is changed yet, so the locks may be let go.
+        self.ahead = False
 
     @property
     def in_batch(self) -> bool:
@@ -581,8 +591,10 @@ class Call:
     @property
     def may_unlock(self) -> bool:
         """Whether :meth:`unlocked` lets the documents' locks go: a reading call outside a
-        batch.  A handler that will work unlocked takes its snapshot first."""
-        return bool(self.held) and not self.context.batch and not self.changing
+        batch -- a batch's reads after its last change among them (round 33: they run once
+        its undo step is closed) -- or a changing call's work ahead of its change
+        (:attr:`Tool.aheads`).  A handler that will work unlocked takes its snapshot first."""
+        return bool(self.held) and not self.context.batch and (self.ahead or not self.changing)
 
     @contextmanager
     def unlocked(self) -> Iterator[bool]:
@@ -596,8 +608,9 @@ class Call:
         cache what was made under the snapshot's version, which the result reports
         (:attr:`version_used`, set here to the version when the locks were let go).
 
-        Inside a batch, or in a changing call, the locks stay held (the work is part of an
-        undo step or of a run of ops) and this yields ``False``."""
+        Inside a batch (before its last change), or in a changing call, the locks stay held
+        (the work is part of an undo step or of a run of ops) and this yields ``False``;
+        a changing call's work ahead of its change (:attr:`Tool.aheads`) may let them go."""
         if self.entry is not None and self.version_used is None:
             self.version_used = self.entry.version
         if not self.may_unlock:
@@ -1468,7 +1481,11 @@ class Toolbox:
     def _run(self, session: Session, tool: Tool, arguments: dict[str, Any],
              entries: dict[str, DocumentEntry], primary: DocumentEntry | None,
              reading: Sequence[str] = (), *, roles: Sequence[str] = ROLES,
-             caller: Mapping[str, Any] = NO_CONTEXT, turn: "_Turn | None" = None) -> Result:
+             caller: Mapping[str, Any] = NO_CONTEXT, turn: "_Turn | None" = None,
+             failed_refs: Mapping[str, int] | None = None) -> Result:
+        """One call, its documents' locks held (``entries``; ``reading``: those it only
+        takes rows from).  ``failed_refs``: for a batch's read after its last change, the
+        refs its failed ops would have made (:meth:`CallContext.missing_ref`)."""
         # The turn's changes so far, and the versions now: what this call changes is the
         # turn's, for its reads that let their locks go meanwhile (never warned about).
         since = turn.mark() if turn is not None else 0
@@ -1487,6 +1504,15 @@ class Toolbox:
         arguments = dict(arguments)
         ignored = tool.ignored_for(primary.kind if primary else None, arguments)
         changing = tool.changes(arguments)
+        ahead = tool.ahead_for(primary.kind) if changing and primary is not None else None
+        early: list[str] = []
+        if ahead is not None and primary is not None:
+            # The call's slow reading first, its locks let go where they may; after it the
+            # call goes on as if it had just taken them (the document may have moved on).
+            early = self._ahead(session, tool, ahead, arguments, entries, primary, roles,
+                                caller)
+            since = turn.mark() if turn is not None else 0
+            before = {doc: entry.version for doc, entry in entries.items()}
         key = arguments.get("key") if changing and isinstance(arguments.get("key"), str) else None
         if key is not None and primary is not None and (tool.name, key) in primary.keys:
             replay = primary.keys[(tool.name, key)]
@@ -1494,11 +1520,13 @@ class Toolbox:
                           created=list(replay.created), changed=list(replay.changed),
                           refs=dict(replay.refs), data=replay.data)
         context = _context(roles, caller)
+        if failed_refs:
+            context.failed_refs.update(failed_refs)
         with collect_warnings() as caught:
             read: list[str] = []
             arguments = self._with_refs(tool, arguments, entries, primary, context, read)
             call = Call(self, session, tool, arguments, entries, primary, context)
-            call.result.warnings += ignored + read
+            call.result.warnings += ignored + early + read
             self._with_datasets(tool, arguments, call)
             arguments = self._with_facts(tool, arguments, call)
             call.held = list(entries.values())   # dispatch() holds each once
@@ -1542,6 +1570,22 @@ class Toolbox:
         if turn is not None and not call.released:
             turn.made(entries, before)
         return result
+
+    def _ahead(self, session: Session, tool: Tool, ahead: Callable[..., Any],
+               arguments: Mapping[str, Any], entries: dict[str, DocumentEntry],
+               primary: DocumentEntry, roles: Sequence[str],
+               caller: Mapping[str, Any]) -> list[str]:
+        """A changing call's work ahead of its change (:attr:`Tool.aheads`, round 33):
+        ``ahead(call, **arguments)`` -- the arguments as given, refs not resolved yet --
+        before the undo step, :attr:`Call.may_unlock` true, so slow reading work runs with
+        the locks let go (:meth:`Call.unlocked`).  Its warnings, for the call's result.  An
+        exception it raises ends the call, which has changed nothing."""
+        call = Call(self, session, tool, arguments, entries, primary, _context(roles, caller))
+        call.held = list(entries.values())
+        call.ahead = True
+        with collect_warnings() as caught:
+            ahead(call, **arguments)
+        return call.result.warnings + caught
 
     def _handler(self, session: Session, tool: Tool, arguments: Mapping[str, Any],
                  primary: DocumentEntry | None) -> Callable[..., Any]:
@@ -1839,10 +1883,14 @@ class Toolbox:
             raise ToolError("limit", f"{len(ops)} ops; at most {limits.max_batch_ops} per batch",
                             field="ops")
         if not arguments.get("atomic"):
-            return self._run_partial(session, ops, entries, reading or {}, roles=roles,
-                                     caller=caller)
+            return self._run_partial(session, ops, entries, reading or {}, primary,
+                                     roles=roles, caller=caller)
         notes: list[str] = []
         prepared = self._ops(arguments, notes, roles)
+        last = max((index for index, tool, clean in prepared if tool.changes(clean)),
+                   default=-1)
+        trailing = prepared[last + 1:]
+        prepared = prepared[:last + 1]
         context = _context(roles, caller)
         context.batch = True
         owner = StepOwner(dict(caller), "batch")
@@ -1896,17 +1944,112 @@ class Toolbox:
         combined.warnings.extend(caught)
         _set_checks(combined, checks)
         self._batch_touched(session, entries, changes, context, combined)
-        combined.summary = f"Ran {len(done)} op(s) as one step: " + _summaries(done)
-        combined.data = {"ops": done}
+        if primary is not None:
+            combined.version = primary.version
+        errors: dict[int, ToolError] = {}
+        stopped = self._run_trailing(session, [(index, None, (tool, clean))
+                                               for index, tool, clean in trailing],
+                                     {**(reading or {}), **entries}, started, combined, done,
+                                     errors, context.failed_refs, roles=roles, caller=caller)
+        answered = [outcome for outcome in done if "error" not in outcome]
+        said = [(f"Ran {len(answered)} op(s) as one step: " if prepared else "Read: ")
+                + _summaries(answered)]
+        failures = {index: error for index, error in errors.items()
+                    if stopped is None or index < stopped[0]}
+        if failures:
+            # The batch applied: a read after its last change cannot take it back.
+            said.append("Not answered, the batch applied -- resend only these on their own: "
+                        + _failures(done, failures))
+        combined.data = ({"applied": len(prepared), "failed": list(errors), "ops": done}
+                         if errors else {"ops": done})
+        if stopped is not None:
+            late = _not_run(limits.batch_timeout, stopped[0], len(ops), stopped[1])
+            said.append(f"Not run: {late[0]}")
+            combined.data["not_run"] = late[1]
+        combined.summary = ". ".join(said)
         return combined
+
+    def _trailing(self, ops: Sequence[Any], roles: Sequence[str] | None) -> int:
+        """Where a batch's reads after its last change begin: the index after the last op
+        that changes a document (``len(ops)`` when the last one does, 0 when none does).
+        An op that cannot be validated changes nothing (it fails wherever it runs)."""
+        last = -1
+        for index, op in enumerate(ops):
+            try:
+                tool, clean = self._prepare(op, None, roles)
+            except ToolError:
+                continue
+            if tool.changes(clean):
+                last = index
+        return last + 1
+
+    def _run_trailing(self, session: Session,
+                      ops: Sequence[tuple[int, Any, tuple[Tool, dict[str, Any]] | None]],
+                      entries: Mapping[str, DocumentEntry], started: float,
+                      combined: Result, outcomes: list[dict[str, Any]],
+                      errors: dict[int, ToolError], failed_refs: Mapping[str, int], *,
+                      roles: Sequence[str] = ROLES, caller: Mapping[str, Any] = NO_CONTEXT,
+                      stopped: tuple[int, float] | None = None) -> tuple[int, float] | None:
+        """A batch's reads after its last change (round 33, R16c), run once its undo step
+        is closed and its checks are done, each as the same call alone would run
+        (:meth:`_run`): a slow one -- a ``check`` that lays the document out -- lets the
+        locks go (:meth:`Call.unlocked`), so other calls do not wait for it, and answers of
+        the batch's version (another call's change meanwhile is warned about, and an op that
+        finds the document moved on says its own ``version``).  ``ops``: ``(index, op,
+        prepared)``, ``prepared`` the op's tool and arguments if validated already, else
+        ``op`` is.  Each outcome goes to ``outcomes``, a failure's error to ``errors``
+        too: the batch applied, so a failing read takes nothing back.  Returns the first op
+        the deadline stopped, and when (``stopped``: an earlier op it stopped), or ``None``."""
+        limits = session.limits
+        versions = {doc: entry.version for doc, entry in entries.items()}
+        for index, op, prepared in ops:
+            name = (prepared[0].name if prepared is not None
+                    else op.get("tool", "") if isinstance(op, Mapping) else "")
+            try:
+                elapsed = time.perf_counter() - started
+                if stopped is not None or elapsed > limits.batch_timeout:
+                    stopped = stopped or (index, elapsed)
+                    raise ToolError("timeout", "not run: the batch passed its "
+                                    f"{limits.batch_timeout:g} s deadline")
+                if prepared is None:
+                    read: list[str] = []
+                    prepared = self._prepare(op, read, roles)
+                    combined.warnings += [f"ops[{index}]: {note}" for note in read]
+                tool, clean = prepared
+                result, primary = self._read_one(session, tool, clean, entries, roles, caller,
+                                                 "batch", failed_refs)
+            except Exception as exc:  # noqa: BLE001 -- the op's error; the batch applied
+                error = exc if isinstance(exc, ToolError) else self.map_exception(exc)
+                errors[index] = error
+                outcomes.append({"op": index, "tool": name, "error": _brief(error)})
+                continue
+            if not result.ok:
+                error = result.error or ToolError("internal", "failed")
+                errors[index] = error
+                combined.warnings += [f"ops[{index}]: {w}" for w in result.warnings]
+                outcomes.append({"op": index, "tool": tool.name, "error": _brief(error)})
+                continue
+            combined.datasets += [a for a in result.datasets if a not in combined.datasets]
+            combined.warnings += [f"ops[{index}]: {w}" for w in result.warnings]
+            entry: dict[str, Any] = {"op": index, "tool": tool.name, "summary": result.summary}
+            if result.data not in (None, {}, []):
+                entry["data"] = result.data
+            if (primary is not None and result.version is not None
+                    and result.version != versions.get(primary.doc_id)):
+                entry["version"] = result.version       # another call's change came first
+            outcomes.append(entry)
+        return stopped
 
     def _run_partial(self, session: Session, ops: Sequence[Any],
                      entries: dict[str, DocumentEntry],
-                     reading: Mapping[str, DocumentEntry], *, roles: Sequence[str] = ROLES,
+                     reading: Mapping[str, DocumentEntry],
+                     primary: DocumentEntry | None = None, *, roles: Sequence[str] = ROLES,
                      caller: Mapping[str, Any] = NO_CONTEXT) -> Result:
         """A batch whose ops apply one by one: a failing op is rolled back alone and
-        reported, and the ops after it still run.  What applied is one undo step."""
+        reported, and the ops after it still run.  What applied is one undo step; the reads
+        after the last change run after it (:meth:`_run_trailing`)."""
         limits = session.limits
+        split = self._trailing(ops, roles)
         context = _context(roles, caller)
         context.batch = True
         owner = StepOwner(dict(caller), "batch")
@@ -1923,7 +2066,7 @@ class Toolbox:
                            for doc in sorted(entries, key=doc_order)}
                 for doc in sorted(entries, key=doc_order):
                     stack.enter_context(entries[doc].batch(owner))
-                for index, op in enumerate(ops):
+                for index, op in enumerate(ops[:split]):
                     context.op = index
                     name = op.get("tool", "") if isinstance(op, Mapping) else ""
                     try:
@@ -1953,10 +2096,6 @@ class Toolbox:
                             context.changed_at[doc] = index
                 self._run_deferred(context, combined)
                 self._op_states(len(ops), None, {}, entries, context)
-            not_run = (_not_run(limits.batch_timeout, stopped[0], len(ops), stopped[1])
-                       if stopped is not None else None)
-            if errors and len(errors) == len(outcomes):
-                raise _none_applied(outcomes, errors, not_run)
             for doc in sorted(entries, key=doc_order):
                 if doc in context.changed_at:
                     entries[doc].bump()
@@ -1964,6 +2103,16 @@ class Toolbox:
             checks = {doc: self._checks(session, entries[doc], context)
                       for doc in sorted(entries, key=doc_order)} if changing else {}
             self._keep_datasets(session, context, combined)
+            if primary is not None:
+                combined.version = primary.version
+            stopped = self._run_trailing(
+                session, [(index, ops[index], None) for index in range(split, len(ops))],
+                {**reading, **entries}, started, combined, outcomes, errors,
+                context.failed_refs, roles=roles, caller=caller, stopped=stopped)
+            not_run = (_not_run(limits.batch_timeout, stopped[0], len(ops), stopped[1])
+                       if stopped is not None else None)
+            if errors and len(errors) == len(outcomes):
+                raise _none_applied(outcomes, errors, not_run)
         combined.warnings.extend(caught)
         _set_checks(combined, checks)
         self._batch_touched(session, entries, changes, context, combined)
@@ -1981,7 +2130,8 @@ class Toolbox:
                 combined.data["not_run"] = not_run[1]
             combined.summary = ". ".join(said)
         else:       # every op applied: the result an all-or-none batch gives
-            combined.summary = f"Ran {len(done)} op(s) as one step: " + _summaries(done)
+            combined.summary = (f"Ran {len(done)} op(s) as one step: " if split
+                                else "Read: ") + _summaries(done)
             combined.data = {"ops": outcomes}
         return combined
 
@@ -2047,20 +2197,7 @@ class Toolbox:
                     "refused", f"{tool.name} changes the document, and read_batch only "
                     "reads: send this op in batch (with the other changes), or call it on its "
                     "own", field="tool", valid_options=["batch", tool.name])
-            doc_ids = tool.doc_ids(clean)
-            for doc in doc_ids:
-                if doc not in entries:
-                    session.entry(doc)      # not_found, naming the open documents
-                    raise ToolError("refused", f"{doc} was opened after the read_batch "
-                                    "began: read it in another call", field="arguments.doc")
-            clean, found = self._sources(
-                session, tool, clean,
-                hint=lambda value: self._source_hint(session, doc_ids, value))
-            held = {doc: entries[doc] for doc in [*doc_ids, *found] if doc in entries}
-            primary = held[doc_ids[0]] if doc_ids else None
-            result = self._run(session, tool, clean, held, primary,
-                               [doc for doc in found if doc not in doc_ids],
-                               roles=roles, caller=caller)
+            result, primary = self._read_one(session, tool, clean, entries, roles, caller)
         except ToolError as error:
             result = Result.failure(error)
         except Exception as exc:  # noqa: BLE001 -- the op's error, the others still run
@@ -2074,6 +2211,29 @@ class Toolbox:
         result.tool = tool.name if tool is not None else given if isinstance(given, str) else ""
         paged = tool is not None and "cursor" in tool.schema.get("properties", {})
         return result, paged
+
+    def _read_one(self, session: Session, tool: Tool, clean: dict[str, Any],
+                  entries: Mapping[str, DocumentEntry], roles: Sequence[str],
+                  caller: Mapping[str, Any], within: str = "read_batch",
+                  failed_refs: Mapping[str, int] | None = None
+                  ) -> tuple[Result, DocumentEntry | None]:
+        """A reading op run as the same call alone (:meth:`_run`), under the locks
+        ``entries`` the dispatcher took for the whole ``read_batch`` (``within``: or for a
+        batch); its result and its primary document."""
+        doc_ids = tool.doc_ids(clean)
+        for doc in doc_ids:
+            if doc not in entries:
+                session.entry(doc)      # not_found, naming the open documents
+                raise ToolError("refused", f"{doc} was opened after the {within} began: read "
+                                "it in another call", field="arguments.doc")
+        clean, found = self._sources(
+            session, tool, clean, hint=lambda value: self._source_hint(session, doc_ids, value))
+        held = {doc: entries[doc] for doc in [*doc_ids, *found] if doc in entries}
+        primary = held[doc_ids[0]] if doc_ids else None
+        result = self._run(session, tool, clean, dict(held), primary,
+                           [doc for doc in found if doc not in doc_ids],
+                           roles=roles, caller=caller, failed_refs=failed_refs)
+        return result, primary
 
     def _run_deferred(self, context: CallContext, combined: Result) -> None:
         """After a batch's last op: the work its ops deferred (:meth:`Call.defer`), in op

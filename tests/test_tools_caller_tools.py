@@ -128,7 +128,8 @@ def test_an_atomic_batch_rolls_back_documents_not_the_applications_own_state(too
     result = _batch(toolbox, session, [
         ("app_note", {"text": "kept"}),
         ("t_add", {"doc": "d1", "items": [{"text": "a"}]}),
-        ("app_crash", {"doc": "d1"})], atomic=True)
+        ("app_crash", {"doc": "d1"}),
+        ("t_add", {"doc": "d1", "items": [{"text": "b"}]})], atomic=True)
     assert not result.ok and result.error.details["tool"] == "app_crash"
     assert session.entry("d1").document.items() == []
     assert NOTES == ["kept"]          # what the application did outside documents stays

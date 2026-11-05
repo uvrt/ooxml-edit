@@ -107,9 +107,21 @@ def test_the_lock_comes_back_when_the_work_fails(toolbox):
 def test_inside_a_batch_the_lock_stays_held(toolbox):
     session, doc = _open(toolbox)
     result = toolbox.dispatch(session, "batch", {"ops": [
-        {"tool": "toy_probe", "arguments": {"doc": doc, "mode": "plain"}}]})
+        {"tool": "toy_probe", "arguments": {"doc": doc, "mode": "plain"}},
+        {"tool": "toy_ppt_set_title", "arguments": {"doc": doc, "page": 1, "text": "x"}}]})
     assert result.ok, result.to_json()
     assert PROBED[-1] == {"may_unlock": False, "released": False, "held_inside": True,
+                          "held_after": True}
+
+
+def test_a_batch_s_read_after_its_last_change_lets_the_lock_go(toolbox):
+    # Round 33 (R16c): it runs once the batch's undo step is closed, as alone.
+    session, doc = _open(toolbox)
+    result = toolbox.dispatch(session, "batch", {"ops": [
+        {"tool": "toy_ppt_set_title", "arguments": {"doc": doc, "page": 1, "text": "x"}},
+        {"tool": "toy_probe", "arguments": {"doc": doc, "mode": "plain"}}]})
+    assert result.ok, result.to_json()
+    assert PROBED[-1] == {"may_unlock": True, "released": True, "held_inside": False,
                           "held_after": True}
 
 

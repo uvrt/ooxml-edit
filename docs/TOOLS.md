@@ -901,7 +901,8 @@ result describes the snapshot: its `version` is the one drawn or checked, which 
 made meanwhile has moved past; a later render or check of the new version draws afresh,
 while one of a version undone back to is a cache hit. Undo and history are untouched: a
 render or check makes no step. Inside a `batch` the lock stays held (a check there is one
-op of the run), as in any changing call. A handler does this with `call.unlocked()` (a
+op of the run), as in any changing call -- except for the reads after the batch's last
+change (0.79.0, below). A handler does this with `call.unlocked()` (a
 context manager; it yields whether the locks were let go, `call.may_unlock` says so in
 advance, and `call.version_used` is the version the result then reports) or
 `call.run_unlocked(fn, *args)`, and must read nothing from the live document inside. One
@@ -909,6 +910,35 @@ limit is the rasteriser's: resvg-py holds the GIL for the whole of its native ra
 (measured: no other thread ran for 0.7 s of a 0.8 s slide), so in-process (`workers=0`) an
 edit no longer waits for the lock but still waits for that call to return; with worker
 processes, multiprocessing or subprocess, it waits for neither.
+
+**No layout under the lock (0.79.0, round 33, R16c).** Two ways a slow read still held a
+document's lock -- and every other call on it waited, up to minutes on a long report:
+
+* *A batch's reads after its last change* -- `[edit, edit, check]` -- run once the batch's
+  undo step is closed, its checks done and its refs and datasets kept, each as the same
+  call alone (as `read_batch` runs its ops): so a check there lets the locks go while it
+  lays out, and answers of the batch's version. A read *before* the batch's last change
+  still runs inside the batch, on the state between its ops. The ops are told apart before
+  any runs (`Tool.changes` of each op's validated arguments; one that cannot be validated
+  changes nothing). Semantic change: such a read that fails cannot undo the batch, atomic
+  or not -- the changes applied; it is its op's `error` in `data.ops`, listed in
+  `data.failed` (with `data.applied`) and in the summary to resend on its own. When
+  another call changes the document while such a read works, the read warns as alone
+  (`moved_on`), and a later read that starts on a newer version says its own `version` in
+  its outcome. The batch's `version` is the one its changes made. A batch of reads only
+  runs every op this way (its summary starts `Read:`); `read_batch` remains the tool for
+  reads, sent to readers and with a budget per op.
+* *A changing call's work ahead of its change.* `tool(..., ahead=fn)` (`Tool.aheads`, per
+  kind as `handlers`; `Tool.ahead_for(kind)`): `fn(call, **arguments)` runs before the
+  call's undo step, its arguments as given (refs not resolved), with `call.may_unlock`
+  true outside a batch, so it can lay the document out with the locks let go
+  (`call.unlocked()`, `call.ahead` is true) and leave the layout in a cache. It changes
+  nothing. Then the call goes on as if it had just taken its locks: its refs, retry key,
+  undo step, version and `touched` are of the document as it is then -- another call may
+  have changed it meanwhile, so the handler reads it afresh (and finds the work done when
+  nothing moved). Its warnings go to the call's result; an exception it raises ends the
+  call, which changed nothing. Inside a batch it does not run (the locks stay held, the
+  handler does the work). Word's `word_fields` `update` uses it (docx-agent 0.1.39).
 
 **Checks side by side (round 28, P2).** A slow read that is pure Python -- a deck's check
 measures text for seconds a slide -- gained nothing from letting the lock go while it ran in
