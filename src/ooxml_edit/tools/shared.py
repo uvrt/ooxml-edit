@@ -549,9 +549,9 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
          composite=True, role=ANY_ROLE),
     # round 32, R15: many reads in one turn, for a reader too
     Spec("read_batch",
-         "Read many things in one call: reading calls (describe, read, find, check, render, "
-         "query...), each answered as alone, with its own size budget; images count toward "
-         "the reply's. Use it for any two or more reads. Changes nothing.",
+         "Read many things in one call: reading calls (describe, find, check, query, "
+         "render...), each answered as alone, in its own size budget. Use it for any two or "
+         "more reads. Changes nothing.",
          {"ops": array(obj({"tool": string(),
                             "arguments": free_object("That tool's arguments.")}),
                        "The reading calls, at most 200.", min_items=1)},

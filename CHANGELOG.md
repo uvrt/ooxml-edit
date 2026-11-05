@@ -16,8 +16,9 @@ earlier ones were never tagged.
   token: a 1280 x 720 image 4,784); a render that does not fit is in `not_returned` /
   `resend` and its images go back to the session's budget (`Session.release_images`).
   `batch` refusing render now names `read_batch` (`valid_options`). `read_batch`'s
-  description names render and that images count: +12 offline tokens (characters / 3.5,
-  194 -> 206); no other definition changes.
+  description names render among its examples, at the same length (185 characters: "read"
+  left out, "render" in, "with" -> "in"): offline tokens unchanged (194), since the
+  agents' guards had 1-10 tokens of headroom; no other definition changes.
 - **Fix: a hang between batches over two documents.** An op of a `read_batch` (or a
   batch's read after its last change, 0.79.0) that let its locks go let its own document's
   go only and took it back while the batch held another's: two `read_batch`es checking
