@@ -338,7 +338,7 @@ def test_find_replace_render_and_checks_include_are_sent_per_kind():
     deck, text = _sent("check", "pptx")["include"], _sent("check", "docx")["include"]
     assert deck["items"]["enum"] == ["fit", "collisions", "facts", "design", "validate", "layout", "app",
                                      "numbers"]
-    assert text["items"]["enum"] == ["validate", "reflow", "fields", "layout", "app"]
+    assert text["items"]["enum"] == ["validate", "reflow", "fields", "layout", "app", "numbers"]
     assert (deck["description"], text["description"]) == (
         "Default: fit, collisions, validate.", "Default: validate, reflow, fields.")
     for name in ("find_text", "replace_text", "render", "check"):

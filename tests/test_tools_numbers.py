@@ -450,11 +450,11 @@ def test_the_workbooks_are_held_for_reading_in_a_batch_and_read_batch_too(toolbo
     assert "t:Scores/door/mean" in str(result.to_json())
 
 
-def test_only_decks_are_offered_numbers_until_documents_give_their_texts():
+def test_decks_and_documents_are_offered_numbers():
     sent = shared.SPECS["check"].make({"pptx": board_check.handlers["pptx"]}).canonical
     assert "numbers" in sent["properties"]["include"]["items"]["enum"]
     word = shared.SPECS["check"].make({"docx": lambda call, **a: None}).canonical
-    assert "numbers" not in word["properties"]["include"]["items"]["enum"]
+    assert "numbers" in word["properties"]["include"]["items"]["enum"]
 
 
 def test_a_datasets_formats_are_checked_and_kept_by_a_slice():

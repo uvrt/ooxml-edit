@@ -4,6 +4,13 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet. Each vers
 reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
 earlier ones were never tagged.
 
+## 0.84.0 -- unreleased
+- `check`'s include enum gains `numbers` for documents too (`kind_values`, production
+  round 36, R28): docx-agent gives a document's texts (`DocumentFormat.number_texts`).
+  +3 estimated tokens in a document's core and every definition (docx-agent's guard); a
+  deck's and a workbook's definitions unchanged. No parameter added: strict sets and
+  optional counts unchanged.
+
 ## 0.83.0 -- unreleased
 - **Numbers in text no value holds** (production round 36, R28): `check`'s `include` takes
   `numbers` (opt in, never a default; `ooxml_edit.tools.numbers`). Per paragraph, shape or
