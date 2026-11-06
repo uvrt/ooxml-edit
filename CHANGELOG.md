@@ -4,6 +4,16 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet. Each vers
 reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
 earlier ones were never tagged.
 
+## 0.84.1 -- unreleased
+- `check`'s numbers (production round 36, R28 follow-up): a percentage's value (a
+  `percent` column, a `%` number format: a fraction) matches only a number written as a
+  percentage (`%`, `‰`, a percent word), as its fraction; a number written without one
+  matches plain values only. A bare `0,3` no longer matches a percentage column's 0.27 or
+  0.31, nor a bare `30,0` its 0.3 times 100; `85%` no longer matches a percentage column's
+  stored 85 as points. A percentage still matches a plain value as a fraction (0.85) or as
+  points (85). A figure derived from values stays unverified (documented). No definition
+  changed: 0 tokens.
+
 ## 0.84.0 -- unreleased
 - `check`'s include enum gains `numbers` for documents too (`kind_values`, production
   round 36, R28): docx-agent gives a document's texts (`DocumentFormat.number_texts`).
