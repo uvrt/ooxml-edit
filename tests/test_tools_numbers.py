@@ -272,8 +272,31 @@ def test_percentages_match_fractions_and_points():
     index = _index([("a", 0.853, 85.3), ("b", 0.12, 3)], types=(None, "percent", None))
     assert _matches(index, "85%") == [[0.853, 85.3]]
     assert _matches(index, "85.3 %") == [[0.853, 85.3]]
-    assert _matches(index, "12.0") == [[0.12]]          # a percentage column quoted bare
-    assert _matches(index, "0.12") == [[0.12]]
+    assert _matches(index, "12.0 %") == [[0.12]]
+
+
+def test_a_percentage_matches_only_when_written_as_one():
+    index = _index([("a", 0.27, 0.27), ("b", 0.31, 0.31), ("c", 0.3, 30.0)],
+                   types=(None, "percent", None))
+    # written as a percentage: the percentage's fraction, and plain points or fractions
+    assert _matches(index, "30 %") == [[0.3, 30.0]]
+    assert _matches(index, "27 procent", NL_BE) == [[0.27, 0.27]]
+    assert _matches(index, "300‰") == [[0.3]]
+    # bare: plain values only, never a percentage's fraction nor it times 100
+    assert _matches(index, "0,3 gemiddeld", NL_BE) == [[0.27, 0.31]]
+    assert _matches(index, "0.30 and 30.0 and 27.0") == [[], [30.0], []]
+
+
+def test_a_percent_format_marks_a_percentage_too():
+    index = _index([("a", 0.31, 0.31)], formats=(None, "0%", None))
+    assert _matches(index, "0.31 and 31%") == [[0.31], [0.31, 0.31]]
+
+
+def test_a_bare_number_is_unverified_against_a_percentage_and_its_nearest_are_plain():
+    index = _index([("a", 0.27, 2.5)], types=(None, "percent", None))
+    found, _ = find_numbers("0.3", EN, NumberRules(whole_numbers=True))
+    assert index.matches(found[0]) == []
+    assert [index.values[i].number for i, _, _ in index.nearest(found[0])] == [2.5]
 
 
 def test_a_written_sign_must_agree():

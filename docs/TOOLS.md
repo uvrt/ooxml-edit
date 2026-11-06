@@ -646,13 +646,18 @@ reference, is listed under `typed` with its reference and, when the reference wr
 same number, the `replace_text` call that writes it as one (`{{t:Scores/door/mean:0.0}}`;
 `writes` says the text when the locale writes it otherwise). Several values alike: `from`
 lists three and `matches` counts them, no fix. A dataset's value and the table cell it was
-derived from (sharing a source) count once, the dataset's.
+derived from (sharing a source) count once, the dataset's. A figure derived from values
+(a difference, a sum, a share) is no value and stays unverified: kept as a dataset (the
+application derives it into one), it matches.
 
 - **The match rule**: within the rounding the text shows -- a number with `d` decimals
   matches every value within half a unit of its last digit (`2,7` matches 2.65 to 2.75),
   and a value whose number format shows fewer decimals also as shown (2.649 shown `0.00`
   is 2.65, which `2.7` matches). A percentage matches a fraction (`85%`: 0.845 to 0.855)
-  and percentage points (84.5 to 85.5); a bare number matches a `percent` column times 100;
+  and percentage points (84.5 to 85.5). A percentage's value (a `percent` column or a `%`
+  number format, stored as a fraction) matches only a number written as a percentage
+  (`%`, `‰`, a percent word), as its fraction: `30 %` matches 0.3 there; a bare `0,3` or
+  `30` never does -- a number written without one matches plain values only (0.84.1);
   a scale word (`2.5m`, `1,2 mln`) compares it scaled and as it is. A written sign must
   agree; no sign matches either (a fall of 2.7 is -2.7).
 - **Read in the session's locale**: `1.234,5` or `1,234.5`, grouping only before groups of

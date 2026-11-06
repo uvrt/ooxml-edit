@@ -19,7 +19,12 @@ call that writes it as one, so it is kept with its source from then on (:mod:`.t
 **The match rule: within the rounding the text shows.**  A number written with ``d``
 decimals matches a value within half a unit of its last digit: ``2,7`` matches every value
 from 2.65 to 2.75 (2.66 among them), ``85%`` every fraction from 0.845 to 0.855 and every
-percentage point from 84.5 to 85.5.  A value whose number format shows fewer decimals
+percentage point from 84.5 to 85.5.  A percentage's value (a ``percent`` column, a ``%``
+number format: a fraction) matches only a number written as a percentage (``%``, ``‰``, a
+percent word), as its fraction: ``30 %`` matches 0.3 there, a bare ``0,3`` or ``30`` never
+does -- a number written without one matches plain values only.  A figure derived from
+values (a difference, a sum, a share) is no value: it stays unverified unless the
+application keeps it as a dataset.  A value whose number format shows fewer decimals
 also matches as shown: 2.649 in ``0.00`` shows ``2.65``, so a figure rounded again from
 what the table shows (``2,7``) is found too.  A sign
 written must agree (``-2,7`` never matches 2.66); a number without one matches either (a
@@ -488,50 +493,53 @@ class Index:
         keys, ids = table
         return ids[bisect.bisect_left(keys, low):bisect.bisect_right(keys, high)]
 
-    def targets(self, number: Found) -> list[tuple[str, float, float]]:
-        """Where ``number`` is looked for: ``(table, centre, half width)`` -- ``plain``
-        (as stored, as shown) or ``hundred`` (times 100)."""
+    def targets(self, number: Found) -> list[tuple[str, float, float, bool]]:
+        """Where ``number`` is looked for: ``(table, centre, half width, percentages)`` --
+        ``plain`` (as stored, as shown) or ``hundred`` (times 100); ``percentages``: whether
+        a percentage's value (a ``percent`` column, a ``%`` format) may match there.  A
+        percentage matches only when written as one, as its fraction (``85%``: 0.85,
+        ``8,5‰``: 0.0085); a number written without ``%``, ``‰`` or a percent word matches
+        plain values only."""
         t = float(number.value)
         half = 0.5 * 10 ** -number.decimals
         out = []
         if number.percent == 100:
-            out += [("hundred", t, half), ("plain", t, half)]
+            out += [("hundred", t, half, True), ("plain", t, half, False)]
         elif number.percent == 1000:
-            out += [("plain", t / 1000, half / 1000), ("plain", t, half)]
+            out += [("plain", t / 1000, half / 1000, True), ("plain", t, half, False)]
         else:
-            out.append(("plain", t, half))
-            out.append(("hundred*", t, half))          # a percentage column quoted bare
+            out.append(("plain", t, half, False))
             if number.scale:
-                out.append(("plain", t * number.scale, half * number.scale))
+                out.append(("plain", t * number.scale, half * number.scale, False))
         return out
 
     def matches(self, number: Found) -> list[tuple[int, str]]:
         """The values ``number`` matches (see the module's notes), each once, with how:
         ``plain`` or ``hundred``."""
         found: dict[int, str] = {}
-        for table, centre, half in self.targets(number):
+        for table, centre, half, percentages in self.targets(number):
             slack = half * (1 + 1e-9) + abs(centre) * 1e-12
-            keys = self._hundred if table.startswith("hundred") else self._plain
+            keys = self._hundred if table == "hundred" else self._plain
             for i in self._range(keys, centre - slack, centre + slack):
                 value = self.values[i]
-                if table == "hundred*" and not value.percent:
+                if value.percent and not percentages:
                     continue
                 if number.negative and value.number > 0:
                     continue
-                found.setdefault(i, table.rstrip("*"))
+                found.setdefault(i, table)
         return sorted(found.items())
 
     def nearest(self, number: Found, count: int = 2) -> list[tuple[int, str, float]]:
         """The ``count`` values nearest ``number`` by relative distance, each once:
         ``(value, how, distance)``."""
         best: dict[int, tuple[float, str]] = {}
-        for table, centre, _ in self.targets(number):
-            if table == "hundred*":
-                continue
+        for table, centre, _, percentages in self.targets(number):
             keys, ids = self._hundred if table == "hundred" else self._plain
             at = bisect.bisect_left(keys, centre)
             for j in range(max(0, at - count - 2), min(len(keys), at + count + 2)):
                 i = ids[j]
+                if self.values[i].percent and not percentages:
+                    continue
                 if number.negative and self.values[i].number > 0:
                     continue
                 distance = abs(keys[j] - centre) / max(abs(centre), 1e-9)
@@ -687,8 +695,6 @@ def _format_for(number: Found, how: str, value: Value) -> str | None:
         ("." + "0" * number.decimals if number.decimals else "")
     if number.percent and how == "hundred":
         return fmt + "%"
-    if how == "hundred":                     # a percentage column quoted without %
-        return None
     return fmt
 
 
