@@ -10,6 +10,10 @@ earlier ones were never tagged.
   +3 estimated tokens in a document's core and every definition (docx-agent's guard); a
   deck's and a workbook's definitions unchanged. No parameter added: strict sets and
   optional counts unchanged.
+- A value of a document's table not keyed by its first column (`Dataset.keys` 0: a
+  workbook table with no one key column) is named by its row's position
+  (`t:Scores/#1/mean`), as the table's resolver reads it; by key, the reference and its
+  fix were refused when written.
 
 ## 0.83.0 -- unreleased
 - **Numbers in text no value holds** (production round 36, R28): `check`'s `include` takes
