@@ -4,6 +4,20 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet. Each vers
 reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
 earlier ones were never tagged.
 
+## 0.82.0 -- unreleased
+- **Reopening a document under its earlier id** (production round 35, R23):
+  `Session.open(data, name, doc_id="d1")`, and `doc_id` on `Session.adopt` and
+  `Session.open_blob`, for an application resuming a run whose saved conversation names
+  the ids it had. Refused (`ArgumentError`) when the id is open -- the message names the
+  document holding it and the way out (`session.close(...)`, or open without `doc_id`) --
+  or malformed (the accepted form: `d` and a whole number from 1, no leading zero).
+  Closing frees an id; the counter never hands out an id given explicitly (after
+  `doc_id="d3"` it counts `d1`, `d2`, `d4`) nor, as before, one it gave already. The check
+  and the claim happen under the session's lock: two opens of one id at once give it to
+  one of them.
+- The `open_document` tool is unchanged (no `doc_id`): ids are the application's to give
+  when it resumes. Tool definitions unchanged: no token cost.
+
 ## 0.81.0 -- unreleased
 - **`check` and `render` scoped to blocks; copies against their reference** (production
   round 35, R18 and R19): the shared definitions of what docx-agent 0.1.41 serves.

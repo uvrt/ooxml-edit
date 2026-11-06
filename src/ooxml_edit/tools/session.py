@@ -2,7 +2,9 @@
 
 The application opens documents from bytes (:meth:`Session.open` → ``"d1"``) and registers
 every other input as a blob (:meth:`Session.add_blob` → ``"b1"``).  Tools refer to both by
-those handles only; nothing in a session is a path.  What a tool saves goes to
+those handles only; nothing in a session is a path.  Ids count up in open order and are never
+handed out twice; an application resuming a run reopens a document under the id its saved
+conversation names (``Session.open(data, name, doc_id="d1")``), refused while that id is open.  What a tool saves goes to
 :attr:`Session.outputs` (or the ``on_output`` callback) as bytes for the application; the
 model sees its name and size, never the bytes.
 
@@ -554,6 +556,27 @@ class DocumentEntry:
 
 
 _DOC_ID = re.compile(r"^d(\d+)$")
+#: The ids an application may give a document itself: ``d`` and a whole number from 1,
+#: no leading zero -- the form the session's own ids have, which addresses read
+#: (``d2/p:A``).
+_GIVEN_DOC_ID = re.compile(r"d[1-9][0-9]*")
+
+
+class _DocIdTaken(ArgumentError):
+    """An id given to :meth:`Session.open` is open already (a race :meth:`Session.open_blob`
+    must not mistake for a bad blob)."""
+
+
+def _given_doc_id(doc_id: Any) -> str:
+    """``doc_id`` as an application gives it to :meth:`Session.open`, checked: ``d1``,
+    ``d2``, ...; anything else an :class:`ArgumentError` saying the accepted form."""
+    if not isinstance(doc_id, str):
+        raise ArgumentTypeError(f"doc_id takes a string such as 'd1', not {type(doc_id).__name__}")
+    if _GIVEN_DOC_ID.fullmatch(doc_id) is None:
+        raise ArgumentError(f"doc_id {doc_id!r} is not a document id: 'd' and a whole number "
+                            "from 1 with no leading zero ('d1', 'd2', 'd17'), the form the "
+                            "session gives and addresses such as 'd2/p:A' read")
+    return doc_id
 
 
 def part_entries(change: Any) -> list[dict[str, Any]]:
@@ -661,6 +684,9 @@ class Session:
         self.rounds = 1
         self._lock = threading.RLock()
         self._doc_numbers = itertools.count(1)
+        #: Ids the application gave (:meth:`open`'s ``doc_id``): never handed out by the
+        #: counter, open or closed.
+        self._given_ids: set[str] = set()
         self._blob_numbers = itertools.count(1)
 
     def view(self, *, roles: Any = None, context: Mapping[str, Any] | None = None,
@@ -677,18 +703,31 @@ class Session:
     # -- documents ---------------------------------------------------------------------------
 
     def open(self, data: bytes, name: str, *, kind: str | None = None,
-             source: str = "app") -> str:
-        """Open a document from bytes and return its id (``d1``)."""
+             source: str = "app", doc_id: str | None = None) -> str:
+        """Open a document from bytes and return its id (``d1``).
+
+        ``doc_id`` reopens it under an id of the application's choosing -- the one a resumed
+        run's saved conversation names -- instead of the next one counted: ``d`` and a whole
+        number from 1 (``d3``).  An id that is open is refused (an :class:`ArgumentError`
+        naming the document that has it); a closed one is free again.  The counter never
+        hands out an id given here: after ``open(..., doc_id="d3")`` the counted ids skip
+        ``d3``."""
         data = _require_bytes(data, "open")
+        if doc_id is not None:
+            self._free_id(_given_doc_id(doc_id))
         fmt = self._format_for(data, name, kind)
         check_package(data, self.limits, name)
         self._room_for_document(len(data))
         document = fmt.open(data)
-        return self.adopt(document, fmt.kind, name, source=source, size=len(data))
+        return self.adopt(document, fmt.kind, name, source=source, size=len(data),
+                          doc_id=doc_id)
 
     def adopt(self, document: Any, kind: str, name: str, *, source: str = "new",
-              size: int = 0) -> str:
-        """Add a document made in memory (a new one, or one opened from a blob)."""
+              size: int = 0, doc_id: str | None = None) -> str:
+        """Add a document made in memory (a new one, or one opened from a blob); ``doc_id``
+        as :meth:`open` takes it."""
+        if doc_id is not None:
+            doc_id = _given_doc_id(doc_id)
         if kind not in self.formats:
             raise ArgumentError(f"no format {kind!r} is registered; one of {sorted(self.formats)}")
         fmt = self.formats[kind]
@@ -697,7 +736,11 @@ class Session:
         baseline = list(fmt.problems(document)) if fmt.problems else []
         with self._lock:
             self._room_for_document(size)
-            doc_id = f"d{next(self._doc_numbers)}"
+            if doc_id is None:
+                doc_id = self._counted_id()
+            else:
+                self._free_id(doc_id)
+                self._given_ids.add(doc_id)
             self.documents[doc_id] = DocumentEntry(
                 doc_id=doc_id, kind=kind, name=name, source=source, document=document,
                 size=size, baseline_problems=baseline, font_dirs=self.font_dirs,
@@ -707,6 +750,27 @@ class Session:
             entry = self.documents[doc_id]
             entry.ref_states[entry.version] = {}
         return doc_id
+
+    def _counted_id(self) -> str:
+        """The next id the counter gives: one never given before, by it or by the
+        application.  Called with :attr:`_lock` held."""
+        while True:
+            doc_id = f"d{next(self._doc_numbers)}"
+            if doc_id not in self._given_ids and doc_id not in self.documents:
+                return doc_id
+
+    def _free_id(self, doc_id: str) -> None:
+        """Refuse ``doc_id`` when a document has it, saying which and how to free it."""
+        with self._lock:
+            held = self.documents.get(doc_id)
+            if held is None:
+                return
+            others = sorted((d for d in self.documents if d != doc_id), key=doc_order)
+            raise _DocIdTaken(
+                f"doc_id {doc_id!r} is in use: {held.name} ({held.kind}) is open as {doc_id}; "
+                f"close it first (session.close({doc_id!r}), after saving it if it changed), or "
+                "open this one without doc_id for the next free id"
+                + (f" (open now: {', '.join([doc_id, *others])})" if others else ""))
 
     def entry(self, doc_id: str) -> DocumentEntry:
         """The open document ``doc_id``; ``not_found`` names the open ones."""
@@ -915,11 +979,17 @@ class Session:
                                                for b in self.blobs.values()])
             return blob
 
-    def open_blob(self, handle: str, *, kind: str | None = None) -> str:
-        """Open a registered blob as a document (what an ``open_document`` tool does)."""
+    def open_blob(self, handle: str, *, kind: str | None = None,
+                  doc_id: str | None = None) -> str:
+        """Open a blob (:meth:`add_blob`) as a document (what an ``open_document`` tool does);
+        ``doc_id`` as :meth:`open` takes it, an application's alone (the tool has none)."""
         blob = self.blob(handle)
+        if doc_id is not None:
+            self._free_id(_given_doc_id(doc_id))
         try:
-            return self.open(blob.data, blob.name, kind=kind, source=handle)
+            return self.open(blob.data, blob.name, kind=kind, source=handle, doc_id=doc_id)
+        except _DocIdTaken:
+            raise                               # opened under it meanwhile: not the blob's fault
         except LimitError as exc:
             raise ToolError("limit", str(exc)) from None
         except ValueError as exc:
