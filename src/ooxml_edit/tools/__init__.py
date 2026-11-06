@@ -69,7 +69,7 @@ out as bytes to the application, and no tool may take a path.  Like :mod:`ooxml_
 this subpackage is optional, and the core never imports it.
 """
 
-from . import assets, hints, numbers, render, rendercache, shared, textfacts, tiles
+from . import assets, hints, numbers, render, rendercache, scales, shared, textfacts, tiles
 from .assets import Asset, AssetCatalogue, FolderCatalogue
 from .adapters import StrictProblem, strict_problems
 from .datasets import (CACHE_EXTERNAL, CACHE_STATUSES, DATASET_ID, DATASET_PREFIX,
@@ -78,6 +78,7 @@ from .dispatch import REF, Call, CallContext, Toolbox, collect_warnings
 from .limits import LimitError, Limits
 from .logs import CallRecord
 from .numbers import NumberRules, NumberText
+from .scales import Scale, ScaleValue, Step
 from .prompts import SYSTEM, system_prompt
 from .registry import (ACCEPT, ANY_ROLE, CORE, EDIT, RESOLVE, REVIEW, ROLES, Param, Tool,
                        ToolGroup, array, boolean, build_schema, free_object, integer, names_as,
@@ -98,7 +99,7 @@ __all__ = [
     "Asset", "AssetCatalogue", "Blob", "CACHE_EXTERNAL", "CACHE_STATUSES", "FolderCatalogue", "assets", "CORE", "Call", "CallContext", "CallError", "CallRecord", "DATASET_ID",
     "DATASET_PREFIX", "DEFAULT_LOCALE", "Dataset", "DatasetEntry", "DefaultLocale", "DocumentEntry", "DocumentFormat",
     "ERROR_CODES", "LOCALE_FIELDS", "NumberRules", "NumberText", "REF", "Image", "LimitError", "Limits", "Output", "Param",
-    "Result", "Rows", "SYSTEM", "TYPE_LABELS",
+    "Result", "Rows", "SYSTEM", "Scale", "ScaleValue", "Step", "TYPE_LABELS",
     "InProcess", "Session", "SessionView", "StepOwner", "StrictProblem", "SubprocessPool", "SubsetError", "ThreadRunner", "Tool", "ToolError", "ToolGroup", "Toolbox",
     "WorkerPool", "ContentStore", "available_cpus", "content_key", "default_workers",
     "render", "rendercache", "run_all",
@@ -106,6 +107,6 @@ __all__ = [
     "collect_warnings", "dataset_id", "doc_order", "fold_ref", "free_object", "gil_enabled", "integer", "locale_of",
     "row_range",
     "names_as", "number", "obj", "openai_image_tokens",
-    "page_list", "page_text", "part_entries", "hints", "numbers", "shared", "textfacts", "tiles", "strict_problems", "string", "system_prompt", "tool", "truncate", "validate_call",
+    "page_list", "page_text", "part_entries", "hints", "numbers", "scales", "shared", "textfacts", "tiles", "strict_problems", "string", "system_prompt", "tool", "truncate", "validate_call",
     "worker_task",
 ]

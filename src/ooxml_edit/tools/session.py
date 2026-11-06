@@ -242,6 +242,13 @@ class DocumentFormat:
     #: shape's or a cell's own text, with the spans written by reference marked, and
     #: without tables and charts placed from a source.  ``None``: the kind's documents give none (refused).
     number_texts: Callable[[Any, Mapping[str, Any]], Iterable[Any]] | None = None
+    #: Round 36 (R31): the values a scale's targets name in the call's document
+    #: (``style_by_value`` and ``check``'s ``scale``, :mod:`.scales`):
+    #: ``scale_values(call, scale, scope) ->`` :class:`~.scales.ScaleValue` items, each the
+    #: value's text, the step it is styled with now and where it is; ``scope`` the check's
+    #: arguments that narrow it (empty when applying).  ``None``: the kind styles no values
+    #: by a scale (refused).
+    scale_values: Callable[[Any, Any, Mapping[str, Any]], Iterable[Any]] | None = None
     #: Keeps where values placed from a source came from, in the saved document:
     #: ``store_provenance(document, address, record)``, with ``address`` the table or chart
     #: the values went into and ``record`` an :mod:`ooxml_edit.provenance` record (a dict:

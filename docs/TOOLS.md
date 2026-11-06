@@ -624,6 +624,18 @@ declares (`Tool.facts`: `ppt_set_text`'s texts and runs, a table's cells, `repla
   text instead of a function (Word's "slide references are for decks"), which works with
   no deck format loaded too.
 
+**Values styled by a scale** (0.85.0, production round 36, R31; `ooxml_edit.tools.scales`).
+A scale is given once by the caller -- `{"name": "Score", "steps": [{"min": 1, "fill":
+"C62828", "label": "Low"}, {"min": 2.5, "fill": "F9A825"}, ...], "targets": [...]}` -- and
+`style_by_value(doc, scale)` gives each target's value its step: a document's library makes
+a character style per step (`Score 1 Low`) and shades cells, a deck's fills the shape or
+cell and colours its text. `text` `auto` is white or black, whichever has the higher WCAG 2
+contrast ratio with the fill (`ooxml_edit.contrast.readable_text`). `check(scale=...)` lists
+the values styled with the wrong step, or none, and the one call that fixes them; nothing is
+stored in the document. A library gives `DocumentFormat.scale_values(call, scale, scope)`
+and calls `scales.apply(call, scale, preview, write)` in its handler; the module's notes say
+what a value, a step and a target are.
+
 **Numbers no value holds** (0.83.0, production round 36, R28; `ooxml_edit.tools.numbers`).
 `check` with `include: ["numbers"]` -- opt in, never a default -- reads each paragraph's,
 shape's or table cell's own text and compares its numbers with every value the session

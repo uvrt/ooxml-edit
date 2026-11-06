@@ -64,7 +64,7 @@ import inspect
 from typing import Any, Callable, Mapping
 
 from .. import dates, provenance
-from . import numbers, sources
+from . import numbers, scales, sources
 from .datasets import briefs
 from .registry import (ANY_ROLE, CORE, EDIT, RESOLVE, REVIEW, Param, Tool, ToolGroup, array,
                        boolean, build_schema, free_object, integer, number, obj, string)
@@ -228,6 +228,39 @@ _COPIES = array(obj({"blocks": string("The copy's block or span."),
                                        "block": string("Its block or span.")},
                                       "What it was made from.")}),
                 "Documents: copies compared with their reference.", optional=True)
+
+
+def _scale(description: str, *, optional: bool, described: bool) -> Param:
+    """A scale (round 36, R31; :mod:`.scales`): ``style_by_value``'s, its steps' fields
+    described; ``check``'s the same object, described once (a core tool: its words are paid
+    for in every request)."""
+
+    def say(text: str) -> str | None:
+        return text if described else None
+
+    step = obj({"fill": string(say("RRGGBB.")),
+                "min": number(say("Lowest value; the step runs to the next min."), optional=True),
+                "max": number(say("Highest value; above it, to the next min, no step."),
+                              optional=True),
+                "value": string(say("Or the one value or text it takes."), or_integer=0,
+                                optional=True),
+                "text": string(say("Text colour; auto: white or black, more contrast."),
+                               enum=["auto", "white", "black"], optional=True),
+                "label": string(say("Named in its style."), optional=True)})
+    least = 1 if described else None          # parse refuses an empty list either way
+    return obj({"steps": array(step, say("Lowest first: each a min, or each a value."),
+                               min_items=least),
+                "targets": array(string(), say("Paragraphs, ranges, shapes, cells; a table's "
+                                               "column (/col1); {{d:x/*/y}} written values."),
+                                 min_items=least),
+                "name": string(say("Names the styles: Score -> Score 1 Low. Default Step."),
+                               optional=True)},
+               description, optional=optional)
+
+
+_SCALE = _scale("Steps given once, and the values they style.", optional=False, described=True)
+_CHECK_SCALE = _scale("As style_by_value's: its values with the wrong step or none.",
+                      optional=True, described=False)
 
 
 def _checked_documents(arguments: Mapping[str, Any]) -> list[str]:
@@ -435,10 +468,14 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
                           "others listed.", optional=True),
           # Round 35, R18 and R19: some blocks' facts; copies against their reference.
           "range": _BLOCK_RANGES,
-          "copies": _COPIES},
+          "copies": _COPIES,
+          # Round 36, R31: values styled by a scale's steps or not (scales.with_scale).
+          "scale": _CHECK_SCALE},
          refs=("slides[]",), documents=_checked_documents,
-         wrap=lambda fn: numbers.with_numbers(
+         wrap=lambda fn: scales.with_scale(numbers.with_numbers(
              _with_layout_options(_with_taken(fn, "check", ("range", "copies"))),
+             scope=("slides", "pages", "range"),
+             asks=("boxes", "spacing", "contrast", "min_size", "styles", "copies")),
              scope=("slides", "pages", "range"),
              asks=("boxes", "spacing", "contrast", "min_size", "styles", "copies")),
          # Round 36, R28: numbers in text no value holds, against every open workbook.
@@ -449,7 +486,8 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
          # measured (docx-agent refuses it); add "docx" here when it is.
          kind_fields={"slides": _SLIDES, "boxes": ("pptx",), "spacing": ("pptx",),
                       "contrast": ("pptx",), "pages": _PAGES, "min_size": ("docx",),
-                      "styles": ("docx",), "range": ("docx",), "copies": ("docx",)},
+                      "styles": ("docx",), "range": ("docx",), "copies": ("docx",),
+                      "scale": ("pptx", "docx")},
          # The facts each kind reports: a document's handler refuses a deck's; a deck's
          # notes reflow and fields as "documents only".  validate, layout and app are both's.
          kind_values={"include": {"fit": ("pptx",), "collisions": ("pptx",),
@@ -572,6 +610,16 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
           "language": string("Editing language, e.g. en-US.", optional=True),
           "subject": string("Subject.", optional=True)},
          group=MISC, mutates=True),
+    # Round 36, R31: values styled by a scale given once (scales.apply in each kind's
+    # handler); preview reads.  Strict where the limits leave room (a library lists it last).
+    Spec(scales.TOOL,
+         "Style values by a scale given once: each target's value picks its step, whose fill "
+         "and text colour it gets (documents: a character style per step, cell shading; decks: "
+         "direct). check with scale finds values styled wrong.",
+         {"doc": _DOC,
+          "scale": _SCALE,
+          "preview": boolean("Report each value's step, change nothing.", optional=True)},
+         group=MISC, mutates=True, reads=lambda arguments: bool(arguments.get("preview"))),
     # S15
     Spec("read_blob",
          "Read a text input blob (CSV, Markdown, plain text, JSON) a page at a time. Open "
