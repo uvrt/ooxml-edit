@@ -64,6 +64,7 @@ from __future__ import annotations
 
 import bisect
 import functools
+import math
 import re
 import threading
 import weakref
@@ -209,8 +210,10 @@ class Found:
 
 _SPACE = "[   ]"
 _MINUS = "-−‒–"
-_CANDIDATE = re.compile(r"(?<![\w#§№.,])(?P<sign>[" + _MINUS + r"]?)(?P<body>\d+(?:(?:[.,'’]|"
-                        + _SPACE + r"(?=\d{3}(?!\d)))\d+)*)")
+_CANDIDATE = re.compile(r"(?<![\w#§№.,])(?P<sign>[" + _MINUS + r"]?)(?P<body>\d+(?:[.,'’]\d+)*)")
+#: The same where the locale groups thousands with a space: ``1 234,5``.
+_SPACED = re.compile(r"(?<![\w#§№.,])(?P<sign>[" + _MINUS + r"]?)(?P<body>\d+(?:(?:[.,'’]|"
+                     + _SPACE + r"(?=\d{3}(?!\d)))\d+)*)")
 _PERCENT = re.compile(_SPACE + r"?(?:(%)|(‰)|(?:per\s?cent|percent|procent|prozent|pour\s?cent)"
                       r"(?![\w]))", re.IGNORECASE)
 _SCALES = {"k": 1000, "thousand": 1000, "duizend": 1000, "m": 10**6, "mn": 10**6,
@@ -306,7 +309,8 @@ def find_numbers(text: str, locale: Any, rules: NumberRules = DEFAULT_RULES,
     def aside_for(reason: str) -> None:
         aside[reason] = aside.get(reason, 0) + 1
 
-    for match in _CANDIDATE.finditer(text):
+    spaced = getattr(locale, "thousands_separator", ",") in " \u00a0\u202f"
+    for match in (_SPACED if spaced else _CANDIDATE).finditer(text):
         start, end = match.start("body"), match.end("body")
         sign = match.group("sign")
         before = text[match.start() - 1] if match.start() > 0 else ""
@@ -390,8 +394,10 @@ def shown(code: str | None) -> tuple[int, bool, int] | None:
 
 
 def _rounded(value: float, decimals: int) -> float:
-    exact = Decimal(repr(value)).quantize(Decimal(1).scaleb(-decimals), rounding="ROUND_HALF_UP")
-    return float(exact)
+    """``value`` (not negative) rounded half up to ``decimals``: an index key, compared
+    within a tolerance, so a float's last bit does not matter."""
+    scale = 10 ** decimals
+    return math.floor(value * scale + 0.5 + 1e-9) / scale
 
 
 # -- the index of values -------------------------------------------------------------------------
@@ -434,16 +440,18 @@ class Index:
         hundred: list[tuple[float, int]] = []
         for at, source in enumerate(self.sources):
             dataset = source.dataset
-            formats = getattr(dataset, "formats", None)
-            types = dataset.types
+            formats = getattr(dataset, "formats", None) or ()
+            types = dataset.types or ()
+            readings = [shown(formats[c] if c < len(formats) else None)
+                        for c in range(len(dataset.columns))]
+            percents = [(c < len(types) and types[c] == "percent") or
+                        (reading is not None and reading[1])
+                        for c, reading in enumerate(readings)]
             for r, row in enumerate(dataset.rows):
                 for c, item in enumerate(row):
                     if not _is_number(item):
                         continue
-                    code = formats[c] if formats is not None and c < len(formats) else None
-                    reading = shown(code)
-                    percent = (types is not None and types[c] == "percent") or \
-                        bool(reading and reading[1])
+                    reading, percent = readings[c], percents[c]
                     i = len(self.values)
                     self.values.append(Value(at, r, c, float(item), percent, reading))
                     magnitude = abs(float(item))

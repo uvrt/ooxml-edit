@@ -161,6 +161,14 @@ def test_decimals_and_percentages_are_read_in_the_locale():
     assert found[3][3] == 1000
 
 
+def test_a_space_groups_thousands_only_where_the_locale_does():
+    assert [f[0] for f in _read("123.4 567.8 and 12.5")[0]] == ["123.4", "567.8", "12.5"]
+    fr = dataclasses.replace(Locale(), decimal_separator=",", thousands_separator="\u202f",
+                             language="fr-FR", date_order="dmy", list_separator=";")
+    assert _read("soit 1\u202f234,5 et 2,5", fr)[0] == [
+        ("1\u202f234,5", Decimal("1234.5"), 1, None, False), ("2,5", Decimal("2.5"), 1, None, False)]
+
+
 def test_the_other_conventions_decimal_is_read_as_a_reader_would():
     found, aside = _read("Prijs 2.7 euro voor 2.500 stuks", NL_BE)
     assert found == [("2.7", Decimal("2.7"), 1, None, False)]
