@@ -64,7 +64,7 @@ import inspect
 from typing import Any, Callable, Mapping
 
 from .. import dates, provenance
-from . import sources
+from . import numbers, sources
 from .datasets import briefs
 from .registry import (ANY_ROLE, CORE, EDIT, RESOLVE, REVIEW, Param, Tool, ToolGroup, array,
                        boolean, build_schema, free_object, integer, number, obj, string)
@@ -145,7 +145,8 @@ class Spec:
                  kind_fields: Mapping[str, tuple[str, ...]] | None = None,
                  kind_values: Mapping[str, Mapping[str, tuple[str, ...]]] | None = None,
                  kind_descriptions: Mapping[str, Mapping[str, str]] | None = None,
-                 kind_neutral: Mapping[str, tuple[Any, ...]] | None = None) -> None:
+                 kind_neutral: Mapping[str, tuple[Any, ...]] | None = None,
+                 value_reads: Callable[[Mapping[str, Any]], bool] | None = None) -> None:
         self.name = name
         self.description = description
         self.params = dict(params)
@@ -191,6 +192,8 @@ class Spec:
         #: What every kind's handler runs inside: the shared part of a tool's work (taking
         #: ``edit_chart``'s rows from a source), done once here for every library.
         self.wrap = wrap
+        #: :attr:`~.registry.Tool.value_reads`.
+        self.value_reads = value_reads
 
     def make(self, handlers: Mapping[str | None, Callable[..., Any]]) -> Tool:
         if self.wrap is not None:
@@ -205,7 +208,8 @@ class Spec:
                     reads=self.reads,
                     aliases=self.aliases, role=self.role, action_roles=self.action_roles,
                     kind_fields=self.kind_fields, kind_values=self.kind_values,
-                    kind_descriptions=self.kind_descriptions, kind_neutral=self.kind_neutral)
+                    kind_descriptions=self.kind_descriptions, kind_neutral=self.kind_neutral,
+                    value_reads=self.value_reads)
 
     @property
     def schema(self) -> dict[str, Any]:
@@ -408,7 +412,7 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
           "pages": _pages(". Default all"),
           "include": array(string(enum=[
               "fit", "collisions", "facts", "design", "validate", "reflow", "fields", "layout",
-              "app"]),
+              "app", "numbers"]),
               "Default: fit, collisions, validate (decks); validate, reflow, fields "
               "(documents).", optional=True),
           "boxes": boolean("Decks: also text boxes that overlap where their text does not. "
@@ -433,7 +437,12 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
           "range": _BLOCK_RANGES,
           "copies": _COPIES},
          refs=("slides[]",), documents=_checked_documents,
-         wrap=lambda fn: _with_layout_options(_with_taken(fn, "check", ("range", "copies"))),
+         wrap=lambda fn: numbers.with_numbers(
+             _with_layout_options(_with_taken(fn, "check", ("range", "copies"))),
+             scope=("slides", "pages", "range"),
+             asks=("boxes", "spacing", "contrast", "min_size", "styles", "copies")),
+         # Round 36, R28: numbers in text no value holds, against every open workbook.
+         value_reads=lambda arguments: numbers.INCLUDE in (arguments.get("include") or ()),
          # Round 23, V3: each library's toolbox is sent only its kind's parameters; a call
          # that passes another's still gets that handler's refusal (kept, as before).
          # contrast stays a deck's: Word text against shading or a page colour is not
@@ -445,7 +454,9 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
          # notes reflow and fields as "documents only".  validate, layout and app are both's.
          kind_values={"include": {"fit": ("pptx",), "collisions": ("pptx",),
                                   "facts": ("pptx",), "design": ("pptx",),
-                                  "reflow": ("docx",), "fields": ("docx",)}},
+                                  "reflow": ("docx",), "fields": ("docx",),
+                                  # docx when docx-agent gives its texts (number_texts).
+                                  "numbers": ("pptx",)}},
          kind_descriptions={"include": {"pptx": "Default: fit, collisions, validate.",
                                         "docx": "Default: validate, reflow, fields."}}),
     # S10, S11: edit_chart reads too

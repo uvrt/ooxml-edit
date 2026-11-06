@@ -296,6 +296,12 @@ class Tool:
     #: :attr:`kind_fields` apply to it too.  ``None``: every kind.
     #: Not part of the definition (:meth:`same_definition`).
     kinds_served: tuple[str, ...] | None = None
+    #: Round 36: whether a call reads the values of every open document whose format lists
+    #: them (:attr:`~.session.DocumentFormat.value_sources`) -- ``check`` with
+    #: ``include: ["numbers"]`` -- a function of its arguments; the dispatcher holds those
+    #: documents' locks for it, for reading.  ``None``: never.  Not part of the
+    #: definition (:meth:`same_definition`).
+    value_reads: Callable[[Mapping[str, Any]], bool] | None = None
     #: Round 33 (R16c): work a changing call does *ahead* of its change, per document kind
     #: as :attr:`handlers`: ``ahead(call, **arguments)``, run before the call's undo step
     #: with :attr:`~.dispatch.Call.may_unlock` true outside a batch, so that slow reading

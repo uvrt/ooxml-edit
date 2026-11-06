@@ -184,7 +184,10 @@ class Dataset:
     the producer keeps; not compared, not read here.  ``cache``: how many of the formula
     cells the values were read from have each of :data:`CACHE_STATUSES`, and how many refer
     to another file (:data:`CACHE_EXTERNAL`), ``None`` when none was a formula (see the
-    module's notes); not compared.  :meth:`from_records` makes one of records, as Python
+    module's notes); not compared.  ``formats``: each column's number format as its source
+    shows it (an Office number format code, ``0.0``, ``0.0%``; ``None`` for General or
+    none), ``None`` when the producer knows none -- what a check of numbers reads a
+    value's shown rounding from (:mod:`.numbers`); not compared.  :meth:`from_records` makes one of records, as Python
     code has them.
     """
 
@@ -195,6 +198,7 @@ class Dataset:
     types: tuple[str | None, ...] | None = None
     detail: Any = field(default=None, compare=False, repr=False)
     cache: Mapping[str, int] | None = field(default=None, compare=False)
+    formats: tuple[str | None, ...] | None = field(default=None, compare=False)
 
     def __post_init__(self) -> None:
         columns = tuple(self.columns)
@@ -219,6 +223,13 @@ class Dataset:
                 raise ArgumentError("a dataset has a type label per column")
             object.__setattr__(self, "types", types)
         object.__setattr__(self, "cache", _cache(self.cache))
+        if self.formats is not None:
+            formats = tuple(self.formats)
+            if len(formats) != len(columns) or not all(
+                    code is None or isinstance(code, str) for code in formats):
+                raise ArgumentError("a dataset has a number format (a string, or None) per "
+                                    "column")
+            object.__setattr__(self, "formats", formats)
 
     @property
     def invalidated(self) -> bool:
@@ -314,7 +325,8 @@ class Dataset:
             raise ArgumentError(f"the dataset has {count} rows; there is no row {end}")
         sources = None if self.sources is None else self.sources[first - 1:end]
         return Dataset(self.columns, self.rows[first - 1:end], sources=sources,
-                       keys=self.keys, types=self.types, cache=self.cache)
+                       keys=self.keys, types=self.types, cache=self.cache,
+                       formats=self.formats)
 
 
 def _cache(counts: Any) -> dict[str, int] | None:

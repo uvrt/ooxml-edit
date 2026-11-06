@@ -241,6 +241,8 @@ USED_BY: dict[str, dict[str, str]] = {
         "DocumentFormat": "docx-agent, pptx-agent, xlsx-agent",
         "FolderCatalogue": "docx-agent, pptx-agent",
         "InProcess": "docx-agent, pptx-agent",
+        "NumberRules": "pptx-agent",
+        "NumberText": "pptx-agent",
         "Param": "pptx-agent",
         "REF": "xlsx-agent",
         "REVIEW": "docx-agent, pptx-agent",

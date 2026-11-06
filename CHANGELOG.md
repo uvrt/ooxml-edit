@@ -4,6 +4,29 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet. Each vers
 reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
 earlier ones were never tagged.
 
+## 0.83.0 -- unreleased
+- **Numbers in text no value holds** (production round 36, R28): `check`'s `include` takes
+  `numbers` (opt in, never a default; `ooxml_edit.tools.numbers`). Per paragraph, shape or
+  table cell, its numbers that no value of the session's datasets or of its open
+  documents' listed tables matches within the rounding the text shows (2.66 shown as `2,7`
+  matches) are listed as `unverified`, with the two nearest values, their references and
+  sources; numbers a value matches but that were typed are listed as `typed`, with the
+  `replace_text` call that writes them by reference when it writes the same number.
+  Decimals and percentages only by default; dates, times, years, list numbers, ids and
+  numbers named by the word before them (section 4.2, version 2.1) are left aside and
+  counted. Locale-aware (`1.234,5` / `1,234.5`, `85 %` as 0.85 or 85 points, `‰`, scale
+  words). Capped (`texts`, `per_text`; `texts_left_out`, `more`).
+- `NumberRules` (`ignore`, `whole_numbers`, `texts`, `per_text`): the application's, on
+  `Toolbox(numbers=...)` and `toolbox.session(numbers=...)`; `Session.numbers`.
+- `DocumentFormat.number_texts(call, scope)` (the texts a check reads, as `NumberText`) and
+  `DocumentFormat.value_sources(document)` (a document's tables whose values text may
+  quote); `Dataset.formats` (each column's number format, kept by `row_slice`);
+  `Tool.value_reads` and `Spec(value_reads=...)`: the dispatcher holds every document that
+  lists values for a call that reads them (a lone call, `batch`, `read_batch`).
+- `check`'s include enum gains `numbers` for decks (`kind_values`): +3 estimated tokens in
+  a deck's core and every definition; a document's and a workbook's definitions unchanged.
+  No parameter added: strict sets and optional counts unchanged.
+
 ## 0.82.0 -- unreleased
 - **Reopening a document under its earlier id** (production round 35, R23):
   `Session.open(data, name, doc_id="d1")`, and `doc_id` on `Session.adopt` and
