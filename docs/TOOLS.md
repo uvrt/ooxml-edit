@@ -38,6 +38,16 @@ for out in session.take_outputs():                             # files a tool sa
     store(out.name, out.data)
 ```
 
+Ids count up in open order (`d1`, `d2`, ...) and are never handed out twice. An application
+resuming a run from its saved state reopens each document under the id its saved conversation
+names, in any order: `session.open(data, name, doc_id="d1")` (also `adopt` and `open_blob`;
+round 35, R23, 0.82.0). An id that is open is refused (an `ArgumentError` naming the
+document that has it and saying to close it, or to open without `doc_id`), and so is one not
+of the session's form (`d` and a whole number from 1, no leading zero); closing a document
+frees its id for this. The counter skips every id given so: after `open(..., doc_id="d3")`
+the counted ids are `d1`, `d2`, `d4`. The `open_document` tool takes no id: a model opens a
+blob under the next one.
+
 Calls on one document run one at a time in the order the model emitted them; calls on
 different documents run concurrently. A mutating call is one undo step, and a failed one
 changes nothing. Saving refuses new validation problems unless the application (never the
