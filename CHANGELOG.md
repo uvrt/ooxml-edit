@@ -4,6 +4,36 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet. Each vers
 reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
 earlier ones were never tagged.
 
+## 0.85.0 -- unreleased
+- **Values styled by a scale given once** (production round 36, R31, "apply once";
+  `ooxml_edit.tools.scales`). A new shared tool, `style_by_value(doc, scale, preview)`
+  (deferred, in `shared_misc`): a scale is `steps` -- each a `fill` (`RRGGBB`), a `text`
+  colour (`white`, `black` or `auto`: whichever has the higher WCAG 2 contrast ratio with the
+  fill, a tie to black) and a `label`, taking either a `min` (to the next step's; a `max`
+  makes a gap, which is then meant) or an exact `value` (a number or a text) -- with its
+  `targets` and a `name`. Steps out of order, overlapping, mixing min and value, or whole
+  values with one skipped (1, 2, 4) are refused with the way out and an example scale; a
+  step whose colours fall below 4.5:1 is said. A value is its target's text read as one
+  number in the session's locale (`2,5`; `85 %` is 85; `3/5` is 3) or, for text steps, its
+  text. Each library reads its targets (`DocumentFormat.scale_values`, returning
+  `ScaleValue`s: the value, the step it is styled with now, whether exactly) and writes the
+  steps; the engine chooses, reports each target (value, step, `was`, `unchanged`, or
+  `skipped` with why; at most 40, `left_out`), one undo step, `preview` writes nothing (a
+  read). `check(scale=...)` (both formats) lists the values styled with another step than
+  their value's (`wrong`, with `differs` where the step is right but its colours are not)
+  or none (`none`), scoped by `slides`/`pages`/`range`, at most 20 (`left_out`), skipped
+  ones apart, and `fix`: the one `style_by_value` call that restyles them. Nothing is kept
+  in the document: the caller passes the scale again; the scale alone asks only for its
+  fact. Targets: a table's column `<table>/col<n>` (body cells) and `{{...}}` references
+  (`*` one part, `{{*}}` all) are read by every library the same way
+  (`scales.column_target`, `scales.reference_matches`).
+- `ooxml_edit.contrast`: WCAG 2's `luminance`, `ratio` and `readable_text` (white or black
+  for a fill), one reading for every library (pptx-agent's contrast check uses it).
+- Tokens (offline estimate): `check`'s `scale` (its nested fields undescribed) +158 in a
+  deck's and a document's core; `style_by_value` about +464 to every definition of a library
+  that offers it. `style_by_value` is strict only where Claude's limits leave room (a
+  library lists it last); OpenAI strict schemas valid.
+
 ## 0.84.0 -- unreleased
 - `check`'s include enum gains `numbers` for documents too (`kind_values`, production
   round 36, R28): docx-agent gives a document's texts (`DocumentFormat.number_texts`).
