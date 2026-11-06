@@ -49,6 +49,8 @@ What is here:
   memory, sized in bytes (:class:`ContentStore`);
 * :mod:`.logs` -- call records with argument digests, not content;
 * :mod:`.hints` -- what a name that is no tool means: a tool, and an action of it;
+* :mod:`.numbers` -- ``check``'s numbers no value holds: reading numbers in a locale, the
+  index of a session's values, the fact, and the application's :class:`NumberRules`;
 * :mod:`.render` -- one render pipeline for every format: a format's :class:`~.render.Renderer`
   adapter, and the rest shared -- the cache keys, the worker tasks, the PNG checks;
 * :mod:`.tiles` -- contact images: many rendered views tiled into one labelled image
@@ -67,7 +69,7 @@ out as bytes to the application, and no tool may take a path.  Like :mod:`ooxml_
 this subpackage is optional, and the core never imports it.
 """
 
-from . import assets, hints, render, rendercache, shared, textfacts, tiles
+from . import assets, hints, numbers, render, rendercache, shared, textfacts, tiles
 from .assets import Asset, AssetCatalogue, FolderCatalogue
 from .adapters import StrictProblem, strict_problems
 from .datasets import (CACHE_EXTERNAL, CACHE_STATUSES, DATASET_ID, DATASET_PREFIX,
@@ -75,6 +77,7 @@ from .datasets import (CACHE_EXTERNAL, CACHE_STATUSES, DATASET_ID, DATASET_PREFI
 from .dispatch import REF, Call, CallContext, Toolbox, collect_warnings
 from .limits import LimitError, Limits
 from .logs import CallRecord
+from .numbers import NumberRules, NumberText
 from .prompts import SYSTEM, system_prompt
 from .registry import (ACCEPT, ANY_ROLE, CORE, EDIT, RESOLVE, REVIEW, ROLES, Param, Tool,
                        ToolGroup, array, boolean, build_schema, free_object, integer, names_as,
@@ -94,7 +97,7 @@ __all__ = [
     "ACCEPT", "ANY_ROLE", "EDIT", "RESOLVE", "REVIEW", "ROLES", "role_set",
     "Asset", "AssetCatalogue", "Blob", "CACHE_EXTERNAL", "CACHE_STATUSES", "FolderCatalogue", "assets", "CORE", "Call", "CallContext", "CallError", "CallRecord", "DATASET_ID",
     "DATASET_PREFIX", "DEFAULT_LOCALE", "Dataset", "DatasetEntry", "DefaultLocale", "DocumentEntry", "DocumentFormat",
-    "ERROR_CODES", "LOCALE_FIELDS", "REF", "Image", "LimitError", "Limits", "Output", "Param",
+    "ERROR_CODES", "LOCALE_FIELDS", "NumberRules", "NumberText", "REF", "Image", "LimitError", "Limits", "Output", "Param",
     "Result", "Rows", "SYSTEM", "TYPE_LABELS",
     "InProcess", "Session", "SessionView", "StepOwner", "StrictProblem", "SubprocessPool", "SubsetError", "ThreadRunner", "Tool", "ToolError", "ToolGroup", "Toolbox",
     "WorkerPool", "ContentStore", "available_cpus", "content_key", "default_workers",
@@ -103,6 +106,6 @@ __all__ = [
     "collect_warnings", "dataset_id", "doc_order", "fold_ref", "free_object", "gil_enabled", "integer", "locale_of",
     "row_range",
     "names_as", "number", "obj", "openai_image_tokens",
-    "page_list", "page_text", "part_entries", "hints", "shared", "textfacts", "tiles", "strict_problems", "string", "system_prompt", "tool", "truncate", "validate_call",
+    "page_list", "page_text", "part_entries", "hints", "numbers", "shared", "textfacts", "tiles", "strict_problems", "string", "system_prompt", "tool", "truncate", "validate_call",
     "worker_task",
 ]

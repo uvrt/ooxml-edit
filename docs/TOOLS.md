@@ -624,6 +624,52 @@ declares (`Tool.facts`: `ppt_set_text`'s texts and runs, a table's cells, `repla
   text instead of a function (Word's "slide references are for decks"), which works with
   no deck format loaded too.
 
+**Numbers no value holds** (0.83.0, production round 36, R28; `ooxml_edit.tools.numbers`).
+`check` with `include: ["numbers"]` -- opt in, never a default -- reads each paragraph's,
+shape's or table cell's own text and compares its numbers with every value the session
+holds: its datasets, and the tables of its open documents whose format lists them. A
+number no value matches is **unverified** (not "wrong"), listed with the two nearest values,
+their references and sources; a number a value matches that was typed, not written by
+reference, is listed under `typed` with its reference and, when the reference writes the
+same number, the `replace_text` call that writes it as one (`{{t:Scores/door/mean:0.0}}`;
+`writes` says the text when the locale writes it otherwise). Several values alike: `from`
+lists three and `matches` counts them, no fix. A dataset's value and the table cell it was
+derived from (sharing a source) count once, the dataset's.
+
+- **The match rule**: within the rounding the text shows -- a number with `d` decimals
+  matches every value within half a unit of its last digit (`2,7` matches 2.65 to 2.75),
+  and a value whose number format shows fewer decimals also as shown (2.649 shown `0.00`
+  is 2.65, which `2.7` matches). A percentage matches a fraction (`85%`: 0.845 to 0.855)
+  and percentage points (84.5 to 85.5); a bare number matches a `percent` column times 100;
+  a scale word (`2.5m`, `1,2 mln`) compares it scaled and as it is. A written sign must
+  agree; no sign matches either (a fall of 2.7 is -2.7).
+- **Read in the session's locale**: `1.234,5` or `1,234.5`, grouping only before groups of
+  three; `2.7` in a decimal-comma locale is read as 2.7 (no group of three follows). `%`,
+  `‰` and the words percent, procent, Prozent, pour cent. `2-3` is two numbers, `2,7/5` two.
+- **Left aside, counted by reason** (`left_aside`): dates and times (`12/03/2026`,
+  `2026-03-12`, `14:05`, `14.30 uur`, a day by a month name), years (1800-2199), list
+  numbers (a paragraph's leading `1.`, `2)`, `2.3 Results`), ids (digits joined to letters,
+  after `#` or `§`, several dots, or named by the word before: section, page, version,
+  hoofdstuk...), whole numbers without a percent sign (`whole`; with them on, `scales`: the
+  `5` of `2,7/5`), and the application's ignore list (`ignored`). Text written by
+  reference and tables and charts placed with `from` are not read: they carry provenance.
+- **The application's rules**, never a tool argument: `Toolbox(numbers=NumberRules(...))`
+  or `toolbox.session(numbers=...)` (a mapping of the fields too): `ignore` (numbers, and
+  phrases whose numbers are no figures: `"ISO 9001"`), `whole_numbers` (off), `texts` (20)
+  and `per_text` (5), the caps: `texts_left_out` and each text's `more` count the rest,
+  `left_out_hint` says how to see them.
+- **The format hooks**: `DocumentFormat.number_texts(call, scope)` gives the texts
+  (`NumberText`: `at`, `text`, `written` spans, the `replace_text` `scope` that names
+  where it is, `where` for the reader), `scope` the check's arguments that narrow it; a kind
+  without it refuses `numbers` with the way out. `DocumentFormat.value_sources(document)`
+  lists the addresses of a document's tables (`t:Scores`), read with the format's resolver;
+  `Dataset.formats` gives each column's number format (an Office code; `None`: General).
+  `Tool.value_reads` makes the dispatcher hold those documents for reading (a lone call,
+  `batch`, `read_batch`). The index of values is kept per session while no dataset or
+  source document changes.
+- Sent to decks only for now (`kind_values`): a document's toolbox gets `numbers` when
+  docx-agent gives its texts.
+
 **Date patterns** (0.38.0, round 6, R9; `ooxml_edit.dates`). A text fact, a table placed
 with `from` (the format libraries' `date_format`) and a chart added with `from`
 (`edit_chart`'s `date_format`) take a pattern in Excel's date letters:

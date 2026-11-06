@@ -84,6 +84,7 @@ from ooxml_common.locales import EN_US, Locale
 from .datasets import DATASET_PREFIX, DatasetEntry, dataset_id
 from .limits import LimitError, Limits, check_declared_type, check_image, check_package
 from .logs import CallRecord
+from .numbers import NumberRules, rules_of
 from .registry import role_set
 from .results import ToolError
 from ..errors import ArgumentError, ArgumentTypeError
@@ -228,6 +229,19 @@ class DocumentFormat:
     #: when no such format is loaded.
     own_facts: dict[str, Callable[[Any, str], tuple[str, Mapping[str, Any]]] | str] = \
         field(default_factory=dict)
+    #: Round 36: the addresses of this format's documents whose values text may quote --
+    #: its tables, ``["t:Scores", "t:Costs"]`` -- read with the resolver of
+    #: :attr:`datasets` when a check of numbers compares text with values (:mod:`.numbers`):
+    #: ``value_sources(document) -> addresses``.  Each dataset's
+    #: :attr:`~.datasets.Dataset.formats` say how its values are shown.  ``None``: none.
+    value_sources: Callable[[Any], Iterable[str]] | None = None
+    #: Round 36: the texts of the call's document a check of numbers reads (``check``'s
+    #: ``include: ["numbers"]``, :mod:`.numbers`): ``number_texts(call, scope) ->``
+    #: :class:`~.numbers.NumberText` items, ``scope`` the check's arguments given that
+    #: narrow it (pages, blocks; refs resolved as the check's).  Each is a paragraph's, a
+    #: shape's or a cell's own text, with the spans written by reference marked, and
+    #: without tables and charts placed from a source.  ``None``: the kind's documents give none (refused).
+    number_texts: Callable[[Any, Mapping[str, Any]], Iterable[Any]] | None = None
     #: Keeps where values placed from a source came from, in the saved document:
     #: ``store_provenance(document, address, record)``, with ``address`` the table or chart
     #: the values went into and ``record`` an :mod:`ooxml_edit.provenance` record (a dict:
@@ -649,6 +663,9 @@ class Session:
     :class:`ooxml_common.locales.Locale`); ``None``, the default, is en-US.  ``roles`` is
     what the session's calls may do (:data:`~.registry.ROLES`, any of ``review``,
     ``resolve``, ``accept`` and ``edit``); ``None``, the default, is all four: every tool.
+    ``numbers`` is the application's rules for ``check``'s numbers -- its ignore list,
+    whole numbers -- a :class:`~.numbers.NumberRules` (or a mapping of its fields);
+    ``None``, the default, is :data:`~.numbers.DEFAULT_RULES`.
     :meth:`view` gives an agent the same session with fewer roles.
     """
 
@@ -659,7 +676,7 @@ class Session:
     def __init__(self, formats: Iterable[DocumentFormat] = (), *, clock: Clock | None = None,
                  limits: Limits | None = None, on_output: Callable[[Output], None] | None = None,
                  session_id: str | None = None, font_dirs: Any = None,
-                 locale: Any = None, roles: Any = None) -> None:
+                 locale: Any = None, roles: Any = None, numbers: Any = None) -> None:
         self.id = session_id or uuid.uuid4().hex[:12]
         #: The roles whose calls the toolbox runs here; a call outside them is refused.
         self.roles: tuple[str, ...] = role_set(roles)
@@ -667,6 +684,10 @@ class Session:
         self.font_dirs: tuple[str, ...] | None = font_dirs_of(font_dirs)
         #: The regional settings of the session's documents; en-US unless given.
         self.locale: Any = locale_of(locale)
+        #: The application's rules for ``check``'s numbers (:class:`~.numbers.NumberRules`).
+        self.numbers: NumberRules = rules_of(numbers)
+        #: The index of values a check of numbers built last, and what it was built of.
+        self._number_index: Any = None
         self.clock: Clock = clock or utc_now
         self.created_at = self.clock()
         self.limits = limits or Limits()

@@ -100,6 +100,7 @@ from . import adapters, prompts, textfacts
 from .hints import action_hints, tool_hints
 from .datasets import (DATASET_PREFIX, Dataset, DatasetEntry, check_dataset_id,
                        dataset_id, row_range, rows_text)
+from .numbers import NumberRules, rules_of
 from .limits import LimitError, Limits
 from .logs import CallRecord, digest, log_call, logger, shape
 from .registry import (ACCEPT, ANY_ROLE, CORE, EDIT, RESOLVE, ROLES, Tool, ToolGroup,
@@ -836,7 +837,8 @@ class Toolbox:
                  error_map: Mapping[type[BaseException], Any] | None = None,
                  strict_first: Sequence[str] | None = None,
                  runner: Any = None, font_dirs: Any = None, locale: Any = None,
-                 roles: str | Iterable[str] | None = None, prewarm: bool = True) -> None:
+                 roles: str | Iterable[str] | None = None, prewarm: bool = True,
+                 numbers: Any = None) -> None:
         """``workers`` worker processes render and lay out (:class:`~.worker.WorkerPool`);
         ``None`` (the default) is what this process may use -- its CPUs and its container's
         CPU quota, at most eight (:func:`~.worker.default_workers`).  One call's views
@@ -883,7 +885,12 @@ class Toolbox:
         toolbox makes and of :meth:`definitions`, :meth:`allowed_tools` and
         :meth:`system_prompt`; each takes ``roles=`` to override it.  ``None``, the
         default, is all four: every tool, the definitions and prompt as without roles.  A
-        call outside the session's roles is refused, inside ``batch`` too."""
+        call outside the session's roles is refused, inside ``batch`` too.
+
+        ``numbers`` -- the rules of ``check``'s numbers (round 36): the application's ignore
+        list and whether whole numbers are compared, a :class:`~.numbers.NumberRules` (or a
+        mapping of its fields) -- is the default of the sessions this toolbox makes.  Not a
+        tool argument."""
         self.formats: dict[str, DocumentFormat] = {fmt.kind: fmt for fmt in formats}
         self.tools: dict[str, Tool] = _served(_with_format_tools(merge_tools(tools),
                                                                  self.formats.values()))
@@ -904,6 +911,8 @@ class Toolbox:
         self.font_dirs: tuple[str, ...] | None = font_dirs_of(font_dirs)
         #: The default :attr:`Session.locale` of the sessions this toolbox makes.
         self.locale: Any = locale_of(locale)
+        #: The default :attr:`Session.numbers` of the sessions this toolbox makes.
+        self.numbers: NumberRules = rules_of(numbers)
         #: The default roles of the sessions, definitions and prompt (:data:`~.registry.ROLES`).
         self.roles: tuple[str, ...] = role_set(roles)
         self._workers = default_workers() if workers is None else workers
@@ -940,17 +949,19 @@ class Toolbox:
     def session(self, *, clock: Clock | None = None, limits: Limits | None = None,
                 on_output: Callable[[Output], None] | None = None,
                 font_dirs: Any = _TOOLBOX_DEFAULT, locale: Any = _TOOLBOX_DEFAULT,
-                roles: Any = _TOOLBOX_DEFAULT) -> Session:
+                roles: Any = _TOOLBOX_DEFAULT, numbers: Any = _TOOLBOX_DEFAULT) -> Session:
         """A new session.  ``font_dirs`` replaces the toolbox's :attr:`font_dirs` for this
         session (``None``: the renderers' default; ``[]``: no folders of the
         application's, ``OOXML_FONT_DIRS`` not read either); ``locale`` the toolbox's
         :attr:`locale` (``None``: en-US) -- one user's or client's own; ``roles`` the
-        toolbox's :attr:`roles` (``None``: all), to match the definitions sent for it."""
+        toolbox's :attr:`roles` (``None``: all), to match the definitions sent for it;
+        ``numbers`` the toolbox's :attr:`numbers` (``None``: the defaults)."""
         return Session(self.formats.values(), clock=clock, limits=limits or self.limits,
                        on_output=on_output,
                        font_dirs=self.font_dirs if font_dirs is _TOOLBOX_DEFAULT else font_dirs,
                        locale=self.locale if locale is _TOOLBOX_DEFAULT else locale,
-                       roles=self.roles if roles is _TOOLBOX_DEFAULT else roles)
+                       roles=self.roles if roles is _TOOLBOX_DEFAULT else roles,
+                       numbers=self.numbers if numbers is _TOOLBOX_DEFAULT else numbers)
 
     def tool_named(self, name: Any, notes: list[str] | None = None) -> Any:
         """The tool name ``name`` stands for: itself, or the name after the last dot when a
@@ -1714,9 +1725,14 @@ class Toolbox:
         """``arguments`` with every address in a declared source qualified with its document
         (``t:sales`` -> ``d2/t:sales``), and those documents, in order.  Datasets (``d:``)
         are left as they are.  ``hint(value)``: words added to a ``not_found``."""
-        if not tool.sources and not tool.facts:
-            return arguments, []
         found: list[str] = []
+        if tool.value_reads is not None and tool.value_reads(arguments):
+            # Round 36: a check of numbers reads every open document's values.
+            found += [doc for doc, entry in session.documents.items()
+                      if getattr(session.formats.get(entry.kind), "value_sources", None)
+                      is not None]
+        if not tool.sources and not tool.facts:
+            return arguments, found
         documents = dict(session.documents)
 
         def resolve(value: Any, where: str) -> Any:
@@ -1775,7 +1791,8 @@ class Toolbox:
             tool = self.tools.get(self.tool_named(op.get("tool", ""))) \
                 if isinstance(op, Mapping) else None
             args = op.get("arguments") if isinstance(op, Mapping) else None
-            if tool is None or not (tool.sources or tool.facts) or not isinstance(args, Mapping):
+            if tool is None or not (tool.sources or tool.facts or tool.value_reads) or \
+                    not isinstance(args, Mapping):
                 continue
             try:
                 docs = self._sources(session, tool, dict(args))[1]
