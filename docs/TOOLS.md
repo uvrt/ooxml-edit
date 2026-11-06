@@ -667,8 +667,9 @@ derived from (sharing a source) count once, the dataset's.
   `Tool.value_reads` makes the dispatcher hold those documents for reading (a lone call,
   `batch`, `read_batch`). The index of values is kept per session while no dataset or
   source document changes.
-- Sent to decks only for now (`kind_values`): a document's toolbox gets `numbers` when
-  docx-agent gives its texts.
+- Sent to decks and documents (`kind_values`; documents from 0.84.0, when docx-agent gives
+  its texts: each body paragraph's and table cell's, and the text written by reference kept
+  per paragraph).
 
 **Date patterns** (0.38.0, round 6, R9; `ooxml_edit.dates`). A text fact, a table placed
 with `from` (the format libraries' `date_format`) and a chart added with `from`

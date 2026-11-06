@@ -66,7 +66,7 @@ def grid_table(grid: Grid, address: str) -> Dataset:
     name, _, key = address[len("t:"):].partition("/")
     if name not in grid.tables:
         raise ToolError("not_found", f"no table {name!r}", valid_options=sorted(grid.tables))
-    header, rows, formats = grid.tables[name]
+    header, rows, formats, *keyed = grid.tables[name]
     numbered = list(enumerate(rows))
     if key:
         key = key[1:-1].replace("''", "'") if key.startswith("'") else key
@@ -76,8 +76,8 @@ def grid_table(grid: Grid, address: str) -> Dataset:
             raise ToolError("not_found", f"no row {key!r} in {name}")
     sources = [[(f"{name}!{chr(65 + c)}{i + 2}",) for c in range(len(header))]
                for i, _ in numbered]
-    return Dataset(header, [row for _, row in numbered], sources=sources, keys=1,
-                   formats=formats)
+    return Dataset(header, [row for _, row in numbered], sources=sources,
+                   keys=keyed[0] if keyed else 1, formats=formats)
 
 
 GRID = DocumentFormat(kind="xlsx", open=lambda data: Grid({}), detect=lambda data, name: False,
@@ -450,11 +450,11 @@ def test_the_workbooks_are_held_for_reading_in_a_batch_and_read_batch_too(toolbo
     assert "t:Scores/door/mean" in str(result.to_json())
 
 
-def test_only_decks_are_offered_numbers_until_documents_give_their_texts():
+def test_decks_and_documents_are_offered_numbers():
     sent = shared.SPECS["check"].make({"pptx": board_check.handlers["pptx"]}).canonical
     assert "numbers" in sent["properties"]["include"]["items"]["enum"]
     word = shared.SPECS["check"].make({"docx": lambda call, **a: None}).canonical
-    assert "numbers" not in word["properties"]["include"]["items"]["enum"]
+    assert "numbers" in word["properties"]["include"]["items"]["enum"]
 
 
 def test_a_datasets_formats_are_checked_and_kept_by_a_slice():
@@ -462,3 +462,12 @@ def test_a_datasets_formats_are_checked_and_kept_by_a_slice():
     assert found.row_slice(2).formats == (None, "0.0")
     with pytest.raises(ValueError):
         Dataset(("a", "b"), [("x", 1.5)], formats=("0.0",))
+
+
+def test_a_table_not_keyed_by_its_first_column_is_quoted_by_row_position(toolbox):
+    session = toolbox.session(clock=CLOCK)
+    session.adopt(Board({"s:256": [("256.2", "door rated 2.66 overall", [])]}), "pptx", "board.pptx")
+    session.adopt(Grid({"Plain": (*SCORES, 0)}), "xlsx", "plain-made-up.xlsx")
+    typed = numbers_of(check(toolbox, session, include=["numbers"]))["texts"][0]["typed"][0]
+    assert typed["from"] == "t:Plain/#1/mean"           # its resolver reads no key "door"
+    assert typed["fix"]["arguments"]["replace"] == "door rated {{t:Plain/#1/mean:0.00}} overall"

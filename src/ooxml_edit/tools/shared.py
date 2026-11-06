@@ -455,8 +455,9 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
          kind_values={"include": {"fit": ("pptx",), "collisions": ("pptx",),
                                   "facts": ("pptx",), "design": ("pptx",),
                                   "reflow": ("docx",), "fields": ("docx",),
-                                  # docx when docx-agent gives its texts (number_texts).
-                                  "numbers": ("pptx",)}},
+                                  # Round 36: both, each format giving its texts
+                                  # (DocumentFormat.number_texts).
+                                  "numbers": ("pptx", "docx")}},
          kind_descriptions={"include": {"pptx": "Default: fit, collisions, validate.",
                                         "docx": "Default: validate, reflow, fields."}}),
     # S10, S11: edit_chart reads too

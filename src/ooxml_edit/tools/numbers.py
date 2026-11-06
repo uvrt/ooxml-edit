@@ -75,6 +75,7 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 from ooxml_common.dates import NAMES as _DATE_NAMES
 
 from ..errors import ArgumentError
+from .datasets import DATASET_PREFIX
 from .results import Result, ToolError
 from .sources import label, number as _is_number, resolve as resolve_rows
 from .textfacts import quote
@@ -625,12 +626,15 @@ def index_of(call: Any) -> tuple[Index, list[str]]:
 
 def _address(index: Index, value: Value) -> str:
     """The reference of one value, as a model writes it: its source, the row by its key
-    (the first column's label, when no other row has it) or by position, the column."""
+    (the first column's label, when no other row has it -- of a document's table, only
+    when the table is keyed by its first column, ``Dataset.keys``, as its resolver reads a
+    key) or by position, the column."""
     source = index.sources[value.source]
     dataset = source.dataset
     keys = index.keys(value.source)
     key = keys[value.row]
-    unique = key is not None and value.column != 0 and keys.count(key) == 1 and \
+    keyed = source.shown.startswith(DATASET_PREFIX) or bool(dataset.keys)
+    unique = keyed and key is not None and value.column != 0 and keys.count(key) == 1 and \
         not re.fullmatch(r"#\d+", key)
     part = quote(key) if unique and key is not None else f"#{value.row + 1}"
     return f"{source.shown}/{part}/{quote(dataset.columns[value.column])}"
