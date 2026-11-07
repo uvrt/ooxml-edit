@@ -495,3 +495,16 @@ def test_a_label_read_as_a_value_scale_says_how_and_text_steps_still_work():
         texts = scale(steps=[{"value": "Low", "fill": "C62828"}, {"value": "High", "fill": "2E7D32"}],
                       targets=["a1"])
         assert box.dispatch(session, "check", {"doc": "d1", "scale": texts}).data["scale"]["right"] == 1
+
+
+def test_several_labels_with_no_value_kept_are_unrecorded_too():
+    # A cell merged with another holds both labels, one per line, and neither record.
+    with _box() as box:
+        session = _session(box, {"a1": ["High\nLow", None, None], "a2": ["High\n2", None, None]})
+        found = box.dispatch(session, "check", {"doc": "d1", "scale": labels(targets=["a1", "a2"])}).data["scale"]
+        assert found["unrecorded"] == [{"target": "a1", "slide": "a", "shows": "High\nLow", "label_of": [3, 1]}]
+        assert found["skipped"][0]["why"] == "'High 2' is not one number, nor a step's label"
+        result = box.dispatch(session, "style_by_value", {"doc": "d1", "scale": labels(targets=["a1"])})
+        assert result.data["targets"][0]["skipped"].startswith(
+            "'High Low' holds the labels of steps 3, 1, one per line, and no value is recorded for it: "
+            "write its one value there")

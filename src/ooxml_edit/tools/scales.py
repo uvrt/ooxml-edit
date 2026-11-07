@@ -67,7 +67,8 @@ needs a label, and no two the same.  The value a label stands for is, in order:
   session can (a dataset, a table of a document it holds; :meth:`CallContext.fact`) --
   so a record's value changed since is seen -- or else the value recorded;
 * a step's label with no record names no value: it is reported (``unrecorded``), never
-  guessed.
+  guessed -- so are several labels, one per line, with none (a table cell merged with
+  another: ``label_of`` lists their steps).
 
 ``style_by_value`` writes the label (keeping the text's own formatting, the step's
 style or colours over it) and the record; ``unchanged`` where the label, the style and the
@@ -638,6 +639,8 @@ class Reading:
     recorded: bool = False
     unread: str | None = None
     unrecorded: Step | None = None
+    #: Every step whose label the text holds, one per line, when it holds several.
+    several: tuple[Step, ...] = ()
 
 
 def read(call: Any, scale: Scale, value: ScaleValue) -> Reading:
@@ -674,6 +677,15 @@ def read(call: Any, scale: Scale, value: ScaleValue) -> Reading:
         return Reading(said=text, label=True, unrecorded=step,
                        why=f"{_quote(text)} is step {step.n}'s label, and no value is recorded for it: "
                        "write its value there (typed, or by reference {{d:...}}), then label it")
+    lines = [line for line in text.split("\n") if line.strip()]
+    steps = [scale.step_of_label(line) for line in lines]
+    if len(lines) > 1 and all(s is not None for s in steps):
+        held = tuple(s for s in steps if s is not None)
+        return Reading(said=text, label=True, unrecorded=held[0], several=held,
+                       why=f"{_quote(text)} holds the labels of steps "
+                       f"{', '.join(str(s.n) for s in held)}, one per line, and no value is recorded "
+                       "for it: write its one value there (typed, or by reference {{d:...}}), then "
+                       "label it")
     return Reading(said=text, why=f"{_quote(text)} is not one number, nor a step's label")
 
 
@@ -830,7 +842,9 @@ def report(call: Any, given: Any, scope: Mapping[str, Any]) -> dict[str, Any]:
         reading = read(call, scale, value)
         step = reading.step
         if reading.unrecorded is not None:
-            unrecorded.append({**entry, "shows": value.text, "label_of": reading.unrecorded.n})
+            unrecorded.append({**entry, "shows": value.text,
+                               "label_of": [s.n for s in reading.several] if reading.several
+                               else reading.unrecorded.n})
             continue
         entry["value"] = reading.said
         if scale.labels and reading.label:
