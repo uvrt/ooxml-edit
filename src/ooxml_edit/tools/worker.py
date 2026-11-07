@@ -113,6 +113,7 @@ only a process can be stopped at a deadline.
 from __future__ import annotations
 
 import importlib
+import inspect
 import io
 import math
 import logging
@@ -301,8 +302,17 @@ def takes_affinity(runner: Any) -> bool:
 def takes_lane(runner: Any) -> bool:
     """Whether ``runner.run`` takes ``lane`` and ``on_late`` (the module's notes): this
     module's runners do; an application's own runner says so with a true ``takes_lane``
-    attribute, else they are left out of what it is handed."""
-    return isinstance(runner, (_Pool, _Threads)) or getattr(runner, "takes_lane", False) is True
+    attribute, else they are left out of what it is handed -- as they are where ``run`` has
+    been replaced by one that does not name them (a test's stand-in passing its keywords on
+    to the task)."""
+    if getattr(runner, "takes_lane", False) is True:
+        return True
+    if not isinstance(runner, (_Pool, _Threads)):
+        return False
+    try:
+        return "lane" in inspect.signature(getattr(runner, "run")).parameters
+    except (TypeError, ValueError):
+        return False
 
 
 def bootstrapping_worker() -> bool:

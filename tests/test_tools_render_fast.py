@@ -206,3 +206,10 @@ def test_other_work_asked_to_overrun_is_finished_too():
         with pytest.raises(ToolError, match="finishes it"):
             pool.run(tools_toys.keep_value, "layout", 1, 0.9, timeout=0.6, overrun=True)
         assert pool.run(tools_toys.worker_pid, timeout=60) == before and pool.killed == []
+
+
+def test_a_pools_run_replaced_by_one_naming_no_lane_is_handed_none():
+    with WorkerPool(1) as pool:
+        assert takes_lane(pool)
+        pool.run = lambda fn, *args, timeout=None, **kwargs: fn(*args, **kwargs)
+        assert not takes_lane(pool)

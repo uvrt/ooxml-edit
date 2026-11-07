@@ -197,7 +197,8 @@ _PRIMARY: Any = object()
 
 def _queues(pool: Any) -> bool:
     """Whether ``pool.run`` takes ``queue_timeout``: this package's runners do."""
-    return isinstance(pool, (WorkerPool, SubprocessPool, ThreadRunner, InProcess))
+    return (isinstance(pool, (WorkerPool, SubprocessPool, ThreadRunner, InProcess))
+            and takes_lane(pool))
 
 
 class Call:
