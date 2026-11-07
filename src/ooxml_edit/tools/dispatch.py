@@ -733,12 +733,16 @@ class Call:
         self.session.check_images(count)
 
     def output(self, name: str, format: str, data: bytes, *,
-               entry: DocumentEntry | None = None) -> dict[str, Any]:
+               entry: DocumentEntry | None = None, state: bool = False) -> dict[str, Any]:
         """Hand a file to the application, behind the validate gate.
 
         The document's problems now are compared with those it had when opened; a new one
         refuses the save unless the application allowed it (``allow_new_problems``).  The
         model gets the name, format, size and the report -- never the bytes.
+
+        ``state``: the file is the document itself, as it is now, so the output carries the
+        format's state beside the bytes (:attr:`DocumentFormat.state`, :attr:`Output.state`),
+        for the application to open them again with.  Never the model's to see.
         """
         entry = entry or self.entry
         report: dict[str, Any] | None = None
@@ -757,8 +761,13 @@ class Call:
                     raise ToolError("refused", f"saving would add {len(new)} validation "
                                     "problem(s); fix them first", valid_options=new,
                                     details={"validate": report})
+        kept = None
+        if state and entry is not None:
+            fmt = self.session.formats.get(entry.kind)
+            if fmt is not None and fmt.state is not None:
+                kept = fmt.state(entry.document)
         output = Output(name=name, format=format, data=data,
-                        doc=entry.doc_id if entry else None, validate=report)
+                        doc=entry.doc_id if entry else None, validate=report, state=kept)
         self.session.add_output(output)
         return output.describe()
 

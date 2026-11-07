@@ -211,8 +211,33 @@ class History:
         Monotonic in the sense that a step never reuses a number, even after undo; undo and
         redo restore the number of the state they bring back.  A batch counts once, when the
         outermost one closes, and a batch that fails leaves the version as it was.
+        :meth:`continue_from` numbers a reopened document's states after an earlier history's.
         """
         return self._version
+
+    @property
+    def last_version(self) -> int:
+        """The highest number any state of this history had: the next step gets one more."""
+        return self._last_version
+
+    def continue_from(self, version: int, last: int | None = None) -> None:
+        """Number this history's states after an earlier one's, for a document saved and
+        opened again: the state as opened is ``version`` (the number its content had when it
+        was saved) and the next step gets ``last + 1`` (``last``: the highest number the
+        earlier history gave, ``version`` when not given), so no number means two states.
+
+        Only before any step, outside a batch: the numbers already given stay what they mean.
+        A ``ValueError`` otherwise, or for a number below 0 or a ``last`` below ``version``."""
+        last = version if last is None else last
+        if isinstance(version, bool) or isinstance(last, bool) or not isinstance(version, int) \
+                or not isinstance(last, int) or version < 0 or last < version:
+            raise ValueError(f"continue_from takes whole numbers 0 <= version <= last, not "
+                             f"version={version!r}, last={last!r}")
+        if self._undo or self._redo or self._undone or self._batch_depth or self._last_version:
+            raise ValueError("continue_from numbers a history before its first step; this one "
+                             f"has steps (version {self._version})")
+        self._version = version
+        self._last_version = last
 
     # -- watching --------------------------------------------------------------------------
 

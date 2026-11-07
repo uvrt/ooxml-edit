@@ -288,6 +288,16 @@ class DocumentFormat:
     #: no arguments, registered (:func:`~.worker.worker_task`).  Its time is no call's
     #: (:mod:`.worker`).  ``None``: nothing.
     warm_up: Callable[[], Any] | None = None
+    #: What a document keeps beside its bytes for being opened again -- what the file
+    #: cannot hold without changing what Office reads (a Word document's retired ids):
+    #: ``state(document) -> str``, opaque to the tool layer, describing the document as it
+    #: is now.  :meth:`Session.save` and a save tool's output (:attr:`Output.state`) carry
+    #: it; :meth:`Session.open`'s ``state`` hands it back.  ``None``: the format keeps none.
+    state: Callable[[Any], Any] | None = None
+    #: Opens bytes with the state saved beside them: ``open_with_state(data, state) ->
+    #: document``.  It refuses a state that is not these bytes' (an
+    #: :class:`~ooxml_edit.errors.ArgumentError` saying what to pass instead).
+    open_with_state: Callable[[bytes, Any], Any] | None = None
 
 
 #: :attr:`DocumentEntry.render_keys` and :attr:`DocumentEntry.font_keys`, in entries.
@@ -354,10 +364,30 @@ class Output:
     data: bytes = field(repr=False)
     doc: str | None = None
     validate: dict[str, Any] | None = None
+    #: The document's state beside these bytes (:attr:`DocumentFormat.state`), when the
+    #: output is the document itself and its format keeps one: store it with the bytes and
+    #: pass it to :meth:`Session.open` (``state=``) to open them again.  Never in
+    #: :meth:`describe`: the model does not see it.
+    state: Any = field(default=None, repr=False)
 
     def describe(self) -> dict[str, Any]:
         return {"name": self.name, "format": self.format, "size": len(self.data),
                 "doc": self.doc, "validate": self.validate}
+
+
+@dataclass(frozen=True)
+class SavedDocument:
+    """An open document's bytes and the state to open them again with, taken at one
+    version under its lock (:meth:`Session.save`)."""
+
+    doc: str
+    name: str
+    kind: str
+    version: int
+    data: bytes = field(repr=False)
+    #: :attr:`DocumentFormat.state` of the document at :attr:`version`; ``None`` when the
+    #: format keeps none.  Opaque: store it as it is, beside :attr:`data`.
+    state: Any = field(default=None, repr=False)
 
 
 @dataclass(frozen=True)
@@ -583,6 +613,11 @@ _DOC_ID = re.compile(r"^d(\d+)$")
 _GIVEN_DOC_ID = re.compile(r"d[1-9][0-9]*")
 
 
+class StateRefused(ArgumentError):
+    """:meth:`Session.open` refused the ``state`` it was given: not the state of these bytes,
+    or one their format does not keep.  The message says what to pass instead."""
+
+
 class _DocIdTaken(ArgumentError):
     """An id given to :meth:`Session.open` is open already (a race :meth:`Session.open_blob`
     must not mistake for a bad blob)."""
@@ -731,7 +766,7 @@ class Session:
     # -- documents ---------------------------------------------------------------------------
 
     def open(self, data: bytes, name: str, *, kind: str | None = None,
-             source: str = "app", doc_id: str | None = None) -> str:
+             source: str = "app", doc_id: str | None = None, state: Any = None) -> str:
         """Open a document from bytes and return its id (``d1``).
 
         ``doc_id`` reopens it under an id of the application's choosing -- the one a resumed
@@ -739,14 +774,32 @@ class Session:
         number from 1 (``d3``).  An id that is open is refused (an :class:`ArgumentError`
         naming the document that has it); a closed one is free again.  The counter never
         hands out an id given here: after ``open(..., doc_id="d3")`` the counted ids skip
-        ``d3``."""
+        ``d3``.
+
+        ``state`` is what was saved beside these bytes (:meth:`save`'s
+        :attr:`SavedDocument.state`, a save tool's :attr:`Output.state`): the document goes
+        on from where it was (a Word document's retired ids stay retired).  The format
+        refuses a state that is not these bytes' (:attr:`DocumentFormat.open_with_state`);
+        ``None`` (or an empty value) opens the bytes alone, as before."""
         data = _require_bytes(data, "open")
         if doc_id is not None:
             self._free_id(_given_doc_id(doc_id))
         fmt = self._format_for(data, name, kind)
+        if isinstance(state, (str, bytes, dict, list, tuple)) and not state:
+            state = None                        # "" or {}: no state given
+        open_with_state = fmt.open_with_state
+        if state is not None and open_with_state is None:
+            raise StateRefused(f"{name} is a {fmt.kind} document, and that format keeps no state "
+                                "beside its bytes: open it without state")
         check_package(data, self.limits, name)
         self._room_for_document(len(data))
-        document = fmt.open(data)
+        if state is None or open_with_state is None:
+            document = fmt.open(data)
+        else:
+            try:
+                document = open_with_state(data, state)
+            except ArgumentError as exc:
+                raise StateRefused(str(exc)) from exc
         return self.adopt(document, fmt.kind, name, source=source, size=len(data),
                           doc_id=doc_id)
 
@@ -820,6 +873,20 @@ class Session:
         with entry.lock:
             return {str(address): dict(found)
                     for address, found in (hook(entry.document) or {}).items()}
+
+    def save(self, doc_id: str) -> SavedDocument:
+        """The open document ``doc_id``'s bytes (``document.to_bytes()``) and the state to
+        open them again with (:attr:`DocumentFormat.state`; ``None`` for a format that keeps
+        none), both of one version, under the document's lock: store the two together, and
+        reopen with ``open(saved.data, saved.name, doc_id=saved.doc, state=saved.state)``.
+        Writes nothing anywhere: the application keeps them where it keeps its run."""
+        entry = self.entry(doc_id)
+        fmt = self.formats.get(entry.kind)
+        with entry.lock:
+            data = entry.snapshot()
+            state = fmt.state(entry.document) if fmt is not None and fmt.state is not None else None
+            return SavedDocument(doc=doc_id, name=entry.name, kind=entry.kind,
+                                 version=entry.version, data=data, state=state)
 
     def close(self, doc_id: str) -> list[str]:
         """Close a document; the addresses of the datasets derived from it, which stay,
@@ -1008,16 +1075,18 @@ class Session:
             return blob
 
     def open_blob(self, handle: str, *, kind: str | None = None,
-                  doc_id: str | None = None) -> str:
+                  doc_id: str | None = None, state: Any = None) -> str:
         """Open a blob (:meth:`add_blob`) as a document (what an ``open_document`` tool does);
-        ``doc_id`` as :meth:`open` takes it, an application's alone (the tool has none)."""
+        ``doc_id`` and ``state`` as :meth:`open` takes them, an application's alone (the tool
+        has neither)."""
         blob = self.blob(handle)
         if doc_id is not None:
             self._free_id(_given_doc_id(doc_id))
         try:
-            return self.open(blob.data, blob.name, kind=kind, source=handle, doc_id=doc_id)
-        except _DocIdTaken:
-            raise                               # opened under it meanwhile: not the blob's fault
+            return self.open(blob.data, blob.name, kind=kind, source=handle, doc_id=doc_id,
+                             state=state)
+        except (_DocIdTaken, StateRefused):
+            raise                               # the application's argument, not the blob's fault
         except LimitError as exc:
             raise ToolError("limit", str(exc)) from None
         except ValueError as exc:

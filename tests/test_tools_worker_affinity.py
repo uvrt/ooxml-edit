@@ -13,7 +13,6 @@ from ooxml_edit.tools import InProcess, SubprocessPool, ThreadRunner, WorkerPool
 from ooxml_edit.tools import worker as worker_module
 from ooxml_edit.tools.worker import takes_affinity
 
-import synthetic
 import tools_toys
 
 POOLS = [pytest.param(lambda: WorkerPool(2), id="processes"),

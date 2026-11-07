@@ -48,6 +48,24 @@ frees its id for this. The counter skips every id given so: after `open(..., doc
 the counted ids are `d1`, `d2`, `d4`. The `open_document` tool takes no id: a model opens a
 blob under the next one.
 
+Some formats keep a state beside the bytes, for what the file cannot hold without changing
+what Office reads (docx-agent: which ids a Word document has had, so none is given to another
+block after the reopen; round 38, 0.89.0). Take the bytes and the state together and hand both
+back:
+
+```python
+saved = session.save("d1")             # SavedDocument: data, state, doc, name, kind, version
+store(saved.doc, saved.data, saved.state)
+# ... later, in another process:
+session.open(data, "report.docx", doc_id="d1", state=state)
+```
+
+`Session.save` takes both at one version under the document's lock; a save tool's output
+carries its own (`Output.state`; the model never sees it). The state is opaque: store it as
+it is. A state of other bytes, or one for a format that keeps none, is refused
+(`StateRefused`, an `ArgumentError`, saying what to pass instead); `None` opens the bytes
+alone, as before.
+
 Calls on one document run one at a time in the order the model emitted them; calls on
 different documents run concurrently. A mutating call is one undo step, and a failed one
 changes nothing. Saving refuses new validation problems unless the application (never the
@@ -936,7 +954,7 @@ in a daemonic process with work that holds the GIL for 1 s: two such renders at 
 1.08 s with subprocess workers and 2.08 s in-process, and an edit asked for during a render
 returned in 8 ms with subprocess workers and 831 ms in-process.
 
-**Affinity: a task to the worker holding its state (0.88.0, production round 38).** A
+**Affinity: a task to the worker holding its state (0.90.0, production round 38).** A
 worker serves task after task, so what a task leaves in its process -- docx-agent's layout of
 a document and what its text measured -- is there for the next task in that worker, and only
 there. `pool.run(fn, ..., affinity=key, affinity_wait=s)` (also `Call.run`, and the render
