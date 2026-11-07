@@ -278,7 +278,8 @@ def toy_save_text(call, doc, name, format):
     if format != "docx":
         raise ToolError("invalid_arguments", "a text document saves as docx", field="format",
                         valid_options=["docx"])
-    return Result(summary=f"Saved {name}", data=call.output(name, format, call.document.to_bytes()))
+    return Result(summary=f"Saved {name}", data=call.output(name, format, call.document.to_bytes(),
+                                                           state=True))
 
 
 @tool("toy_ppt_find_label", "Find the page with a label. Returns its number.",
