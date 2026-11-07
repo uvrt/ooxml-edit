@@ -248,6 +248,23 @@ with the verb read (`add_row`: "did you mean 'insert_row'?"), else the other too
 action it is ("use x_changes with action accept"). Wording only: the call still fails, and
 no definition changes.
 
+*A tool's name, however it is written* (round 40, 0.93.0). A direct call, a `batch`'s op
+and a `read_batch`'s op read a name the same way (`Toolbox.tool_named`), each reading
+noted in the warnings ("tool 'functions.x_insert_picture' read as 'x_add_picture'"): a
+namespace before it is dropped (`functions.` -- the prefix OpenAI's APIs show a model, the
+only one the adapters' providers add; a Responses group's `charts.`), and a name that is
+another spelling of one tool's -- another verb for the tool's (`insert` for `add`), a
+plural, the format's prefix added or left out (`x_replace_text` for `replace_text`) -- is
+read as that tool (`hints.tool_alias`: N5's second rank, when exactly one tool matches and
+no entry of the format's table reads the name otherwise). An entry of
+`DocumentFormat.tool_hints` is never read so: it names a task another tool does, with
+arguments of its own, and stays a hint. An atomic batch refused for such an op names both
+("ops[2] (functions.x_insert_picture, read as x_add_picture): ..."). A name that is still
+no tool, with no hint, names the nearest real names in the message, not only in
+`valid_options` ("no tool 'x_ad'; the nearest: x_add, x_read, x_half"). The names
+`system_prompt` is given are the application's: a namespace is read there, another
+spelling is not.
+
 *A contact sheet* (N1, 0.49.0): `render` with `sheet` (`{"columns": 4, "width": 480}`, or
 `{}` for the defaults) returns one image of up to 30 slides or pages (`tiles.MAX_TILES`),
 tiled in order, row by row, each labelled under it with what the other tools call it (a

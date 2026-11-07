@@ -150,7 +150,8 @@ def test_what_cannot_run_inside_a_batch_says_so(toolbox, session):
                        "valid_options; call keep_minutes on its own")
     assert outside.error.valid_options == ["app_note"]           # the near names, as before
     near = _batch(toolbox, session, [("app_nte", {"text": "x"})])   # a slip: the near names
-    assert near.error.details["ops"][0]["error"]["message"] == "no tool 'app_nte'"
+    assert near.error.details["ops"][0]["error"]["message"] == (
+        "no tool 'app_nte'; the nearest: app_note, app_put, app_send")
     assert near.error.valid_options[0] == "app_note"
 
 

@@ -97,7 +97,7 @@ from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 from .. import provenance
 from ..errors import ArgumentError, ArgumentTypeError, UnitError
 from . import adapters, prompts, textfacts
-from .hints import action_hints, tool_hints
+from .hints import action_hints, tool_alias, tool_hints
 from .datasets import (DATASET_PREFIX, Dataset, DatasetEntry, check_dataset_id,
                        dataset_id, row_range, rows_text)
 from .numbers import NumberRules, rules_of
@@ -1016,19 +1016,27 @@ class Toolbox:
                        roles=self.roles if roles is _TOOLBOX_DEFAULT else roles,
                        numbers=self.numbers if numbers is _TOOLBOX_DEFAULT else numbers)
 
-    def tool_named(self, name: Any, notes: list[str] | None = None) -> Any:
-        """The tool name ``name`` stands for: itself, or the name after the last dot when a
-        model wrote a namespace before a tool's name (``functions.ppt_set_text``, a group's
-        ``charts.edit_chart``) -- no tool name has a dot.  ``notes`` gets a line for that.
-        The calls a provider sends and a batch's ops are read the same way."""
-        if not isinstance(name, str) or name in self.tools or "." not in name:
+    def tool_named(self, name: Any, notes: list[str] | None = None, *,
+                   aliases: bool = True) -> Any:
+        """The tool name ``name`` stands for: itself; the name after the last dot when a
+        model wrote a namespace before a tool's name (``functions.ppt_set_text``, the
+        prefix OpenAI's APIs show a model; a Responses group's ``charts.edit_chart``) -- no
+        tool name has a dot; and with ``aliases``, the one tool whose name says the same in
+        other words (:func:`.hints.tool_alias`: ``word_replace_text`` for
+        ``replace_text``, ``x_insert_picture`` for ``x_add_picture``), with a namespace or
+        without.  ``notes`` gets a line for each name read as another.  The calls a
+        provider sends, a ``batch``'s and a ``read_batch``'s ops are read the same way
+        (round 40, R44); a name that is none of these is returned as it is."""
+        if not isinstance(name, str) or name in self.tools:
             return name
-        bare = name.rsplit(".", 1)[1]
-        if bare not in self.tools:
+        bare = name.rsplit(".", 1)[1] if "." in name else name
+        meant = bare if bare in self.tools else \
+            tool_alias(bare, self.tools, self.tool_hints) if aliases else None
+        if meant is None:
             return name
         if notes is not None:
-            notes.append(f"tool {name!r} read as {bare!r}")
-        return bare
+            notes.append(f"tool {name!r} read as {meant!r}")
+        return meant
 
     def tool(self, name: str, notes: list[str] | None = None,
              roles: Sequence[str] | None = None) -> Tool:
@@ -1052,7 +1060,8 @@ class Toolbox:
                  and (within != "read_batch" or _reads_some(tool))]
         found = tool_hints(name, self.tools, self.tool_hints)
         usable = [hint for hint in found if self._hint_role(hint, roles) is None]
-        near = difflib.get_close_matches(str(name), [tool.name for tool in tools], 5, 0.5)
+        bare = str(name).rsplit(".", 1)[-1]        # a namespace is no part of the likeness
+        near = difflib.get_close_matches(bare, [tool.name for tool in tools], 5, 0.5)
         message = f"no tool {name!r}"
         if usable:
             message += ": use " + ", or ".join(
@@ -1063,11 +1072,13 @@ class Toolbox:
             message += (f": {found[0]} does that, and needs the "
                         f"{self._hint_role(found[0], roles)} role; this session has "
                         f"{', '.join(roles)}")
-        elif batch and not difflib.get_close_matches(str(name), self.tools, 1, 0.8):
+        elif batch and not difflib.get_close_matches(bare, self.tools, 1, 0.8):
             # No name this close is a slip: likely a tool the application runs itself,
             # outside the toolbox, which a batch cannot reach.
             message += (f" that {within} can run: it runs only the tools in valid_options; "
                         f"call {name} on its own")
+        elif near:
+            message += "; the nearest: " + ", ".join(near[:3])
         barred = {hint.tool for hint in found} - {hint.tool for hint in usable}
         options = list(dict.fromkeys([hint.tool for hint in usable]
                                      + [name for name in near if name not in barred]))[:5]
@@ -1211,7 +1222,7 @@ class Toolbox:
             if not isinstance(item, str):
                 raise ArgumentTypeError(f"system_prompt's tools are names, Tool objects or "
                                         f"definitions, not {type(item).__name__}")
-            name = self.tool_named(item)
+            name = self.tool_named(item, aliases=False)    # the application's own names
             if name in self.tools:
                 found.setdefault(name, self.tools[name])
         return list(found.values())
@@ -1935,7 +1946,10 @@ class Toolbox:
                 tool, clean = self._prepare(op, read, roles)
                 notes += [f"{where}: {note}" for note in read]
             except ToolError as error:
-                said = where if error.field == "tool" else f"{where} ({op.get('tool', '')})"
+                given = op.get("tool", "") if isinstance(op, Mapping) else ""
+                meant = self.tool_named(given)
+                said = where if error.field == "tool" else f"{where} ({given})" \
+                    if meant == given else f"{where} ({given}, read as {meant})"
                 raise ToolError(error.code, f"{said}: {error.message}",
                                 field=f"{where}.{error.field}",
                                 valid_options=error.valid_options,

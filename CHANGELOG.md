@@ -4,6 +4,20 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet. Each vers
 reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
 earlier ones were never tagged.
 
+## 0.93.0 -- unreleased
+- **A tool's name, however it is written** (production round 40, R44). A `batch`'s and a
+  `read_batch`'s ops read a tool's name as a direct call does, and both read more:
+  besides a namespace (`functions.x_set_text`), a name that is another spelling of one
+  tool's -- another verb for the tool's, a plural, the format's prefix added or left out
+  (`x_replace_text` for the shared `replace_text`, `x_insert_picture` for `x_add_picture`)
+  -- runs that tool, with a warning ("tool 'x_replace_text' read as 'replace_text'"), where
+  it was refused with a hint (`hints.tool_alias`; `Toolbox.tool_named(..., aliases=)`).
+  Only when exactly one tool matches and the format's `tool_hints` table does not read the
+  name otherwise: a table entry stays a hint. An atomic batch's refusal of such an op names
+  the tool it was read as. A name that is no tool, with no hint, names the nearest tools in
+  its message ("; the nearest: x_add, x_read, x_half"), not only in `valid_options`. No
+  definition changes: 0 tokens.
+
 ## 0.92.0 -- unreleased
 - **The render lane** (production round 39). Rasterising competed with layouts and checks
   for a pool of two workers: on an 11-writer report renders queued past their deadline ("no

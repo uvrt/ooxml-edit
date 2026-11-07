@@ -130,23 +130,11 @@ def tool_hints(name: Any, tools: Mapping[str, Any], table: Mapping[str, str] | N
     excluded = set(exclude)
     known = {tool_name: tool for tool_name, tool in tools.items() if tool_name not in excluded}
     prefix = prefixes(tools)
-    wanted = _keys(name, prefix)
     tiers: list[list[tuple[tuple[int, ...], Hint]]] = [[] for _ in range(6)]
-
-    for key, target in (table or {}).items():
-        tool_name, _, action = str(target).partition(" ")
-        tool = known.get(tool_name)
-        if tool is None or (action and action not in tool.actions):
-            continue
-        if any(_key(_core(key, prefix)) == want for want in wanted):
-            tiers[0].append(((0,), Hint(tool_name, action or None)))
-
-    for tool_name, tool in known.items():
-        tool_key = _key(_core(tool_name, prefix))
-        if any(tool_key == want for want in wanted):
-            tiers[1].append(((0,), Hint(tool_name)))
-        elif any(len(want) > len(tool_key) and want[:len(tool_key)] == tool_key for want in wanted):
-            tiers[4].append(((len(tool_key),), Hint(tool_name)))
+    tiers[0] = [((0,), hint) for hint in _table_hints(name, known, table, prefix)]
+    same, starts = _same_names(name, known, prefix)
+    tiers[1] = [((0,), hint) for hint in same]
+    tiers[4] = starts
 
     given = _core(name, prefix)
     verbs = [verb(word) for word in given]
@@ -176,6 +164,55 @@ def tool_hints(name: Any, tools: Mapping[str, Any], table: Mapping[str, str] | N
             ranked = sorted(tier, key=lambda pair: pair[0], reverse=True)
             return list(dict.fromkeys(hint for _, hint in ranked))[:MAX_HINTS]
     return []
+
+
+def tool_alias(name: Any, tools: Mapping[str, Any],
+               table: Mapping[str, str] | None = None) -> str | None:
+    """The tool ``name``, which is no tool, is another spelling of: the one tool whose name
+    says the same (rank 2 of the module's: the same words, but for a verb written for the
+    one the tool uses, a plural, or the format's prefix added or left out --
+    ``x_insert_picture`` for ``x_add_picture``, ``x_replace_text`` for ``replace_text``),
+    when no entry of the format's ``table`` reads the name otherwise.  ``None`` when no tool,
+    or more than one, does: a call is then refused with :func:`tool_hints`.  A format's
+    table entry is never an alias (a task another tool does, with its own arguments)."""
+    if not isinstance(name, str) or not name.strip() or "." in name:
+        return None
+    prefix = prefixes(tools)
+    if _table_hints(name, tools, table, prefix):
+        return None
+    same, _ = _same_names(name, tools, prefix)
+    return same[0].tool if len(same) == 1 else None
+
+
+def _table_hints(name: str, known: Mapping[str, Any], table: Mapping[str, str] | None,
+                 prefix: frozenset[str]) -> list[Hint]:
+    """The format's table entries ``name`` is a spelling of (rank 1)."""
+    wanted = _keys(name, prefix)
+    found = []
+    for key, target in (table or {}).items():
+        tool_name, _, action = str(target).partition(" ")
+        tool = known.get(tool_name)
+        if tool is None or (action and action not in tool.actions):
+            continue
+        if any(_key(_core(key, prefix)) == want for want in wanted):
+            found.append(Hint(tool_name, action or None))
+    return found
+
+
+def _same_names(name: str, known: Mapping[str, Any], prefix: frozenset[str]
+                ) -> tuple[list[Hint], list[tuple[tuple[int, ...], Hint]]]:
+    """The tools whose names say the same as ``name`` (rank 2), and those whose names are
+    its start, each with its length in words (rank 5)."""
+    wanted = _keys(name, prefix)
+    same: list[Hint] = []
+    starts: list[tuple[tuple[int, ...], Hint]] = []
+    for tool_name in known:
+        tool_key = _key(_core(tool_name, prefix))
+        if any(tool_key == want for want in wanted):
+            same.append(Hint(tool_name))
+        elif any(len(want) > len(tool_key) and want[:len(tool_key)] == tool_key for want in wanted):
+            starts.append(((len(tool_key),), Hint(tool_name)))
+    return same, starts
 
 
 def _nouns(core: list[str]) -> list[str]:
