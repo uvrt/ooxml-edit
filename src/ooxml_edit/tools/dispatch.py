@@ -703,13 +703,17 @@ class Call:
         them is not handed them).  ``lane``: :data:`~.worker.RENDER_LANE` for a task that
         draws images (:meth:`_lane`).  ``queued``: the wait for a worker bounded on its own
         (:attr:`~.limits.Limits.worker_queue_timeout`), ``timeout`` counting from when one
-        takes the task, as the render lane's (a render's layout, round 39)."""
+        takes the task, and past its deadline its worker finishes it rather than being stopped,
+        as the render lane's (a render's layout, round 39: the worker holds the document's
+        layouts, which a stop would lose)."""
         pool = self.toolbox.pool
         if affinity is not None and takes_affinity(pool):
             kwargs = {**kwargs, "affinity": affinity, "affinity_wait": affinity_wait}
         kwargs.update(self._lane(pool, lane, on_late))
         if queued and _queues(pool):
             kwargs.setdefault("queue_timeout", self.limits.worker_queue_timeout)
+        if queued and takes_lane(pool):
+            kwargs["overrun"] = True
         return pool.run(fn, *args, timeout=timeout or self.limits.render_timeout, **kwargs)
 
     def run_all(self, fn: Callable[..., Any], calls: Sequence[tuple], *,

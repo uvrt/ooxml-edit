@@ -990,7 +990,9 @@ again (1.3-1.5 s, then 0.75 s for its first layout, and the layouts it held gone
   The pool's size, and so its CPUs, are unchanged.
 - Its wait for a worker has its own bound (`Limits.worker_queue_timeout`, 300 s), its
   deadline (`render_timeout` per 4 views) counting from when a worker takes it, as a
-  check's does; a render's layout task is queued the same way (`Call.run(..., queued=True)`).
+  check's does; a render's layout task is queued, and finished past its deadline, the same way
+  (`Call.run(..., queued=True)`; `pool.run(..., overrun=True)`): its worker holds the
+  document's layouts, which stopping it would lose.
 - Past its deadline a render task's worker is not stopped: the call reports `timeout` ("its
   worker finishes it in the background") and the worker goes on for at most as long again
   (`worker.OVERRUN`), then is kept -- the images handed to `on_late`, which the pipeline

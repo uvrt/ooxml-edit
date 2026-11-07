@@ -195,3 +195,14 @@ def test_an_application_runner_is_handed_a_lane_only_when_it_says_it_takes_one()
             assert box.dispatch(session, "toy_draw", {"doc": doc, "pages": [1],
                                                       "shape": "whole"}).ok
         assert seen and seen[-1] == expected
+
+
+def test_other_work_asked_to_overrun_is_finished_too():
+    """A render's layout (``Call.run(..., queued=True)``): its worker holds layouts worth more
+    than the deadline, so it is finished, not stopped."""
+    with WorkerPool(1) as pool:
+        pool.warm(wait=True)
+        before = pool.run(tools_toys.worker_pid, timeout=60)
+        with pytest.raises(ToolError, match="finishes it"):
+            pool.run(tools_toys.keep_value, "layout", 1, 0.9, timeout=0.6, overrun=True)
+        assert pool.run(tools_toys.worker_pid, timeout=60) == before and pool.killed == []

@@ -17,8 +17,8 @@ earlier ones were never tagged.
   reports `timeout`, the worker finishes the work for at most as long again
   (`worker.OVERRUN`), its result handed to `on_late` (the pipeline keeps the images in the
   store), and only one still busy then is stopped (`pool.overruns`). The render pipeline
-  runs all its drawing in the lane, a render's layout task queued the same way
-  (`Call.run(..., queued=True)`), and a whole document's views a view a task (up to 4). Other
+  runs all its drawing in the lane, a render's layout task queued and finished the same way
+  (`Call.run(..., queued=True)`, `run(..., overrun=True)`: its worker holds the layouts), and a whole document's views a view a task (up to 4). Other
   work's deadlines are unchanged.
 - **`render`'s `fast`** (documents): the render pipeline's `draw(..., fast=True)` asks for
   cheaper pixels of the same SVG where the renderer has them (`Renderer.fast`,
