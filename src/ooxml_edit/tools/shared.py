@@ -254,7 +254,11 @@ def _scale(description: str, *, optional: bool, described: bool) -> Param:
                                                "column (/col1); {{d:x/*/y}} written values."),
                                  min_items=least),
                 "name": string(say("Names the styles: Score -> Score 1 Low. Default Step."),
-                               optional=True)},
+                               optional=True),
+                # Round 38: the text shows its step's label, its value kept (scales notes).
+                "show": string(say("label: the text becomes its step's label, the value kept; "
+                                   "check flags labels not their value's."),
+                               enum=list(scales.SHOW), optional=True)},
                description, optional=optional)
 
 
@@ -479,7 +483,8 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
              scope=("slides", "pages", "range"),
              asks=("boxes", "spacing", "contrast", "min_size", "styles", "copies")),
          # Round 36, R28: numbers in text no value holds, against every open workbook.
-         value_reads=lambda arguments: numbers.INCLUDE in (arguments.get("include") or ()),
+         value_reads=lambda arguments: (numbers.INCLUDE in (arguments.get("include") or ())
+                                        or scales.reads_values(arguments)),
          # Round 23, V3: each library's toolbox is sent only its kind's parameters; a call
          # that passes another's still gets that handler's refusal (kept, as before).
          # contrast stays a deck's: Word text against shading or a page colour is not
@@ -619,7 +624,8 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
          {"doc": _DOC,
           "scale": _SCALE,
           "preview": boolean("Report each value's step, change nothing.", optional=True)},
-         group=MISC, mutates=True, reads=lambda arguments: bool(arguments.get("preview"))),
+         group=MISC, mutates=True, reads=lambda arguments: bool(arguments.get("preview")),
+         value_reads=scales.reads_values),
     # S15
     Spec("read_blob",
          "Read a text input blob (CSV, Markdown, plain text, JSON) a page at a time. Open "

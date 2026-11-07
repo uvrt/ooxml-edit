@@ -4,6 +4,28 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet. Each vers
 reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
 earlier ones were never tagged.
 
+## 0.87.0 -- unreleased
+- **A step's label in place of its value** (production round 38; `ooxml_edit.tools.scales`).
+  A scale takes `"show": "label"` (default `value`): `style_by_value` writes each value's
+  step's `label` where the value was -- the text then reads `Low` in the step's colours, not
+  `1,4` -- and the library keeps, where the label is, the value it stands for and its
+  reference (`scales.label_record`; a library reads it back as `ScaleValue.kept`, and gives
+  a value's reference as `ScaleValue.source`). Every step needs a label, no two the same;
+  refused otherwise with the way out. The value a label stands for: the text where it reads
+  as a value (typed, or written by reference; also over an earlier label), else its record's
+  `source` read again now when the session can (a dataset, or a document's table the call
+  holds: `style_by_value` and `check` with such a scale hold them, as `check`'s numbers
+  does), else the value recorded. `check(scale=...)` adds `labels` -- texts that are not
+  their value's label, `why`: it shows the value, a value typed over its label, the value
+  changed (`recorded 1,4, now 2,7`), the label edited (`written 'Low'`), the steps changed --
+  and `unrecorded` (a step's label with no value kept: said, never guessed); `fix` writes
+  them all again in one call. Exact text steps (`value` texts) work as before.
+- `ooxml_edit.provenance`: **labels** -- `labels_after_edit` (a label outlives an edit of its
+  own text: stretched over it, a whole text staying whole; an edit past its edge drops it)
+  and `labels_found` (`whole`: a holder whose label is all its text, read as it is now).
+- `check` and `style_by_value` definitions: the scale's `show` (+1 optional parameter each,
+  enum `value`/`label`).
+
 ## 0.85.0 -- unreleased
 - **Values styled by a scale given once** (production round 36, R31, "apply once";
   `ooxml_edit.tools.scales`). A new shared tool, `style_by_value(doc, scale, preview)`

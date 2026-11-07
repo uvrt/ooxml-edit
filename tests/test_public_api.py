@@ -206,6 +206,8 @@ USED_BY: dict[str, dict[str, str]] = {
         "dumps": "docx-agent, pptx-agent",
         "facts_after_edit": "pptx-agent",
         "facts_found": "pptx-agent",
+        "labels_after_edit": "docx-agent, pptx-agent",
+        "labels_found": "docx-agent, pptx-agent",
         "loads": "docx-agent, pptx-agent",
         "offset": "pptx-agent",
         "place": "pptx-agent",
