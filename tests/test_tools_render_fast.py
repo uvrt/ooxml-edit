@@ -85,21 +85,25 @@ def test_a_render_task_yields_to_other_work_waiting_for_a_worker(make):
         pool.warm(wait=True)
         done: dict = {}
 
-        def run(name, lane, start):
-            time.sleep(start)
-            pool.run(tools_toys.keep_value, name, 1, 0.2, timeout=60, lane=lane)
+        def run(name, lane, seconds):
+            pool.run(tools_toys.keep_value, name, 1, seconds, timeout=120, lane=lane)
             done[name] = time.monotonic()
 
-        threads = [threading.Thread(target=run, args=("busy", None, 0.0)),
-                   threading.Thread(target=run, args=("image", RENDER_LANE, 0.05)),
-                   threading.Thread(target=run, args=("layout", None, 0.15))]
-        busy, image, layout = threads
-        for thread in threads:
-            thread.start()
-        busy.join()
-        # The busy one first; then the layout that came after the image takes the worker.
-        for thread in threads:
+        busy = threading.Thread(target=run, args=("busy", None, 2.0))
+        image = threading.Thread(target=run, args=("image", RENDER_LANE, 0.1))
+        layout = threading.Thread(target=run, args=("layout", None, 0.1))
+        busy.start()
+        time.sleep(0.2)
+        image.start()                                # waits: the worker is busy
+        time.sleep(0.2)
+        layout.start()                               # comes after it, waits too
+        deadline = time.monotonic() + 60
+        while pool._wanting != 1 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert "busy" not in done, "the busy task ended before both waited: too slow a host"
+        for thread in (busy, image, layout):
             thread.join()
+        # The layout that came after the image takes the worker first.
         assert done["busy"] < done["layout"] < done["image"]
 
 
