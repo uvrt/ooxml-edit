@@ -303,7 +303,8 @@ def warm_up(renderer: Renderer) -> None:
 def draw(call: Any, renderer: Renderer, items: Sequence[Any], width: int, *,
          ids: Mapping[Any, Any], fonts: Sequence[str], locale: Any,
          wire: "Mapping[Any, Any] | None" = None, state: Any = None, first_alone: bool = False,
-         on_facts: "Callable[[Any, bool], Any] | None" = None) -> "tuple[dict, list]":
+         on_facts: "Callable[[Any, bool], Any] | None" = None, affinity: Any = None,
+         affinity_wait: float | None = None) -> "tuple[dict, list]":
     """``({item: (png, meta, cached)}, facts)`` for the views ``items`` drawn ``width`` px
     wide, by the call's workers; ``cached`` says an image was not drawn by this call.  An
     item the document does not have is left out of the dict.
@@ -326,7 +327,12 @@ def draw(call: Any, renderer: Renderer, items: Sequence[Any], width: int, *,
     alone, more than one chunk): one chunk is drawn first, by itself, and what
     ``on_facts(facts, True)`` returns -- unless ``None`` -- is the state the other chunks
     are handed (what the first worker decoded, which the others then do not decode again).
-    ``facts`` is every task's that came back, in order."""
+    ``facts`` is every task's that came back, in order.
+
+    ``affinity`` (a :attr:`~Renderer.whole_document` renderer): the layout task goes to the
+    worker that took the last task with that key -- the one holding what ``state`` names,
+    say, so it is not sent -- waited for at most ``affinity_wait`` s while busy
+    (:mod:`.worker`'s notes); the rasterising goes to the others first."""
     entry, version, limits, store = call.entry, call.entry.version, call.limits, call.images
     drawn: dict = {}
     todo = []
@@ -353,7 +359,8 @@ def draw(call: Any, renderer: Renderer, items: Sequence[Any], width: int, *,
     if renderer.whole_document:
         with call.unlocked():
             laid = call.run(lay_out_views, renderer, data, sent, width, list(fonts), locale,
-                            list(held), state, timeout=limits.render_timeout_for(len(todo)))
+                            list(held), state, timeout=limits.render_timeout_for(len(todo)),
+                            affinity=affinity, affinity_wait=affinity_wait)
             fresh = [view for view in laid["views"] if view[2] is not None]
             parallel = min(call.parallelism, len(fresh)) or 1
             chunks = [chunk for chunk in (fresh[start::parallel] for start in range(parallel))

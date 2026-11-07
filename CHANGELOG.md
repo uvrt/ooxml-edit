@@ -4,6 +4,28 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet. Each vers
 reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
 earlier ones were never tagged.
 
+## 0.86.0 -- unreleased
+- **Affinity in the worker pools** (production round 38). A worker serves task after task, so
+  what a task leaves in its process -- a format's layout of a document, what its text
+  measured -- is there for the next task in that worker only. `run(fn, ..., affinity=key,
+  affinity_wait=seconds)` (`WorkerPool`, `SubprocessPool`; `Call.run`; the render pipeline's
+  `draw(..., affinity=, affinity_wait=)` for its layout task) sends a task to the worker
+  that took the last task with the same key: at once when it is idle; while it is busy the
+  task waits for it at most `affinity_wait` seconds -- the caller's rule, the time the work
+  would take done afresh elsewhere, so waiting never costs more than going elsewhere -- and
+  then takes any idle worker, or a new one (it counts against the deadline as any wait for a
+  worker does). A key no worker holds goes to any idle worker; work without a key prefers
+  the idle workers that hold no key (or held one longest ago), so the rasterising of a
+  render goes beside a layout rather than in front of it. A worker that is killed at a
+  deadline, dies or is stopped takes its keys with it; at most `AFFINITY_KEYS` (256) keys
+  are remembered. The pool only chooses the worker: a task must give the same result
+  anywhere, making what it does not find. `affinity_counts` (hit, waited, elsewhere,
+  unheld) and `holder(key)` say where keyed tasks went. `InProcess` and `ThreadRunner` take
+  the keywords and need them not (one process); an application's own runner is handed them
+  only when it has `takes_affinity = True` (`ooxml_edit.tools.worker.takes_affinity`).
+  `affinity` and `affinity_wait` are now `run`'s own keywords, as `queue_timeout` is, not a
+  task's.
+
 ## 0.85.0 -- unreleased
 - **Values styled by a scale given once** (production round 36, R31, "apply once";
   `ooxml_edit.tools.scales`). A new shared tool, `style_by_value(doc, scale, preview)`

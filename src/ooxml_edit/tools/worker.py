@@ -46,6 +46,22 @@ on and its container's CPU quota (cgroup v2 ``cpu.max``, v1 ``cpu.cfs_quota_us``
 :data:`MAX_DEFAULT_WORKERS`.  :func:`run_all` runs several tasks at once over a pool's
 workers, results in order: one call's views, in chunks.
 
+**Affinity: a task to the worker that holds its state.**  A worker serves task after task,
+so what one task leaves in its process -- a format's layout of a document, what its text
+measured -- is there for the next task in that worker, and nowhere else.  ``run(...,
+affinity=key)`` names such state: the pool remembers which worker took the last task with
+``key`` (:data:`AFFINITY_KEYS` keys, the oldest forgotten first; a worker that is killed,
+dies or is stopped takes its keys with it) and sends the next task with ``key`` there --
+at once when it is idle; when it is busy, the task waits for it at most ``affinity_wait``
+seconds (the caller's rule: the time the work would take done afresh, without the state,
+so waiting never costs more than going elsewhere would), then takes any idle worker, or a
+new one.  A key no worker holds goes to any idle worker.  Work without a key prefers the
+idle workers that hold no key, or held one longest ago, so that the holders stay free for
+their keys.  Affinity only chooses the worker: a task must give the same result on any
+worker (state it does not find, it makes again), and the pool counts where its keyed
+tasks went (:attr:`_Pool.affinity_counts`).  :class:`InProcess` and
+:class:`ThreadRunner` take ``affinity`` and need it not: their tasks share one process.
+
 **Three runners** (and a fourth, below).
 
 * :class:`WorkerPool` -- :mod:`multiprocessing` workers, the default.  ``spawn`` is the
@@ -94,6 +110,7 @@ import sys
 import threading
 import time
 import weakref
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from multiprocessing.connection import wait as wait_for
 from typing import Any, Callable, Sequence
@@ -113,6 +130,14 @@ ENTRY_POINT = "ooxml_edit.tools.subworker"
 #: The most workers :func:`default_workers` gives: each is a process with its own renderer
 #: and font index (a few hundred MB), and a call's chunks rarely gain past eight.
 MAX_DEFAULT_WORKERS = 8
+#: How many affinity keys a pool remembers (each, the worker that took its last task):
+#: the oldest is forgotten first, and then goes to any idle worker.
+AFFINITY_KEYS = 256
+#: What :attr:`_Pool.affinity_counts` counts, for each task given a key: ``hit``, its
+#: holder was idle; ``waited``, its holder became idle within ``affinity_wait``;
+#: ``elsewhere``, it was busy longer and another worker took the task; ``unheld``, no worker
+#: held the key (a first task, or one whose holder was killed, died or forgot it).
+AFFINITY_OUTCOMES = ("hit", "waited", "elsewhere", "unheld")
 #: :attr:`_Pool.start_timeout`'s default: seconds to start one worker and warm it.
 START_TIMEOUT = 120.0
 #: A :class:`WorkerPool` worker's process name, which spawn sets before the main module
@@ -237,6 +262,13 @@ def run_all(runner: Any, fn: Callable[..., Any], calls: Sequence[tuple],
     with ThreadPoolExecutor(max_workers=len(calls),
                             thread_name_prefix="ooxml-edit-tools-run-all") as executor:
         return list(executor.map(one, range(len(calls))))
+
+
+def takes_affinity(runner: Any) -> bool:
+    """Whether ``runner.run`` takes ``affinity`` and ``affinity_wait`` (the module's notes):
+    this module's runners do; an application's own runner says so with a true
+    ``takes_affinity`` attribute, else they are left out of what it is handed."""
+    return isinstance(runner, (_Pool, _Threads)) or getattr(runner, "takes_affinity", False) is True
 
 
 def bootstrapping_worker() -> bool:
@@ -445,6 +477,11 @@ class _Pool:
         #: A start failure that would happen again (:attr:`_StartFailed.lasting`): every
         #: later start raises it at once instead of trying.
         self.failed: BaseException | None = None
+        #: Affinity key -> the worker that took the last task with it (module notes).
+        self._holders: OrderedDict[Any, Any] = OrderedDict()
+        #: ``id(worker)`` -> when it last took a task with a key.
+        self._keyed_at: dict[int, float] = {}
+        self._counts = dict.fromkeys(AFFINITY_OUTCOMES, 0)
 
     def _failure(self, exc: BaseException) -> None:
         """Remember ``exc`` if it is lasting (called with the condition held)."""
@@ -465,25 +502,92 @@ class _Pool:
         with self._condition:
             return self._starting
 
-    def _acquire(self, deadline: float, timeout: float) -> tuple[Any, float]:
+    @property
+    def affinity_counts(self) -> dict[str, int]:
+        """Where the tasks given an ``affinity`` key went, so far (:data:`AFFINITY_OUTCOMES`)."""
+        with self._condition:
+            return dict(self._counts)
+
+    def holder(self, key: Any) -> int | None:
+        """The process id of the worker holding ``key`` (that took its last task), or
+        ``None``."""
+        with self._condition:
+            worker = self._holders.get(key)
+            return None if worker is None else (worker.pid or 0)
+
+    def _unhold(self, worker: Any) -> None:
+        """``worker`` leaves the pool: its keys go with it (called with the condition held)."""
+        for key in [key for key, held in self._holders.items() if held is worker]:
+            del self._holders[key]
+        self._keyed_at.pop(id(worker), None)
+
+    def _choose(self, holder: Any, wait_over: bool) -> tuple[Any, str]:
+        """The idle worker a task takes, and how (:data:`AFFINITY_OUTCOMES`; ``""`` for a
+        task without a key), or ``(None, "")`` to wait for the busy ``holder``."""
+        if holder is not None:
+            if holder in self._idle:
+                return holder, "hit"
+            if not wait_over:
+                return None, ""
+        if not self._idle:
+            return None, ""
+        held = {id(worker) for worker in self._holders.values()}
+        if not held:
+            return self._idle[-1], ""            # the last one back, as before keys
+        # Workers holding no key first, then the one keyed longest ago; the last back of equals.
+        best = max(range(len(self._idle)), key=lambda k: (
+            id(self._idle[k]) not in held, -self._keyed_at.get(id(self._idle[k]), 0.0), k))
+        return self._idle[best], ""
+
+    def _took(self, worker: Any, affinity: Any, how: str, holder: Any) -> None:
+        """Remember that ``worker`` took a task with ``affinity`` (condition held)."""
+        if affinity is None:
+            return
+        if not how:
+            how = "elsewhere" if holder is not None else "unheld"
+        self._counts[how] += 1
+        self._holders.pop(affinity, None)
+        self._holders[affinity] = worker
+        while len(self._holders) > AFFINITY_KEYS:
+            self._holders.popitem(last=False)
+        self._keyed_at[id(worker)] = time.monotonic()
+
+    def _acquire(self, deadline: float, timeout: float, affinity: Any = None,
+                 affinity_wait: float | None = None) -> tuple[Any, float]:
         """An idle worker, or a new one, and the seconds of the wait that do not count
-        against ``deadline``: starting one, or waiting while workers start."""
+        against ``deadline``: starting one, or waiting while workers start.  With
+        ``affinity``, the worker holding it, waited for at most ``affinity_wait`` s while
+        busy (the module's notes); a new worker takes it only after that, too."""
         uncounted = 0.0
+        holding_since: float | None = None      # when the wait for a busy holder began
+        waited = False
         with self._condition:
             while True:
                 if self._closed:
                     raise RuntimeError("the worker pool is closed")
                 if self.failed is not None:
                     raise _again(self.failed)
-                if self._idle:
-                    worker = self._idle.pop()
+                holder = self._holders.get(affinity) if affinity is not None else None
+                now = time.monotonic()
+                wait_over = True
+                if holder is not None and holder not in self._idle:
+                    if holding_since is None:
+                        holding_since = now
+                    wait_over = now - holding_since >= (affinity_wait or 0.0)
+                worker, how = self._choose(holder, wait_over)
+                if worker is not None:
+                    self._idle.remove(worker)
                     if worker.alive():
+                        if how == "hit" and waited:
+                            how = "waited"
+                        self._took(worker, affinity, how, holder)
                         return worker, uncounted
                     self._count -= 1
                     self._forget(worker)
+                    self._unhold(worker)
                     worker.dispose()
                     continue
-                if self._count < self.size:
+                if self._count < self.size and wait_over:
                     self._count += 1
                     self._starting += 1
                     break
@@ -492,12 +596,18 @@ class _Pool:
                     # A worker is starting (warm-up, or a replacement): not the call's time.
                     self._condition.wait(self.start_timeout)
                     uncounted += time.monotonic() - began
+                    waited = waited or holder is not None
                     continue
                 remaining = deadline + uncounted - began
                 if remaining <= 0:
                     raise ToolError("timeout", f"no worker was free within {timeout:g} s",
                                     details={"timeout": timeout})
+                if not wait_over and holding_since is not None:
+                    # Wake when the wait for the holder is over, to go elsewhere then.
+                    remaining = min(remaining, max(0.0, holding_since + (affinity_wait or 0.0)
+                                                   - began) + 0.001)
                 self._condition.wait(remaining)
+                waited = waited or holder is not None
         began = time.monotonic()
         try:
             worker = self._start()
@@ -510,6 +620,8 @@ class _Pool:
             raise
         with self._condition:
             self._starting -= 1
+            holder = self._holders.get(affinity) if affinity is not None else None
+            self._took(worker, affinity, "", holder)
             self._condition.notify_all()
         return worker, uncounted + time.monotonic() - began
 
@@ -568,6 +680,7 @@ class _Pool:
             if self._closed:
                 self._count -= 1
                 self._forget(worker)
+                self._unhold(worker)
             else:
                 self._idle.append(worker)
                 self._condition.notify_all()
@@ -577,6 +690,7 @@ class _Pool:
     def _discard(self, worker: Any) -> None:
         with self._condition:
             self._forget(worker)
+            self._unhold(worker)
         worker.kill()
         with self._condition:
             self._count -= 1
@@ -589,6 +703,8 @@ class _Pool:
             self._count -= len(idle)
             for worker in idle:
                 self._forget(worker)
+            self._holders.clear()
+            self._keyed_at.clear()
             self._condition.notify_all()
         return idle
 
@@ -954,7 +1070,10 @@ class SubprocessPool(_Pool):
         return self._inline.abandoned if self._inline is not None else 0
 
     def run(self, fn: Callable[..., Any], *args: Any, timeout: float,
-            queue_timeout: float | None = None, **kwargs: Any) -> Any:
+            queue_timeout: float | None = None, affinity: Any = None,
+            affinity_wait: float | None = None, **kwargs: Any) -> Any:
+        """``fn(*args, **kwargs)`` in a worker, as :meth:`WorkerPool.run` (``affinity``: the
+        module's notes)."""
         if self._closed:
             raise RuntimeError("the worker pool is closed")
         reference = task_reference(fn)
@@ -962,7 +1081,8 @@ class SubprocessPool(_Pool):
             return self._run_inline(fn, args, kwargs, timeout, queue_timeout)
         payload = pickle.dumps((args, kwargs), protocol=_PROTOCOL)
         deadline = time.monotonic() + timeout
-        worker, uncounted = self._acquire(*_queue(deadline, timeout, queue_timeout))
+        worker, uncounted = self._acquire(*_queue(deadline, timeout, queue_timeout), affinity,
+                                          affinity_wait)
         deadline = (deadline + uncounted if queue_timeout is None
                     else time.monotonic() + timeout)
         try:
@@ -1128,7 +1248,10 @@ class InProcess(_Threads):
     :class:`WorkerPool`, so an application may pass one as a toolbox's ``runner``."""
 
     def run(self, fn: Callable[..., Any], *args: Any, timeout: float,
-            queue_timeout: float | None = None, **kwargs: Any) -> Any:
+            queue_timeout: float | None = None, affinity: Any = None,
+            affinity_wait: float | None = None, **kwargs: Any) -> Any:
+        """``fn(*args, **kwargs)`` in a thread of this process; ``affinity`` is taken and
+        not needed: every task runs in this one process."""
         return self._run(fn, args, kwargs, timeout, queue_timeout)
 
     def warm(self, count: int | None = None, *, wait: bool = False) -> None:
@@ -1270,9 +1393,11 @@ class ThreadRunner(_Threads):
                        "runs them side by side; worker processes do on any Python)")
 
     def run(self, fn: Callable[..., Any], *args: Any, timeout: float,
-            queue_timeout: float | None = None, **kwargs: Any) -> Any:
+            queue_timeout: float | None = None, affinity: Any = None,
+            affinity_wait: float | None = None, **kwargs: Any) -> Any:
         """``fn(*args, **kwargs)`` in a thread, waited for at most ``timeout`` s (see the
-        class's notes); warming up first is not the call's time."""
+        class's notes); warming up first is not the call's time.  ``affinity`` is taken and
+        not needed: every task runs in this one process."""
         if self._closed:
             raise RuntimeError("the worker pool is closed")
         self._check_gil()
@@ -1405,9 +1530,12 @@ class WorkerPool(_Pool):
             return self._subprocesses
 
     def _run_elsewhere(self, runner: Any, fn: Callable[..., Any], args: tuple, kwargs: dict,
-                       deadline: float, queue_timeout: float | None = None) -> Any:
+                       deadline: float, queue_timeout: float | None = None,
+                       affinity: Any = None, affinity_wait: float | None = None) -> Any:
         if queue_timeout is not None:
             kwargs = {**kwargs, "queue_timeout": queue_timeout}
+        if affinity is not None:
+            kwargs = {**kwargs, "affinity": affinity, "affinity_wait": affinity_wait}
         try:
             return runner.run(fn, *args, timeout=max(0.0, deadline - time.monotonic()),
                               **kwargs)
@@ -1423,10 +1551,14 @@ class WorkerPool(_Pool):
         return inline.run(fn, *args, timeout=max(0.0, deadline - time.monotonic()), **kwargs)
 
     def run(self, fn: Callable[..., Any], *args: Any, timeout: float,
-            queue_timeout: float | None = None, **kwargs: Any) -> Any:
+            queue_timeout: float | None = None, affinity: Any = None,
+            affinity_wait: float | None = None, **kwargs: Any) -> Any:
         """``fn(*args, **kwargs)`` in a worker, waited for at most ``timeout`` s.  Waiting for
         a busy worker counts against it, unless ``queue_timeout`` is given: then that bounds
-        the wait for a worker, and ``timeout`` counts from when one takes the task."""
+        the wait for a worker, and ``timeout`` counts from when one takes the task.
+        ``affinity`` (hashable) sends the task to the worker that took the last task with
+        the same key, waiting for it at most ``affinity_wait`` s while it is busy (the
+        module's notes); ``None``, any worker."""
         if self._closed:
             raise RuntimeError("the worker pool is closed")
         refuse_while_bootstrapping()
@@ -1436,10 +1568,11 @@ class WorkerPool(_Pool):
                                     **kwargs)
         if self._subprocesses is not None:
             return self._run_elsewhere(self._subprocesses, fn, args, kwargs, deadline,
-                                       queue_timeout)
+                                       queue_timeout, affinity, affinity_wait)
         why = None
         try:
-            worker, uncounted = self._acquire(*_queue(deadline, timeout, queue_timeout))
+            worker, uncounted = self._acquire(*_queue(deadline, timeout, queue_timeout),
+                                              affinity, affinity_wait)
             deadline = (deadline + uncounted if queue_timeout is None
                         else time.monotonic() + timeout)
         except _NoChildren as exc:
@@ -1452,7 +1585,7 @@ class WorkerPool(_Pool):
             why = exc.message
         if why is not None:         # outside the handler: the work's own error unchained
             return self._run_elsewhere(self._go_elsewhere(why), fn, args, kwargs, deadline,
-                                       queue_timeout)
+                                       queue_timeout, affinity, affinity_wait)
         try:
             worker.conn.send((fn, args, kwargs))
             if not worker.conn.poll(max(0.0, deadline - time.monotonic())):
@@ -1483,6 +1616,17 @@ class WorkerPool(_Pool):
         if self._subprocesses is not None:
             return self._subprocesses.pids()
         return super().pids()
+
+    @property
+    def affinity_counts(self) -> dict[str, int]:
+        if self._subprocesses is not None:
+            return self._subprocesses.affinity_counts
+        return super().affinity_counts
+
+    def holder(self, key: Any) -> int | None:
+        if self._subprocesses is not None:
+            return self._subprocesses.holder(key)
+        return super().holder(key)
 
     def warm(self, count: int | None = None, *, wait: bool = False) -> None:
         """Start and warm workers ahead of use (:meth:`_Pool.warm`); in-process, or in a
