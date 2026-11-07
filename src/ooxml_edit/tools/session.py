@@ -787,16 +787,17 @@ class Session:
         fmt = self._format_for(data, name, kind)
         if isinstance(state, (str, bytes, dict, list, tuple)) and not state:
             state = None                        # "" or {}: no state given
-        if state is not None and fmt.open_with_state is None:
+        open_with_state = fmt.open_with_state
+        if state is not None and open_with_state is None:
             raise StateRefused(f"{name} is a {fmt.kind} document, and that format keeps no state "
                                 "beside its bytes: open it without state")
         check_package(data, self.limits, name)
         self._room_for_document(len(data))
-        if state is None:
+        if state is None or open_with_state is None:
             document = fmt.open(data)
         else:
             try:
-                document = fmt.open_with_state(data, state)
+                document = open_with_state(data, state)
             except ArgumentError as exc:
                 raise StateRefused(str(exc)) from exc
         return self.adopt(document, fmt.kind, name, source=source, size=len(data),
