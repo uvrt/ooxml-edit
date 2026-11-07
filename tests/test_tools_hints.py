@@ -119,7 +119,7 @@ def test_a_table_entry_naming_no_tool_or_action_is_ignored(toolbox):
 
 def test_a_name_with_no_hint_lists_near_names_as_before(toolbox, session):
     result = toolbox.dispatch(session, "t_ad", {"doc": "d1"})
-    assert result.error.message == "no tool 't_ad'"
+    assert result.error.message == "no tool 't_ad'; the nearest: t_add, t_read, t_half"
     assert "t_add" in result.error.valid_options
 
 
@@ -138,8 +138,10 @@ def test_a_hint_outside_the_roles_says_which_role_it_needs(toolbox):
 def test_in_a_batch_a_tool_batch_cannot_run_is_to_be_called_alone(toolbox, session):
     result = toolbox.dispatch(session, "batch", {"ops": _ops(("t_save_document", {"doc": "d1"})),
                                                  "atomic": True})
-    assert result.error.message == ("ops[0]: no tool 't_save_document': use save_document on its "
-                                    "own (batch cannot run it)")
+    # t_save_document is save_document with the format's prefix (round 40): read as that
+    # tool, which a batch cannot run.
+    assert result.error.message == ("ops[0]: save_document cannot run inside a batch; call it "
+                                    "on its own")
 
 
 def test_an_action_of_another_tool_names_that_tool(toolbox, session):
