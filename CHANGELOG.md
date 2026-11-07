@@ -4,6 +4,12 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet. Each vers
 reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
 earlier ones were never tagged.
 
+## 0.90.1 -- unreleased
+- A scale's `show: label` check: a text holding several steps' labels, one per line, and no
+  value kept -- a table cell merged with another, its records dropped -- is listed under
+  `unrecorded` (`label_of` lists their steps), no longer skipped as "not one number, nor a
+  step's label"; `style_by_value` skips it saying the one value to write. Nothing else changes.
+
 ## 0.90.0 -- unreleased
 - **Affinity in the worker pools** (production round 38). A worker serves task after task, so
   what a task leaves in its process -- a format's layout of a document, what its text
