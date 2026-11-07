@@ -548,19 +548,37 @@ class BrokenToyRenderer(ToyRenderer):
         return [(b"GIF89a" + bytes(40), None) for _ in views]
 
 
+class FastToyRenderer(ToyRenderer):
+    """Pages with cheaper, approximate pixels on request (round 39): another colour."""
+
+    name = "toy-fast"
+    fast = True
+
+    def rasterise_fast(self, views, raster):
+        return [(png(raster, raster * 9 // 16, (200, 60, 60)), {"page": view.info, "fast": True})
+                for view in views]
+
+
+class FastWholeToyRenderer(FastToyRenderer):
+    name = "toy-fast-whole"
+    whole_document = True
+
+
 #: A page whose rasterising fails (``None``: none), set by a test; in-process runs only.
 FAILING_PAGE = None
-RENDERERS = {"alone": ToyRenderer(), "whole": WholeToyRenderer(), "broken": BrokenToyRenderer()}
+RENDERERS = {"alone": ToyRenderer(), "whole": WholeToyRenderer(), "broken": BrokenToyRenderer(),
+             "fast": FastToyRenderer(), "fast-whole": FastWholeToyRenderer()}
 
 
 @tool("toy_draw", "Test only: draw pages with the shared render pipeline.",
       {"doc": string("Document id, e.g. d1."),
        "pages": array(integer("Page number.", minimum=1), "Pages to draw."),
        "width": integer("Width in pixels.", minimum=16, maximum=2576, optional=True),
-       "shape": string("Which renderer.", enum=["alone", "whole", "broken"], optional=True),
-       "first_alone": boolean("One chunk first, by itself.", optional=True)},
+       "shape": string("Which renderer.", enum=list(RENDERERS), optional=True),
+       "first_alone": boolean("One chunk first, by itself.", optional=True),
+       "fast": boolean("Approximate pixels.", optional=True)},
       kind="pptx", group="toy_render")
-def toy_draw(call, doc, pages, width=64, shape="alone", first_alone=False):
+def toy_draw(call, doc, pages, width=64, shape="alone", first_alone=False, fast=False):
     seen = []
 
     def on_facts(facts, alone):
@@ -570,13 +588,14 @@ def toy_draw(call, doc, pages, width=64, shape="alone", first_alone=False):
     drawn, facts = pipeline.draw(call, RENDERERS[shape], pages, width,
                                  ids={n: f"p{n}" for n in pages}, fonts=(), locale=None,
                                  state=lambda data: "kept", first_alone=first_alone,
-                                 on_facts=on_facts)
+                                 on_facts=on_facts, fast=bool(fast))
     for n in pages:
         if n in drawn:
             call.image(drawn[n][0], *pipeline.png_size(drawn[n][0]), label=f"page {n}")
     return Result(summary="Drew", data={"drawn": sorted(drawn), "cached": sorted(
         n for n in drawn if drawn[n][2]), "meta": {n: drawn[n][1] for n in sorted(drawn)},
-        "facts": [f["state"] for f in facts], "seen": seen})
+        "facts": [f["state"] for f in facts], "seen": seen,
+        "approximate": sorted(n for n in drawn if drawn[n][3])})
 
 
 @tool("toy_tiles", "Test only: a contact image of pages with the shared render pipeline.",

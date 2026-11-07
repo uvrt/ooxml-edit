@@ -4,6 +4,29 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet. Each vers
 reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
 earlier ones were never tagged.
 
+## 0.92.0 -- unreleased
+- **The render lane** (production round 39). Rasterising competed with layouts and checks
+  for a pool of two workers: on an 11-writer report renders queued past their deadline ("no
+  worker was free within 20 s") or were stopped half drawn, and each stopped worker started
+  again and lost the layouts it held. `run(..., lane="render")` (`worker.RENDER_LANE`, on
+  every runner, `Call.run`, `Call.run_all`; an application's runner with `takes_lane`) marks
+  work that draws: it takes a worker only while no other task waits for one, prefers workers
+  holding no affinity key, and at most `Limits.render_workers` (default `None`: all) draw at
+  once. Its wait for a worker is bounded on its own (`worker_queue_timeout`), its deadline
+  counting from when a worker takes it, and past it the worker is not stopped: the call
+  reports `timeout`, the worker finishes the work for at most as long again
+  (`worker.OVERRUN`), its result handed to `on_late` (the pipeline keeps the images in the
+  store), and only one still busy then is stopped (`pool.overruns`). The render pipeline
+  runs all its drawing in the lane, a render's layout task queued the same way
+  (`Call.run(..., queued=True)`), and a whole document's views a view a task (up to 4). Other
+  work's deadlines are unchanged.
+- **`render`'s `fast`** (documents): the render pipeline's `draw(..., fast=True)` asks for
+  cheaper pixels of the same SVG where the renderer has them (`Renderer.fast`,
+  `Renderer.rasterise_fast`), kept under their own key (`render.fast_key`); an exact image
+  held is served instead; `draw`'s values gain `approximate`. The worker tasks' tuples are
+  unchanged (the approximate views are listed beside them). A library that does not take
+  `fast` draws exactly. +40 tokens to a Word toolbox's core (docx-agent's estimate).
+
 ## 0.90.1 -- unreleased
 - A scale's `show: label` check: a text holding several steps' labels, one per line, and no
   value kept -- a table cell merged with another, its records dropped -- is listed under

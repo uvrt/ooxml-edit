@@ -435,11 +435,17 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
                                          optional=True)},
                        "Up to 30 in one labelled image; {} for defaults.", optional=True),
           # Round 35, R18: the pages some blocks fall on.
-          "range": _BLOCK_RANGES},
+          "range": _BLOCK_RANGES,
+          # Round 39: cheaper pixels while building (the render pipeline's fast images); a
+          # library without them draws exactly, and the result then says nothing.
+          "fast": boolean("Quicker image while building: same layout, approximate pixels; "
+                          "the result says so. Default false.", optional=True)},
          # Round 35, R20: in read_batch too, its images in the reply within its budget.
          batchable=False, read_batchable=True, refs=("slides[]",),
-         wrap=lambda fn: _with_taken(fn, "render", ("range",)),
-         kind_fields={"slides": _SLIDES, "pages": _PAGES, "range": ("docx",)}),
+         wrap=lambda fn: _with_taken(fn, "render", ("range",), dropped=("fast",)),
+         # Round 39: fast where a renderer has cheaper pixels (documents' pages); a deck's
+         # slides cost a fifth of a page each already.
+         kind_fields={"slides": _SLIDES, "pages": _PAGES, "range": ("docx",), "fast": ("docx",)}),
     # S9
     Spec("check",
          "Facts as the document will show: text that does not fit, collisions, validation "
@@ -699,15 +705,20 @@ def _with_layout_options(handler: Callable[..., Any]) -> Callable[..., Any]:
 
 
 def _with_taken(handler: Callable[..., Any], name: str,
-                fields: tuple[str, ...]) -> Callable[..., Any]:
+                fields: tuple[str, ...], dropped: tuple[str, ...] = ()) -> Callable[..., Any]:
     """A kind's handler, ``fields`` handed on only when it takes them (round 35: ``range``
     and ``copies``, docx-agent's).  Another kind's refuses one given -- ``invalid_arguments``
     naming it, the way out said -- and never sees it left out, so a library that predates
-    them keeps working unchanged."""
+    them keeps working unchanged.  ``dropped``: fields a handler that does not take them
+    does without, unrefused -- a wish it may grant (round 39: ``fast``; the exact image
+    answers it)."""
     takes = set(inspect.signature(handler).parameters)
 
     @functools.wraps(handler)
     def run(call: Any, **arguments: Any) -> Any:
+        for field in dropped:
+            if field not in takes:
+                arguments.pop(field, None)
         for field in fields:
             if field not in takes and arguments.pop(field, None) is not None:
                 raise ToolError("invalid_arguments", f"{name} {field} names a document's "

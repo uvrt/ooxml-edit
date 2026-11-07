@@ -115,7 +115,8 @@ from .session import _folded_use, _misspelt_ref
 from .sources import Rows, qualify, resolve as resolve_rows
 from .rendercache import ContentStore
 from .worker import (InProcess, SubprocessPool, ThreadRunner, WorkerPool, default_workers,
-                     gil_enabled, refuse_while_bootstrapping, run_all, takes_affinity)
+                     gil_enabled, refuse_while_bootstrapping, run_all, takes_affinity,
+                     takes_lane)
 
 #: A ref's name (``REF``) and a ref's use, ``$name`` or ``$name/rest`` (:mod:`.session`'s,
 #: whose :meth:`~.session.Session.resolve_ref` reads them as a call does).
@@ -192,6 +193,11 @@ class CallContext:
 
 #: ``define_dataset``'s ``source`` when not given: the call's own document.
 _PRIMARY: Any = object()
+
+
+def _queues(pool: Any) -> bool:
+    """Whether ``pool.run`` takes ``queue_timeout``: this package's runners do."""
+    return isinstance(pool, (WorkerPool, SubprocessPool, ThreadRunner, InProcess))
 
 
 class Call:
@@ -687,25 +693,53 @@ class Call:
                 slots.release()
 
     def run(self, fn: Callable[..., Any], *args: Any, timeout: float | None = None,
-            affinity: Any = None, affinity_wait: float | None = None, **kwargs: Any) -> Any:
+            affinity: Any = None, affinity_wait: float | None = None, lane: Any = None,
+            on_late: "Callable[[Any], Any] | None" = None, queued: bool = False,
+            **kwargs: Any) -> Any:
         """Run ``fn`` in a worker process (or in-process: :mod:`.worker`); ``timeout`` (s)
         defaults to the render deadline.  ``affinity``: to the worker that took the last
         task with that key, waited for at most ``affinity_wait`` s while busy (the
         :mod:`.worker` module's notes; an application's runner that does not say it takes
-        them is not handed them)."""
+        them is not handed them).  ``lane``: :data:`~.worker.RENDER_LANE` for a task that
+        draws images (:meth:`_lane`).  ``queued``: the wait for a worker bounded on its own
+        (:attr:`~.limits.Limits.worker_queue_timeout`), ``timeout`` counting from when one
+        takes the task, as the render lane's (a render's layout, round 39)."""
         pool = self.toolbox.pool
         if affinity is not None and takes_affinity(pool):
             kwargs = {**kwargs, "affinity": affinity, "affinity_wait": affinity_wait}
+        kwargs.update(self._lane(pool, lane, on_late))
+        if queued and _queues(pool):
+            kwargs.setdefault("queue_timeout", self.limits.worker_queue_timeout)
         return pool.run(fn, *args, timeout=timeout or self.limits.render_timeout, **kwargs)
 
     def run_all(self, fn: Callable[..., Any], calls: Sequence[tuple], *,
-                timeouts: Sequence[float]) -> list[Any]:
+                timeouts: Sequence[float], lane: Any = None,
+                on_late: "Sequence[Callable[[Any], Any] | None] | None" = None) -> list[Any]:
         """``fn(*args)`` for each ``args`` in ``calls``, at once over the pool's workers, each
         with its own deadline; the results in order, an exception in its place (none is
         raised: the handler keeps what succeeded, then raises).  The chunks of one render
         (:func:`~.worker.run_all`); give each a deadline by its size
-        (:meth:`~.limits.Limits.render_timeout_for`)."""
-        return run_all(self.toolbox.pool, fn, calls, timeouts)
+        (:meth:`~.limits.Limits.render_timeout_for`).  ``lane`` and each call's
+        ``on_late``: :meth:`run`'s."""
+        pool = self.toolbox.pool
+        options = [self._lane(pool, lane, on_late[index] if on_late else None)
+                   for index in range(len(calls))]
+        return run_all(pool, fn, calls, timeouts, options)
+
+    def _lane(self, pool: Any, lane: Any, on_late: Any) -> dict:
+        """What ``pool.run`` is handed for a task in ``lane``: for the render lane (round
+        39), the lane -- it yields to other work, and its worker is not stopped at its
+        deadline unless it is still busy as long again -- ``on_late`` (what to do with a
+        result that came after it), and its wait for a worker bounded on its own
+        (:attr:`~.limits.Limits.worker_queue_timeout`), so its deadline counts from when a
+        worker takes it: a render that waited behind layouts is not stopped half drawn.
+        Nothing for other work, or a runner that does not take them."""
+        if lane is None or not takes_lane(pool):
+            return {}
+        out: dict = {"lane": lane, "on_late": on_late}
+        if _queues(pool):
+            out["queue_timeout"] = self.limits.worker_queue_timeout
+        return out
 
     @property
     def parallelism(self) -> int:
@@ -1218,6 +1252,7 @@ class Toolbox:
                     self._pool = WorkerPool(self._workers, start_method=self._start_method,
                                             warm_up=self.warm_ups,
                                             start_timeout=self.limits.worker_start_timeout)
+                    self._pool.render_workers = self.limits.render_workers
                 if self._prewarm:
                     self._pool.warm()
             return self._pool
