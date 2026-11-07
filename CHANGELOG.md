@@ -4,6 +4,23 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet. Each vers
 reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
 earlier ones were never tagged.
 
+## 0.89.0 -- unreleased
+- **A document's state kept beside its bytes** (production round 38). A format may keep what
+  its file cannot hold without changing what Office reads (docx-agent: a Word document's
+  retired ids): `DocumentFormat.state(document) -> str` and `open_with_state(data, state)`.
+  `Session.save(doc)` gives a `SavedDocument` -- `data` and `state` of one version, taken
+  under the document's lock, with `doc`, `name`, `kind` and `version`; a save tool's output
+  carries the state when its handler says the file is the document itself
+  (`Call.output(..., state=True)`, `Output.state`; never in what the model reads); and
+  `Session.open(data, name, doc_id=..., state=...)` (and `open_blob`) hands it back. A state
+  the format refuses (not these bytes', damaged) or a state for a format that keeps none is
+  a `StateRefused` (an `ArgumentError`) saying what to pass instead; `None` or an empty value
+  opens the bytes alone, as before. Nothing is written anywhere: the application stores the
+  pair where it keeps its run.
+- `History.continue_from(version, last)`: a reopened document's states numbered after the
+  earlier history's (opened at `version`, the next step `last + 1`), only before the first
+  step; `History.last_version`.
+
 ## 0.87.0 -- unreleased
 - **A step's label in place of its value** (production round 38; `ooxml_edit.tools.scales`).
   A scale takes `"show": "label"` (default `value`): `style_by_value` writes each value's

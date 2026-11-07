@@ -88,7 +88,8 @@ from .results import (ERROR_CODES, Image, Result, ToolError, anthropic_image_tok
 from .schema import CallError, SubsetError, canonical, check_subset, validate_call
 from .sources import Rows
 from .session import (DEFAULT_LOCALE, LOCALE_FIELDS, Blob, DefaultLocale, DocumentEntry,
-                      DocumentFormat, Output, Session, SessionView, StepOwner, doc_order,
+                      DocumentFormat, Output, SavedDocument, Session, SessionView,
+                      StateRefused, StepOwner, doc_order,
                       fold_ref, locale_of, part_entries)
 from .rendercache import ContentStore, content_key
 from .worker import (InProcess, SubprocessPool, ThreadRunner, WorkerPool, available_cpus,
@@ -99,7 +100,7 @@ __all__ = [
     "Asset", "AssetCatalogue", "Blob", "CACHE_EXTERNAL", "CACHE_STATUSES", "FolderCatalogue", "assets", "CORE", "Call", "CallContext", "CallError", "CallRecord", "DATASET_ID",
     "DATASET_PREFIX", "DEFAULT_LOCALE", "Dataset", "DatasetEntry", "DefaultLocale", "DocumentEntry", "DocumentFormat",
     "ERROR_CODES", "LOCALE_FIELDS", "NumberRules", "NumberText", "REF", "Image", "LimitError", "Limits", "Output", "Param",
-    "Result", "Rows", "SYSTEM", "Scale", "ScaleValue", "Step", "TYPE_LABELS",
+    "Result", "Rows", "SYSTEM", "SavedDocument", "Scale", "StateRefused", "ScaleValue", "Step", "TYPE_LABELS",
     "InProcess", "Session", "SessionView", "StepOwner", "StrictProblem", "SubprocessPool", "SubsetError", "ThreadRunner", "Tool", "ToolError", "ToolGroup", "Toolbox",
     "WorkerPool", "ContentStore", "available_cpus", "content_key", "default_workers",
     "render", "rendercache", "run_all",
