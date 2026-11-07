@@ -393,7 +393,7 @@ def draw(call: Any, renderer: Renderer, items: Sequence[Any], width: int, *,
     ``fast``: a view without an exact image held is drawn approximately where the renderer
     can (:attr:`Renderer.fast`) -- the same layout, cheaper pixels -- kept apart from the
     exact images; one with an exact image held gets that one."""
-    from .worker import RENDER_LANE
+    from .worker import RENDER_LANE, InProcess
 
     # The worker tasks' arguments as before unless fast is asked for: ``fast`` last, only then.
     more = (True,) if fast and _fast(renderer) else ()
@@ -444,9 +444,15 @@ def draw(call: Any, renderer: Renderer, items: Sequence[Any], width: int, *,
             rough = set(laid.get("approximate", ()))
             fresh = [view for view in laid["views"] if view[2] is not None]
             # A view a task, so a layout waiting behind them waits at most one; many views
-            # in tasks of up to RENDER_ITEMS, over the workers.
-            size = 1 if len(fresh) <= RENDER_ITEMS else min(
-                RENDER_ITEMS, -(-len(fresh) // max(1, call.parallelism)))
+            # in tasks of up to RENDER_ITEMS, over the workers.  In this process (threads,
+            # nothing to wait behind, a deadline that only bounds the wait): one chunk a
+            # thread, as before, each with its whole deadline.
+            pool = call.toolbox.pool
+            if getattr(pool, "in_process", False) or isinstance(pool, InProcess):
+                size = max(1, -(-len(fresh) // max(1, call.parallelism)))
+            else:
+                size = 1 if len(fresh) <= RENDER_ITEMS else min(
+                    RENDER_ITEMS, -(-len(fresh) // max(1, call.parallelism)))
             chunks = [fresh[start:start + size] for start in range(0, len(fresh), size)]
             results = call.run_all(rasterise_views,
                                    [(renderer, [(view[2], view[3]) for view in chunk],
