@@ -56,7 +56,8 @@ at once when it is idle; when it is busy, the task waits for it at most ``affini
 seconds (the caller's rule: the time the work would take done afresh, without the state,
 so waiting never costs more than going elsewhere would; ``None``, the default, waits as
 long as the task's deadline allows, ``0`` not at all), then takes any idle worker, or a
-new one.  A key no worker holds goes to any idle worker.  Work without a key prefers the
+new one.  Tasks waiting for one holder take it in the order they came, and no other task
+takes a worker that tasks are waiting for.  A key no worker holds goes to any idle worker.  Work without a key prefers the
 idle workers that hold no key, or held one longest ago, so that the holders stay free for
 their keys.  Affinity only chooses the worker: a task must give the same result on any
 worker (state it does not find, it makes again), and the pool counts where its keyed
@@ -483,6 +484,8 @@ class _Pool:
         #: ``id(worker)`` -> when it last took a task with a key.
         self._keyed_at: dict[int, float] = {}
         self._counts = dict.fromkeys(AFFINITY_OUTCOMES, 0)
+        #: ``id(worker)`` -> the tasks waiting for it as their holder, in the order they came.
+        self._waiting: dict[int, list] = {}
 
     def _failure(self, exc: BaseException) -> None:
         """Remember ``exc`` if it is lasting (called with the condition held)."""
@@ -521,24 +524,41 @@ class _Pool:
         for key in [key for key, held in self._holders.items() if held is worker]:
             del self._holders[key]
         self._keyed_at.pop(id(worker), None)
+        self._waiting.pop(id(worker), None)
 
-    def _choose(self, holder: Any, wait_over: bool) -> tuple[Any, str]:
+    def _dequeue(self, worker: Any, ticket: object) -> None:
+        """A task no longer waits for ``worker`` (condition held): the next may take it."""
+        queue = self._waiting.get(id(worker))
+        if queue is not None:
+            if ticket in queue:
+                queue.remove(ticket)
+            if not queue:
+                del self._waiting[id(worker)]
+        self._condition.notify_all()
+
+    def _choose(self, holder: Any, wait_over: bool, ticket: object = None) -> tuple[Any, str]:
         """The idle worker a task takes, and how (:data:`AFFINITY_OUTCOMES`; ``""`` for a
-        task without a key), or ``(None, "")`` to wait for the busy ``holder``."""
+        task without a key), or ``(None, "")`` to wait for the busy ``holder``.  Tasks
+        waiting for a holder take it in the order they came (``ticket``: this one's place),
+        and no other task takes a worker that tasks are waiting for."""
         if holder is not None:
-            if holder in self._idle:
+            queue = self._waiting.get(id(holder))
+            first = not queue or queue[0] is ticket
+            if holder in self._idle and first:
                 return holder, "hit"
             if not wait_over:
                 return None, ""
-        if not self._idle:
+        free = [worker for worker in self._idle
+                if worker is not holder and not self._waiting.get(id(worker))]
+        if not free:
             return None, ""
         held = {id(worker) for worker in self._holders.values()}
         if not held:
-            return self._idle[-1], ""            # the last one back, as before keys
+            return free[-1], ""                  # the last one back, as before keys
         # Workers holding no key first, then the one keyed longest ago; the last back of equals.
-        best = max(range(len(self._idle)), key=lambda k: (
-            id(self._idle[k]) not in held, -self._keyed_at.get(id(self._idle[k]), 0.0), k))
-        return self._idle[best], ""
+        best = max(range(len(free)), key=lambda k: (
+            id(free[k]) not in held, -self._keyed_at.get(id(free[k]), 0.0), k))
+        return free[best], ""
 
     def _took(self, worker: Any, affinity: Any, how: str, holder: Any) -> None:
         """Remember that ``worker`` took a task with ``affinity`` (condition held)."""
@@ -562,52 +582,64 @@ class _Pool:
         uncounted = 0.0
         holding_since: float | None = None      # when the wait for a busy holder began
         waited = False
+        ticket = object()                        # this task's place among a holder's waiters
+        queued: Any = None                       # the holder it is queued for
         with self._condition:
-            while True:
-                if self._closed:
-                    raise RuntimeError("the worker pool is closed")
-                if self.failed is not None:
-                    raise _again(self.failed)
-                holder = self._holders.get(affinity) if affinity is not None else None
-                now = time.monotonic()
-                wait_over = True
-                if holder is not None and holder not in self._idle:
-                    if holding_since is None:
-                        holding_since = now
-                    wait_over = affinity_wait is not None and now - holding_since >= affinity_wait
-                worker, how = self._choose(holder, wait_over)
-                if worker is not None:
-                    self._idle.remove(worker)
-                    if worker.alive():
-                        if how == "hit" and waited:
-                            how = "waited"
-                        self._took(worker, affinity, how, holder)
-                        return worker, uncounted
-                    self._count -= 1
-                    self._forget(worker)
-                    self._unhold(worker)
-                    worker.dispose()
-                    continue
-                if self._count < self.size and wait_over:
-                    self._count += 1
-                    self._starting += 1
-                    break
-                began = time.monotonic()
-                if self._starting:
-                    # A worker is starting (warm-up, or a replacement): not the call's time.
-                    self._condition.wait(self.start_timeout)
-                    uncounted += time.monotonic() - began
+            try:
+                while True:
+                    if self._closed:
+                        raise RuntimeError("the worker pool is closed")
+                    if self.failed is not None:
+                        raise _again(self.failed)
+                    holder = self._holders.get(affinity) if affinity is not None else None
+                    if queued is not None and queued is not holder:
+                        self._dequeue(queued, ticket)
+                        queued = None
+                    now = time.monotonic()
+                    wait_over = True
+                    if holder is not None and (holder not in self._idle or self._waiting.get(id(holder))):
+                        if holding_since is None:
+                            holding_since = now
+                        wait_over = affinity_wait is not None and now - holding_since >= affinity_wait
+                        if not wait_over and queued is None:
+                            self._waiting.setdefault(id(holder), []).append(ticket)
+                            queued = holder
+                    worker, how = self._choose(holder, wait_over, ticket)
+                    if worker is not None:
+                        self._idle.remove(worker)
+                        if worker.alive():
+                            if how == "hit" and waited:
+                                how = "waited"
+                            self._took(worker, affinity, how, holder)
+                            return worker, uncounted
+                        self._count -= 1
+                        self._forget(worker)
+                        self._unhold(worker)
+                        worker.dispose()
+                        continue
+                    if self._count < self.size and wait_over:
+                        self._count += 1
+                        self._starting += 1
+                        break
+                    began = time.monotonic()
+                    if self._starting:
+                        # A worker is starting (warm-up, or a replacement): not the call's time.
+                        self._condition.wait(self.start_timeout)
+                        uncounted += time.monotonic() - began
+                        waited = waited or holder is not None
+                        continue
+                    remaining = deadline + uncounted - began
+                    if remaining <= 0:
+                        raise ToolError("timeout", f"no worker was free within {timeout:g} s",
+                                        details={"timeout": timeout})
+                    if not wait_over and holding_since is not None and affinity_wait is not None:
+                        # Wake when the wait for the holder is over, to go elsewhere then.
+                        remaining = min(remaining, max(0.0, holding_since + affinity_wait - began) + 0.001)
+                    self._condition.wait(remaining)
                     waited = waited or holder is not None
-                    continue
-                remaining = deadline + uncounted - began
-                if remaining <= 0:
-                    raise ToolError("timeout", f"no worker was free within {timeout:g} s",
-                                    details={"timeout": timeout})
-                if not wait_over and holding_since is not None and affinity_wait is not None:
-                    # Wake when the wait for the holder is over, to go elsewhere then.
-                    remaining = min(remaining, max(0.0, holding_since + affinity_wait - began) + 0.001)
-                self._condition.wait(remaining)
-                waited = waited or holder is not None
+            finally:
+                if queued is not None:
+                    self._dequeue(queued, ticket)
         began = time.monotonic()
         try:
             worker = self._start()
@@ -705,6 +737,7 @@ class _Pool:
                 self._forget(worker)
             self._holders.clear()
             self._keyed_at.clear()
+            self._waiting.clear()
             self._condition.notify_all()
         return idle
 

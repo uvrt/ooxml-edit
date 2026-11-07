@@ -14,7 +14,9 @@ earlier ones were never tagged.
   task waits for it at most `affinity_wait` seconds -- the caller's rule, the time the work
   would take done afresh elsewhere, so waiting never costs more than going elsewhere; `None`
   (the default) as long as the deadline allows, `0` not at all -- and then takes any idle
-  worker, or a new one (it counts against the deadline as any wait for a worker does). A key no worker holds goes to any idle worker; work without a key prefers
+  worker, or a new one (it counts against the deadline as any wait for a worker does).
+  Tasks waiting for one holder take it in the order they came, and no other task takes a
+  worker that tasks are waiting for. A key no worker holds goes to any idle worker; work without a key prefers
   the idle workers that hold no key (or held one longest ago), so the rasterising of a
   render goes beside a layout rather than in front of it. A worker that is killed at a
   deadline, dies or is stopped takes its keys with it; at most `AFFINITY_KEYS` (256) keys

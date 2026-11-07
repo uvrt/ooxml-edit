@@ -231,3 +231,36 @@ def test_an_application_runner_is_handed_a_key_only_when_it_says_it_takes_one():
             assert call.run(tools_toys.worker_pid, timeout=5, affinity="a",
                             affinity_wait=2) == os.getpid()
         assert runner.kwargs[-1] == handed
+
+
+def test_tasks_waiting_for_a_holder_take_it_in_turn_and_others_leave_it_to_them():
+    """Three tasks wait for their busy holder; work without a key meanwhile goes to the other
+    worker, never to the holder they wait for; they take the holder in the order they came."""
+    with WorkerPool(2) as pool:
+        _warm(pool)
+        holder, _ = pool.run(tools_toys.keep_value, "a", 0, timeout=60, affinity="a")
+        order: list = []
+        lock = threading.Lock()
+
+        def keyed(value: int) -> None:
+            pid, before = pool.run(tools_toys.keep_value, "a", value, 0.2, timeout=60, affinity="a",
+                                   affinity_wait=30)
+            with lock:
+                order.append((value, pid, before))
+
+        busy = threading.Thread(target=keyed, args=(1,))
+        busy.start()
+        time.sleep(0.3)
+        waiters = []
+        for value in (2, 3, 4):
+            waiters.append(threading.Thread(target=keyed, args=(value,)))
+            waiters[-1].start()
+            time.sleep(0.15)
+        others = [pool.run(tools_toys.worker_pid, timeout=60) for _ in range(5)]
+        busy.join()
+        for thread in waiters:
+            thread.join()
+        assert holder not in others
+        assert [value for value, _, _ in order] == [1, 2, 3, 4]
+        assert all(pid == holder for _, pid, _ in order)
+        assert [before for _, _, before in order] == [0, 1, 2, 3]
