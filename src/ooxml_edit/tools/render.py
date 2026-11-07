@@ -395,6 +395,8 @@ def draw(call: Any, renderer: Renderer, items: Sequence[Any], width: int, *,
     exact images; one with an exact image held gets that one."""
     from .worker import RENDER_LANE
 
+    # The worker tasks' arguments as before unless fast is asked for: ``fast`` last, only then.
+    more = (True,) if fast and _fast(renderer) else ()
     entry, version, limits, store = call.entry, call.entry.version, call.limits, call.images
     fast = fast and _fast(renderer)
     drawn: dict = {}
@@ -437,7 +439,7 @@ def draw(call: Any, renderer: Renderer, items: Sequence[Any], width: int, *,
     if renderer.whole_document:
         with call.unlocked():
             laid = call.run(lay_out_views, renderer, data, sent, width, list(fonts), locale,
-                            list(held), state, fast, timeout=limits.render_timeout_for(len(todo)),
+                            list(held), state, *more, timeout=limits.render_timeout_for(len(todo)),
                             affinity=affinity, affinity_wait=affinity_wait, queued=True)
             rough = set(laid.get("approximate", ()))
             fresh = [view for view in laid["views"] if view[2] is not None]
@@ -448,7 +450,7 @@ def draw(call: Any, renderer: Renderer, items: Sequence[Any], width: int, *,
             chunks = [fresh[start:start + size] for start in range(0, len(fresh), size)]
             results = call.run_all(rasterise_views,
                                    [(renderer, [(view[2], view[3]) for view in chunk],
-                                     laid["raster"], fast) for chunk in chunks],
+                                     laid["raster"], *more) for chunk in chunks],
                                    timeouts=[limits.render_timeout_for(len(chunk))
                                              for chunk in chunks],
                                    lane=RENDER_LANE,
@@ -468,7 +470,7 @@ def draw(call: Any, renderer: Renderer, items: Sequence[Any], width: int, *,
         parallel = call.parallelism
         chunks = [chunk for chunk in (sent[start::parallel] for start in range(parallel))
                   if chunk]
-        tasks = [(renderer, data, chunk, width, list(fonts), locale, list(held), state, fast)
+        tasks = [(renderer, data, chunk, width, list(fonts), locale, list(held), state, *more)
                  for chunk in chunks]
         timeouts = [limits.render_timeout_for(len(chunk)) for chunk in chunks]
         first: list = []
@@ -479,7 +481,7 @@ def draw(call: Any, renderer: Renderer, items: Sequence[Any], width: int, *,
             if not isinstance(first[0], BaseException):
                 handed = note(first[0]["facts"], True)
                 if handed is not None:
-                    tasks = [(*task[:-2], handed, fast) for task in tasks]
+                    tasks = [(*task[:7], handed, *more) for task in tasks]
         with call.unlocked():
             results = first + call.run_all(render_views, tasks[len(first):],
                                            timeouts=timeouts[len(first):], lane=RENDER_LANE)
