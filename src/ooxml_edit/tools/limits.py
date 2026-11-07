@@ -76,6 +76,11 @@ class Limits:
     #: Workers :meth:`~.dispatch.Call.on_snapshot` tasks (checks) may hold at once; ``None``:
     #: all of the pool's but one, so a render need not queue behind a turn of checks.
     snapshot_workers: int | None = None
+    #: Workers drawing images (rasterising: the pool's render lane, :mod:`.worker`'s notes)
+    #: may hold at once; ``None``: all of them.  Render tasks already yield to every other
+    #: task waiting for a worker; a number keeps that many workers free of them, at the cost
+    #: of slower renders.
+    render_workers: int | None = None
     #: Tasks past their deadline a ``runner="threads"`` toolbox lets run on before it refuses
     #: new work (:class:`~.worker.ThreadRunner`'s ``max_abandoned``); ``None``: its size.
     max_abandoned_threads: int | None = None
