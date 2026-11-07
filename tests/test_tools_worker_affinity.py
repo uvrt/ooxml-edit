@@ -87,6 +87,19 @@ def test_a_holder_busy_past_the_wait_sends_the_task_elsewhere():
         assert pool.affinity_counts["elsewhere"] == 1
 
 
+def test_by_default_a_busy_holder_is_waited_for_within_the_deadline():
+    with WorkerPool(2) as pool:
+        _warm(pool)
+        holder, _ = pool.run(tools_toys.keep_value, "a", 1, timeout=60, affinity="a")
+        busy = threading.Thread(target=pool.run, args=(tools_toys.keep_value, "a", 2, 1.5),
+                                kwargs={"timeout": 60, "affinity": "a"})
+        busy.start()
+        time.sleep(0.3)
+        pid, before = pool.run(tools_toys.keep_value, "a", 3, timeout=60, affinity="a")
+        busy.join()
+        assert (pid, before) == (holder, 2)
+
+
 def test_with_no_wait_a_busy_holder_is_not_waited_for():
     with WorkerPool(2) as pool:
         _warm(pool)
@@ -96,7 +109,7 @@ def test_with_no_wait_a_busy_holder_is_not_waited_for():
         busy.start()
         time.sleep(0.3)
         began = time.monotonic()
-        pid, _ = pool.run(tools_toys.keep_value, "a", 3, timeout=60, affinity="a")
+        pid, _ = pool.run(tools_toys.keep_value, "a", 3, timeout=60, affinity="a", affinity_wait=0)
         assert pid != holder and time.monotonic() - began < 1.5
         busy.join()
 

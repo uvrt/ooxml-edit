@@ -54,7 +54,8 @@ affinity=key)`` names such state: the pool remembers which worker took the last 
 dies or is stopped takes its keys with it) and sends the next task with ``key`` there --
 at once when it is idle; when it is busy, the task waits for it at most ``affinity_wait``
 seconds (the caller's rule: the time the work would take done afresh, without the state,
-so waiting never costs more than going elsewhere would), then takes any idle worker, or a
+so waiting never costs more than going elsewhere would; ``None``, the default, waits as
+long as the task's deadline allows, ``0`` not at all), then takes any idle worker, or a
 new one.  A key no worker holds goes to any idle worker.  Work without a key prefers the
 idle workers that hold no key, or held one longest ago, so that the holders stay free for
 their keys.  Affinity only chooses the worker: a task must give the same result on any
@@ -573,7 +574,7 @@ class _Pool:
                 if holder is not None and holder not in self._idle:
                     if holding_since is None:
                         holding_since = now
-                    wait_over = now - holding_since >= (affinity_wait or 0.0)
+                    wait_over = affinity_wait is not None and now - holding_since >= affinity_wait
                 worker, how = self._choose(holder, wait_over)
                 if worker is not None:
                     self._idle.remove(worker)
@@ -602,10 +603,9 @@ class _Pool:
                 if remaining <= 0:
                     raise ToolError("timeout", f"no worker was free within {timeout:g} s",
                                     details={"timeout": timeout})
-                if not wait_over and holding_since is not None:
+                if not wait_over and holding_since is not None and affinity_wait is not None:
                     # Wake when the wait for the holder is over, to go elsewhere then.
-                    remaining = min(remaining, max(0.0, holding_since + (affinity_wait or 0.0)
-                                                   - began) + 0.001)
+                    remaining = min(remaining, max(0.0, holding_since + affinity_wait - began) + 0.001)
                 self._condition.wait(remaining)
                 waited = waited or holder is not None
         began = time.monotonic()
@@ -1557,8 +1557,8 @@ class WorkerPool(_Pool):
         a busy worker counts against it, unless ``queue_timeout`` is given: then that bounds
         the wait for a worker, and ``timeout`` counts from when one takes the task.
         ``affinity`` (hashable) sends the task to the worker that took the last task with
-        the same key, waiting for it at most ``affinity_wait`` s while it is busy (the
-        module's notes); ``None``, any worker."""
+        the same key, waiting for it at most ``affinity_wait`` s while it is busy (``None``:
+        as long as the deadline allows; the module's notes); ``None``, any worker."""
         if self._closed:
             raise RuntimeError("the worker pool is closed")
         refuse_while_bootstrapping()

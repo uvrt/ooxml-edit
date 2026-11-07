@@ -931,8 +931,8 @@ a document and what its text measured -- is there for the next task in that work
 there. `pool.run(fn, ..., affinity=key, affinity_wait=s)` (also `Call.run`, and the render
 pipeline's `draw(..., affinity=, affinity_wait=)` for a whole-document layout task) sends the
 task to the worker that took the last task with `key`: at once when it is idle; while it is
-busy the task waits for it at most `affinity_wait` s, then takes any idle worker (or starts
-one). The wait is the caller's rule: the time the work would take done afresh, without the
+busy the task waits for it at most `affinity_wait` s (`None`, the default: as long as the
+deadline allows; `0`: not at all), then takes any idle worker (or starts one). The wait is the caller's rule: the time the work would take done afresh, without the
 state, so waiting never costs more than going elsewhere would (at most twice the best
 choice). A key no worker holds goes to any idle worker. Work without a key -- the rasterising
 of a render, say -- prefers the idle workers that hold no key, or held one longest ago, so
