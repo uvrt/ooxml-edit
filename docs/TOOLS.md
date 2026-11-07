@@ -975,6 +975,42 @@ not find there. `pool.affinity_counts` counts where keyed tasks went (`hit`, `wa
 `ThreadRunner` take the keywords and need them not (one process). An application's own
 runner is handed them only with `takes_affinity = True`.
 
+**The render lane, and fast images (0.92.0, round 39).** Rasterising an image is long
+work no other call waits for, and on a pool of two it took the workers from the layouts and
+checks behind it: on an 11-writer report, renders and checks queued past their 20 s
+deadline ("no worker was free") or were stopped half drawn, each stopped worker starting
+again (1.3-1.5 s, then 0.75 s for its first layout, and the layouts it held gone). Now:
+
+- `pool.run(fn, ..., lane="render")` (`worker.RENDER_LANE`; also `Call.run` and
+  `Call.run_all`, and every task the render pipeline runs to draw: `rasterise_views`,
+  `render_views`, `rasterise_tiles`) yields: it takes a worker only while no other task waits
+  for one (a task waiting for its affinity holder does not count until its wait is over),
+  and prefers the workers holding no key. `pool.render_workers` (a toolbox's
+  `Limits.render_workers`; `None`, the default: all) caps how many workers draw at once.
+  The pool's size, and so its CPUs, are unchanged.
+- Its wait for a worker has its own bound (`Limits.worker_queue_timeout`, 300 s), its
+  deadline (`render_timeout` per 4 views) counting from when a worker takes it, as a
+  check's does; a render's layout task is queued, and finished past its deadline, the same way
+  (`Call.run(..., queued=True)`; `pool.run(..., overrun=True)`): its worker holds the
+  document's layouts, which stopping it would lose.
+- Past its deadline a render task's worker is not stopped: the call reports `timeout` ("its
+  worker finishes it in the background") and the worker goes on for at most as long again
+  (`worker.OVERRUN`), then is kept -- the images handed to `on_late`, which the pipeline
+  keeps in the store, so the next call finds them -- or, still busy, stopped.
+  `pool.overruns` counts both (`finished`, `stopped`).
+- A whole document's views are rasterised a view a task (up to 4; more in tasks of at most 4),
+  so a layout waits at most one view behind them.
+
+`render`'s `fast` (documents; `kind_fields`): `draw(..., fast=True)` asks a renderer for
+cheaper pixels of the same SVG where it has them (`Renderer.fast`,
+`Renderer.rasterise_fast`; `RendererBase.fast` is false, and a fast render is then the exact
+one). The layout, page breaks and positions are the same; only the pixels are approximate.
+A fast image is kept under its own key (`render.fast_key`), never served for an exact
+render; a fast render of a view whose exact image is held gets the exact one. `draw`'s
+values are `(png, meta, cached, approximate)`; the worker tasks' tuples are as before, the
+approximate views listed beside them (`"approximate"`). A library whose handler does not
+take `fast` does without it (`_with_taken`'s `dropped`): its images are exact.
+
 **Threads with the GIL off (free threading, 0.76.0).** On a free-threaded Python with the
 GIL off (`ooxml_edit.tools.gil_enabled()` false: `python3.15t`, `PYTHON_GIL=0`, and lxml 7,
 since lxml 6 turns the GIL back on), threads of one process run side by side, so the work

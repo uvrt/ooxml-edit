@@ -64,6 +64,20 @@ worker (state it does not find, it makes again), and the pool counts where its k
 tasks went (:attr:`_Pool.affinity_counts`).  :class:`InProcess` and
 :class:`ThreadRunner` take ``affinity`` and need it not: their tasks share one process.
 
+**Lanes: rendering yields to the rest.**  ``run(..., lane="render")`` marks a task as
+drawing images (:data:`RENDER_LANE`): rasterising a view of a document, which takes long and
+which no other call waits on.  Such a task takes a worker only while no other task is
+waiting for one -- a layout, a check -- so a turn of images never starves the layouts
+behind them, and at most :attr:`_Pool.render_workers` of them hold a worker at once
+(``None``, the default: all of them; the CPUs used are the pool's either way).  Among idle
+workers it prefers those holding no affinity key, as other work without a key does.  And it
+is not stopped at its deadline: the caller gets ``timeout`` then, and the worker goes on
+with it for at most as long again (:data:`OVERRUN`; ``run(..., overrun=True)`` asks the same
+for other work, a render's layout) -- an image that is slow, not stuck,
+is finished, handed to ``on_late`` (the caller keeps it for the next call) and the worker
+kept, with its warm state and its layouts; only one still busy then is stopped.  Starting
+a worker again costs more than most images (its imports, its fonts, its first layout).
+
 **Three runners** (and a fourth, below).
 
 * :class:`WorkerPool` -- :mod:`multiprocessing` workers, the default.  ``spawn`` is the
@@ -140,6 +154,15 @@ AFFINITY_KEYS = 256
 #: ``elsewhere``, it was busy longer and another worker took the task; ``unheld``, no worker
 #: held the key (a first task, or one whose holder was killed, died or forgot it).
 AFFINITY_OUTCOMES = ("hit", "waited", "elsewhere", "unheld")
+#: The lane of a task that draws images (the module's notes): it yields to other work, and
+#: its worker is not stopped at its deadline unless it is still busy :data:`OVERRUN` times
+#: the deadline later.
+RENDER_LANE = "render"
+#: The lanes ``run`` takes: ``None`` for the rest of the work.
+LANES = (None, RENDER_LANE)
+#: How much longer than its deadline a :data:`RENDER_LANE` task's worker may go on with it
+#: (as a share of the deadline) before it is stopped.
+OVERRUN = 1.0
 #: :attr:`_Pool.start_timeout`'s default: seconds to start one worker and warm it.
 START_TIMEOUT = 120.0
 #: A :class:`WorkerPool` worker's process name, which spawn sets before the main module
@@ -248,14 +271,16 @@ def default_workers() -> int:
 
 
 def run_all(runner: Any, fn: Callable[..., Any], calls: Sequence[tuple],
-            timeouts: Sequence[float]) -> list[Any]:
+            timeouts: Sequence[float], options: "Sequence[dict] | None" = None) -> list[Any]:
     """``fn(*args)`` for each ``args`` of ``calls``, at once over ``runner``'s workers (a
     thread per call waits on ``runner.run``), each with its own deadline; the results in
     order, a call's exception in its place (raised by none: the caller decides).  One call
-    runs in this thread."""
+    runs in this thread.  ``options``: each call's further keywords for ``runner.run``
+    (``lane``, ``queue_timeout``, ``on_late``), what the runner takes."""
     def one(index: int) -> Any:
         try:
-            return runner.run(fn, *calls[index], timeout=timeouts[index])
+            return runner.run(fn, *calls[index], timeout=timeouts[index],
+                              **(options[index] if options else {}))
         except BaseException as exc:  # noqa: BLE001 -- reported in its place
             return exc
 
@@ -271,6 +296,13 @@ def takes_affinity(runner: Any) -> bool:
     this module's runners do; an application's own runner says so with a true
     ``takes_affinity`` attribute, else they are left out of what it is handed."""
     return isinstance(runner, (_Pool, _Threads)) or getattr(runner, "takes_affinity", False) is True
+
+
+def takes_lane(runner: Any) -> bool:
+    """Whether ``runner.run`` takes ``lane`` and ``on_late`` (the module's notes): this
+    module's runners do; an application's own runner says so with a true ``takes_lane``
+    attribute, else they are left out of what it is handed."""
+    return isinstance(runner, (_Pool, _Threads)) or getattr(runner, "takes_lane", False) is True
 
 
 def bootstrapping_worker() -> bool:
@@ -486,6 +518,15 @@ class _Pool:
         self._counts = dict.fromkeys(AFFINITY_OUTCOMES, 0)
         #: ``id(worker)`` -> the tasks waiting for it as their holder, in the order they came.
         self._waiting: dict[int, list] = {}
+        #: How many :data:`RENDER_LANE` tasks may hold a worker at once; ``None``: all.
+        self.render_workers: int | None = None
+        #: Tasks of the other lane waiting for any worker: a render task yields to them.
+        self._wanting = 0
+        #: ``id(worker)`` of the workers running a :data:`RENDER_LANE` task.
+        self._rendering: set[int] = set()
+        #: Render tasks past their deadline whose worker finished them (kept), and those
+        #: stopped after all (also in :attr:`killed`).
+        self.overruns = {"finished": 0, "stopped": 0}
 
     def _failure(self, exc: BaseException) -> None:
         """Remember ``exc`` if it is lasting (called with the condition held)."""
@@ -525,6 +566,13 @@ class _Pool:
             del self._holders[key]
         self._keyed_at.pop(id(worker), None)
         self._waiting.pop(id(worker), None)
+        self._rendering.discard(id(worker))
+
+    def _yields(self) -> bool:
+        """Whether a :data:`RENDER_LANE` task waits now rather than take a worker: another
+        task waits for one, or :attr:`render_workers` hold one already (condition held)."""
+        limit = self.render_workers
+        return self._wanting > 0 or (limit is not None and len(self._rendering) >= max(1, limit))
 
     def _dequeue(self, worker: Any, ticket: object) -> None:
         """A task no longer waits for ``worker`` (condition held): the next may take it."""
@@ -574,14 +622,20 @@ class _Pool:
         self._keyed_at[id(worker)] = time.monotonic()
 
     def _acquire(self, deadline: float, timeout: float, affinity: Any = None,
-                 affinity_wait: float | None = None) -> tuple[Any, float]:
+                 affinity_wait: float | None = None, lane: Any = None) -> tuple[Any, float]:
         """An idle worker, or a new one, and the seconds of the wait that do not count
         against ``deadline``: starting one, or waiting while workers start.  With
         ``affinity``, the worker holding it, waited for at most ``affinity_wait`` s while
-        busy (the module's notes); a new worker takes it only after that, too."""
+        busy (the module's notes); a new worker takes it only after that, too.  A
+        :data:`RENDER_LANE` task waits while another task waits for a worker, or while
+        :attr:`render_workers` render already."""
+        if lane not in LANES:
+            raise ArgumentError(f"lane is one of {LANES}, not {lane!r}")
+        rendering = lane == RENDER_LANE
         uncounted = 0.0
         holding_since: float | None = None      # when the wait for a busy holder began
         waited = False
+        wanting = False                          # counted in self._wanting
         ticket = object()                        # this task's place among a holder's waiters
         queued: Any = None                       # the holder it is queued for
         with self._condition:
@@ -604,23 +658,30 @@ class _Pool:
                         if not wait_over and queued is None:
                             self._waiting.setdefault(id(holder), []).append(ticket)
                             queued = holder
-                    worker, how = self._choose(holder, wait_over, ticket)
+                    yields = rendering and self._yields()
+                    worker, how = (None, "") if yields else self._choose(holder, wait_over, ticket)
                     if worker is not None:
                         self._idle.remove(worker)
                         if worker.alive():
                             if how == "hit" and waited:
                                 how = "waited"
                             self._took(worker, affinity, how, holder)
+                            if rendering:
+                                self._rendering.add(id(worker))
                             return worker, uncounted
                         self._count -= 1
                         self._forget(worker)
                         self._unhold(worker)
                         worker.dispose()
                         continue
-                    if self._count < self.size and wait_over:
+                    if self._count < self.size and wait_over and not yields:
                         self._count += 1
                         self._starting += 1
                         break
+                    if not rendering and wait_over and not wanting:
+                        # Any worker would do: render tasks wait until this one has one.
+                        wanting = True
+                        self._wanting += 1
                     began = time.monotonic()
                     if self._starting:
                         # A worker is starting (warm-up, or a replacement): not the call's time.
@@ -640,6 +701,9 @@ class _Pool:
             finally:
                 if queued is not None:
                     self._dequeue(queued, ticket)
+                if wanting:
+                    self._wanting -= 1
+                    self._condition.notify_all()
         began = time.monotonic()
         try:
             worker = self._start()
@@ -654,6 +718,8 @@ class _Pool:
             self._starting -= 1
             holder = self._holders.get(affinity) if affinity is not None else None
             self._took(worker, affinity, "", holder)
+            if rendering:
+                self._rendering.add(id(worker))
             self._condition.notify_all()
         return worker, uncounted + time.monotonic() - began
 
@@ -709,6 +775,7 @@ class _Pool:
 
     def _release(self, worker: Any) -> None:
         with self._condition:
+            self._rendering.discard(id(worker))
             if self._closed:
                 self._count -= 1
                 self._forget(worker)
@@ -727,6 +794,44 @@ class _Pool:
         with self._condition:
             self._count -= 1
             self._condition.notify_all()
+
+    def _overrun(self, worker: Any, grace: float, finished: Callable[[Any, float], Any],
+                 on_late: "Callable[[Any], Any] | None") -> None:
+        """A :data:`RENDER_LANE` task's deadline passed: ``worker`` goes on with it, in the
+        background, for at most ``grace`` s -- ``finished(worker, seconds)`` waits for its
+        reply, ``None`` when there is none in time -- then is kept (its result handed to
+        ``on_late``) or stopped.  It stays busy the while: the pool's size holds."""
+        def wait() -> None:
+            ends = time.monotonic() + grace
+            reply = None
+            try:
+                while True:
+                    left = ends - time.monotonic()
+                    if self._closed or left <= 0:
+                        break
+                    reply = finished(worker, min(left, 0.5))
+                    if reply is not None:
+                        break
+            except Exception:  # noqa: BLE001 -- a worker that broke is stopped below
+                reply = None
+            if reply is None:
+                with self._condition:
+                    self.overruns["stopped"] += 1
+                self.killed.append(worker.pid or 0)
+                self._discard(worker)
+                return
+            with self._condition:
+                self.overruns["finished"] += 1
+            self._release(worker)
+            ok = isinstance(reply, tuple) and len(reply) >= 2 and reply[0] == "ok"
+            if ok and on_late is not None:
+                value = reply[1]
+                try:
+                    on_late(value)
+                except Exception as exc:  # noqa: BLE001 -- the result was nobody's by then
+                    logger.debug("a late render's result was not kept: %s", exc)
+
+        threading.Thread(target=wait, daemon=True, name="ooxml-edit-tools-overrun").start()
 
     def _close_idle(self) -> list[Any]:
         with self._condition:
@@ -1055,6 +1160,20 @@ def _outcome(reply: Any) -> Any:
     raise ToolError("internal", f"the worker process answered {reply!r}")
 
 
+def _overran(timeout: float) -> ToolError:
+    """A :data:`RENDER_LANE` task's ``timeout``: its worker goes on with it a while."""
+    return ToolError("timeout", f"the work did not finish within {timeout:g} s; its worker "
+                     f"finishes it in the background (kept for the next call) or is stopped "
+                     f"{timeout * OVERRUN:g} s later", details={"timeout": timeout})
+
+
+def _late(on_late: "Callable[[Any], Any] | None") -> "Callable[[Any], Any] | None":
+    """``on_late`` handed a subprocess worker's late result as its value (``_outcome``)."""
+    if on_late is None:
+        return None
+    return lambda value: on_late(_outcome(("ok", value)))
+
+
 class SubprocessPool(_Pool):
     """At most ``size`` subprocess workers (``python -m ooxml_edit.tools.subworker``), started
     when first needed and kept.
@@ -1104,9 +1223,11 @@ class SubprocessPool(_Pool):
 
     def run(self, fn: Callable[..., Any], *args: Any, timeout: float,
             queue_timeout: float | None = None, affinity: Any = None,
-            affinity_wait: float | None = None, **kwargs: Any) -> Any:
-        """``fn(*args, **kwargs)`` in a worker, as :meth:`WorkerPool.run` (``affinity``: the
-        module's notes)."""
+            affinity_wait: float | None = None, lane: Any = None,
+            on_late: "Callable[[Any], Any] | None" = None, overrun: bool = False,
+            **kwargs: Any) -> Any:
+        """``fn(*args, **kwargs)`` in a worker, as :meth:`WorkerPool.run` (``affinity``,
+        ``lane``, ``on_late``: the module's notes)."""
         if self._closed:
             raise RuntimeError("the worker pool is closed")
         reference = task_reference(fn)
@@ -1115,7 +1236,7 @@ class SubprocessPool(_Pool):
         payload = pickle.dumps((args, kwargs), protocol=_PROTOCOL)
         deadline = time.monotonic() + timeout
         worker, uncounted = self._acquire(*_queue(deadline, timeout, queue_timeout), affinity,
-                                          affinity_wait)
+                                          affinity_wait, lane)
         deadline = (deadline + uncounted if queue_timeout is None
                     else time.monotonic() + timeout)
         try:
@@ -1128,6 +1249,10 @@ class SubprocessPool(_Pool):
             self._discard(worker)  # a task may be in flight: the worker cannot be reused
             raise
         if reply is None:
+            if lane == RENDER_LANE or overrun:
+                self._overrun(worker, timeout * OVERRUN, lambda w, wait: w.wait(wait),
+                              _late(on_late))
+                raise _overran(timeout)
             self.killed.append(worker.pid or 0)
             self._discard(worker)
             raise ToolError("timeout", f"the work did not finish within {timeout:g} s; "
@@ -1282,9 +1407,12 @@ class InProcess(_Threads):
 
     def run(self, fn: Callable[..., Any], *args: Any, timeout: float,
             queue_timeout: float | None = None, affinity: Any = None,
-            affinity_wait: float | None = None, **kwargs: Any) -> Any:
-        """``fn(*args, **kwargs)`` in a thread of this process; ``affinity`` is taken and
-        not needed: every task runs in this one process."""
+            affinity_wait: float | None = None, lane: Any = None,
+            on_late: "Callable[[Any], Any] | None" = None, overrun: bool = False,
+            **kwargs: Any) -> Any:
+        """``fn(*args, **kwargs)`` in a thread of this process; ``affinity`` and ``lane`` are
+        taken and not needed: every task runs in this one process, and a task past its
+        deadline runs on there anyway (``on_late`` is not called)."""
         return self._run(fn, args, kwargs, timeout, queue_timeout)
 
     def warm(self, count: int | None = None, *, wait: bool = False) -> None:
@@ -1427,10 +1555,13 @@ class ThreadRunner(_Threads):
 
     def run(self, fn: Callable[..., Any], *args: Any, timeout: float,
             queue_timeout: float | None = None, affinity: Any = None,
-            affinity_wait: float | None = None, **kwargs: Any) -> Any:
+            affinity_wait: float | None = None, lane: Any = None,
+            on_late: "Callable[[Any], Any] | None" = None, overrun: bool = False,
+            **kwargs: Any) -> Any:
         """``fn(*args, **kwargs)`` in a thread, waited for at most ``timeout`` s (see the
-        class's notes); warming up first is not the call's time.  ``affinity`` is taken and
-        not needed: every task runs in this one process."""
+        class's notes); warming up first is not the call's time.  ``affinity`` and ``lane``
+        are taken and not needed: every task runs in this one process (``on_late`` is not
+        called)."""
         if self._closed:
             raise RuntimeError("the worker pool is closed")
         self._check_gil()
@@ -1520,6 +1651,19 @@ class WorkerPool(_Pool):
                                "multiprocessing workers")
 
     @property
+    def render_workers(self) -> int | None:
+        """How many :data:`RENDER_LANE` tasks may hold a worker at once (``None``: all),
+        here and in the :class:`SubprocessPool` it may fall back to."""
+        return self._render_workers
+
+    @render_workers.setter
+    def render_workers(self, value: int | None) -> None:
+        self._render_workers = value
+        others = getattr(self, "_subprocesses", None)
+        if others is not None:
+            others.render_workers = value
+
+    @property
     def in_process(self) -> bool:
         """Whether tasks run in this process: asked for (``size=0``), or fallen back to."""
         return self._inline is not None
@@ -1556,6 +1700,7 @@ class WorkerPool(_Pool):
             if self._subprocesses is None:
                 self._subprocesses = SubprocessPool(max(1, self.size), warm_up=self.warm_up,
                                                     start_timeout=self.start_timeout)
+                self._subprocesses.render_workers = self.render_workers
                 # One record of the workers killed at a deadline, whichever ran them.
                 self._subprocesses.killed = self.killed
                 logger.warning("ooxml-edit tools run their work in subprocess workers: %s",
@@ -1564,11 +1709,15 @@ class WorkerPool(_Pool):
 
     def _run_elsewhere(self, runner: Any, fn: Callable[..., Any], args: tuple, kwargs: dict,
                        deadline: float, queue_timeout: float | None = None,
-                       affinity: Any = None, affinity_wait: float | None = None) -> Any:
+                       affinity: Any = None, affinity_wait: float | None = None,
+                       lane: Any = None, on_late: "Callable[[Any], Any] | None" = None,
+                       overrun: bool = False) -> Any:
         if queue_timeout is not None:
             kwargs = {**kwargs, "queue_timeout": queue_timeout}
         if affinity is not None:
             kwargs = {**kwargs, "affinity": affinity, "affinity_wait": affinity_wait}
+        if lane is not None or on_late is not None or overrun:
+            kwargs = {**kwargs, "lane": lane, "on_late": on_late, "overrun": overrun}
         try:
             return runner.run(fn, *args, timeout=max(0.0, deadline - time.monotonic()),
                               **kwargs)
@@ -1585,13 +1734,19 @@ class WorkerPool(_Pool):
 
     def run(self, fn: Callable[..., Any], *args: Any, timeout: float,
             queue_timeout: float | None = None, affinity: Any = None,
-            affinity_wait: float | None = None, **kwargs: Any) -> Any:
+            affinity_wait: float | None = None, lane: Any = None,
+            on_late: "Callable[[Any], Any] | None" = None, overrun: bool = False,
+            **kwargs: Any) -> Any:
         """``fn(*args, **kwargs)`` in a worker, waited for at most ``timeout`` s.  Waiting for
         a busy worker counts against it, unless ``queue_timeout`` is given: then that bounds
         the wait for a worker, and ``timeout`` counts from when one takes the task.
         ``affinity`` (hashable) sends the task to the worker that took the last task with
         the same key, waiting for it at most ``affinity_wait`` s while it is busy (``None``:
-        as long as the deadline allows; the module's notes); ``None``, any worker."""
+        as long as the deadline allows; the module's notes); ``None``, any worker.
+        ``lane``: :data:`RENDER_LANE` for a task that draws images -- it yields to other
+        work, and past its deadline its worker goes on with it a while, its result then
+        handed to ``on_late`` (the module's notes).  ``overrun``: that last for a task of
+        the other lane too (a render's layout: its worker holds layouts worth keeping)."""
         if self._closed:
             raise RuntimeError("the worker pool is closed")
         refuse_while_bootstrapping()
@@ -1601,11 +1756,12 @@ class WorkerPool(_Pool):
                                     **kwargs)
         if self._subprocesses is not None:
             return self._run_elsewhere(self._subprocesses, fn, args, kwargs, deadline,
-                                       queue_timeout, affinity, affinity_wait)
+                                       queue_timeout, affinity, affinity_wait, lane, on_late,
+                                       overrun)
         why = None
         try:
             worker, uncounted = self._acquire(*_queue(deadline, timeout, queue_timeout),
-                                              affinity, affinity_wait)
+                                              affinity, affinity_wait, lane)
             deadline = (deadline + uncounted if queue_timeout is None
                         else time.monotonic() + timeout)
         except _NoChildren as exc:
@@ -1618,10 +1774,17 @@ class WorkerPool(_Pool):
             why = exc.message
         if why is not None:         # outside the handler: the work's own error unchained
             return self._run_elsewhere(self._go_elsewhere(why), fn, args, kwargs, deadline,
-                                       queue_timeout, affinity, affinity_wait)
+                                       queue_timeout, affinity, affinity_wait, lane, on_late,
+                                       overrun)
         try:
             worker.conn.send((fn, args, kwargs))
             if not worker.conn.poll(max(0.0, deadline - time.monotonic())):
+                if lane == RENDER_LANE or overrun:
+                    late, worker = worker, None
+                    self._overrun(late, timeout * OVERRUN,
+                                  lambda w, wait: w.conn.recv() if w.conn.poll(wait) else None,
+                                  on_late)
+                    raise _overran(timeout)
                 self.killed.append(worker.pid or 0)
                 self._discard(worker)
                 worker = None

@@ -33,6 +33,20 @@ What a format keeps between calls -- decoded fonts, a layout -- travels as ``sta
 the workers, as given) and comes back as each task's ``facts`` (:meth:`Renderer.facts`),
 which :func:`draw` hands to the caller's ``on_facts`` and returns.
 
+**The render lane** (round 39).  Rasterising runs in the pool's render lane
+(:data:`~.worker.RENDER_LANE`): it yields to layouts and checks waiting for a worker, its
+deadline counts from when a worker takes it (the wait for one has its own bound,
+:attr:`~.limits.Limits.worker_queue_timeout`), and a worker past it finishes the image in the
+background -- kept in the store for the next call -- rather than being stopped.  A
+whole document's views are rasterised a view a task (up to :data:`~.limits.RENDER_ITEMS`
+views; more in tasks of at most that many), so a layout waits at most one view.
+
+**Fast** (round 39).  ``draw(..., fast=True)`` asks for cheaper pixels where a renderer has
+them (:attr:`Renderer.fast`, :meth:`Renderer.rasterise_fast`): the same SVG -- the same
+layout, page breaks and all -- drawn approximately, kept under a key of its own
+(:func:`fast_key`) and said so (each view's ``approximate``).  An exact image held already
+is returned in its place: never a worse one than the store has.
+
 Nothing here imports a renderer: the format library passes its adapter.
 """
 
@@ -44,6 +58,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Protocol, Sequence, runtime_checkable
 
 from .rendercache import code_stamp, content_key
+from .limits import RENDER_ITEMS
 from .worker import worker_task
 
 #: The eight bytes every PNG starts with.
@@ -149,6 +164,12 @@ class Renderer(Protocol):
         """The PNG of a contact image's SVG (:func:`.tiles.tiled_svg`), at its own size."""
         ...
 
+    def rasterise_fast(self, views: "list[View]", raster: Any) -> "list[tuple[bytes, Any]]":
+        """:meth:`rasterise`, approximately and for less CPU (``draw(..., fast=True)``),
+        where :attr:`fast` says the renderer can: each view's ``(png, meta)`` from the same
+        SVG, its pixels near the exact image's."""
+        ...
+
     def warm_up(self) -> None:
         """What the first render in a new worker would pay for, paid before it: the
         renderer's imports, the rasteriser's load of the system's fonts."""
@@ -163,6 +184,12 @@ class RendererBase:
     whole_document: bool = False
     #: The importable modules whose code draws the pixels (:meth:`code_stamp`).
     modules: "tuple[str, ...]" = ()
+    #: Whether :meth:`rasterise_fast` draws cheaper, approximate pixels; ``False``: a fast
+    #: render is the exact one.
+    fast: bool = False
+
+    def rasterise_fast(self, views: "list[View]", raster: Any) -> "list[tuple[bytes, Any]]":
+        return self.rasterise(views, raster)  # type: ignore[attr-defined]
 
     def code_stamp(self) -> list:
         return code_stamp(*self.modules)
@@ -204,6 +231,16 @@ def raster_key(renderer: Renderer, svg: str, fingerprint: str) -> str:
     return content_key(f"{renderer.name} png", renderer.key_text(svg), fingerprint)
 
 
+def fast_key(renderer: Renderer, svg: str, fingerprint: str) -> str:
+    """:func:`raster_key` of a view's approximate image (:meth:`Renderer.rasterise_fast`):
+    never the exact one's."""
+    return content_key(f"{renderer.name} png fast", renderer.key_text(svg), fingerprint)
+
+
+def _fast(renderer: Renderer) -> bool:
+    return getattr(renderer, "fast", False) is True
+
+
 def system_fonts() -> Any:
     """The system's font files as the rasteriser finds them, each with its time and size
     (``ooxml_common.fonts.rasterdb``), or ``"fontconfig"`` where it leaves them to
@@ -217,17 +254,24 @@ def system_fonts() -> Any:
 # -- the worker tasks ----------------------------------------------------------------------------
 
 
-def _keyed(renderer: Renderer, layout: Layout, known: Sequence[str]) -> list:
+def _keyed(renderer: Renderer, layout: Layout, known: Sequence[str], fast: bool = False) -> list:
+    """Each view, its key, whether ``known`` holds it, and whether its image is approximate:
+    with ``fast`` (a renderer that has cheaper pixels), the exact image's key where held,
+    else the approximate one's."""
     held = set(known)
     out = []
     for view in layout.views:
         key = raster_key(renderer, view.svg, layout.fingerprint)
-        out.append((view, key, key in held))
+        if fast and key not in held:
+            cheap = fast_key(renderer, view.svg, layout.fingerprint)
+            out.append((view, cheap, cheap in held, True))
+        else:
+            out.append((view, key, key in held, False))
     return out
 
 
-def _rasterised(renderer: Renderer, views: "list[View]", raster: Any) -> list:
-    drawn = list(renderer.rasterise(views, raster))
+def _rasterised(renderer: Renderer, views: "list[View]", raster: Any, fast: bool = False) -> list:
+    drawn = list(renderer.rasterise_fast(views, raster) if fast else renderer.rasterise(views, raster))
     if len(drawn) != len(views):
         raise RuntimeError(f"{_name(renderer)} returned {len(drawn)} image(s) for "
                            f"{len(views)} view(s)")
@@ -237,44 +281,53 @@ def _rasterised(renderer: Renderer, views: "list[View]", raster: Any) -> list:
 @worker_task
 def lay_out_views(renderer: Renderer, data: bytes, items: list, width: int,
                   font_dirs: "list[str]", locale: Any = None, known: Sequence[str] = (),
-                  state: Any = None) -> dict:
+                  state: Any = None, fast: bool = False) -> dict:
     """In a worker: the document laid out once (:meth:`Renderer.lay_out`), and each of
     ``items`` it has as ``(item, key, svg, info)`` -- ``key`` its image's
-    (:func:`raster_key`), ``svg`` ``None`` where the key is in ``known`` (the caller holds
-    that image).  Also ``raster`` (for :func:`rasterise_views`) and ``facts``."""
+    (:func:`raster_key`; with ``fast``, :func:`fast_key` unless the exact one is in
+    ``known``), ``svg`` ``None`` where the key is in ``known`` (the caller holds that
+    image).  Also ``raster`` (for :func:`rasterise_views`), ``facts``, and
+    ``approximate``: the items whose key is a fast image's."""
     layout = renderer.lay_out(data, list(items), int(width), list(font_dirs), locale, state)
+    fast = fast and _fast(renderer)
+    keyed = _keyed(renderer, layout, known, fast)
     views = [(view.item, key, None if held else view.svg, view.info)
-             for view, key, held in _keyed(renderer, layout, known)]
-    return {"views": views, "raster": layout.raster, "facts": renderer.facts(layout)}
+             for view, key, held, _ in keyed]
+    return {"views": views, "raster": layout.raster, "facts": renderer.facts(layout),
+            "approximate": [view.item for view, _, _, approximate in keyed if approximate]}
 
 
 @worker_task
-def rasterise_views(renderer: Renderer, views: "list[tuple[str, Any]]", raster: Any
-                    ) -> "list[tuple[bytes, Any]]":
+def rasterise_views(renderer: Renderer, views: "list[tuple[str, Any]]", raster: Any,
+                    fast: bool = False) -> "list[tuple[bytes, Any]]":
     """In a worker: ``(png, meta)`` of each ``(svg, info)`` of :func:`lay_out_views`, with
-    its ``raster``."""
-    return _rasterised(renderer, [View(None, svg, info) for svg, info in views], raster)
+    its ``raster``; with ``fast``, approximately (:meth:`Renderer.rasterise_fast`)."""
+    return _rasterised(renderer, [View(None, svg, info) for svg, info in views], raster,
+                       fast and _fast(renderer))
 
 
 @worker_task
 def render_views(renderer: Renderer, data: bytes, items: list, width: int,
                  font_dirs: "list[str]", locale: Any = None, known: Sequence[str] = (),
-                 state: Any = None) -> dict:
+                 state: Any = None, fast: bool = False) -> dict:
     """In a worker: :func:`lay_out_views` and :func:`rasterise_views` in one, for views
-    that stand alone.  ``{"views": [(item, key, png, meta, drawn), ...], "facts": ...}``:
-    ``png`` and ``meta`` are ``None`` and ``drawn`` false where the key is in ``known``."""
+    that stand alone.  ``{"views": [(item, key, png, meta, drawn), ...], "facts": ...,
+    "approximate": [item, ...]}``: ``png`` and ``meta`` are ``None`` and ``drawn`` false
+    where the key is in ``known``; ``approximate``, the items whose image is a fast one."""
     layout = renderer.lay_out(data, list(items), int(width), list(font_dirs), locale, state)
-    keyed = _keyed(renderer, layout, known)
-    todo = [view for view, _, held in keyed if not held]
-    drawn = iter(_rasterised(renderer, todo, layout.raster) if todo else ())
+    fast = fast and _fast(renderer)
+    keyed = _keyed(renderer, layout, known, fast)
+    todo = [view for view, _, held, _ in keyed if not held]
+    drawn = iter(_rasterised(renderer, todo, layout.raster, fast) if todo else ())
     views = []
-    for view, key, held in keyed:
+    for view, key, held, _ in keyed:
         if held:
             views.append((view.item, key, None, None, False))
         else:
             png, meta = next(drawn)
             views.append((view.item, key, png, meta, True))
-    return {"views": views, "facts": renderer.facts(layout)}
+    return {"views": views, "facts": renderer.facts(layout),
+            "approximate": [view.item for view, _, _, approximate in keyed if approximate]}
 
 
 @worker_task
@@ -304,10 +357,11 @@ def draw(call: Any, renderer: Renderer, items: Sequence[Any], width: int, *,
          ids: Mapping[Any, Any], fonts: Sequence[str], locale: Any,
          wire: "Mapping[Any, Any] | None" = None, state: Any = None, first_alone: bool = False,
          on_facts: "Callable[[Any, bool], Any] | None" = None, affinity: Any = None,
-         affinity_wait: float | None = None) -> "tuple[dict, list]":
-    """``({item: (png, meta, cached)}, facts)`` for the views ``items`` drawn ``width`` px
-    wide, by the call's workers; ``cached`` says an image was not drawn by this call.  An
-    item the document does not have is left out of the dict.
+         affinity_wait: float | None = None, fast: bool = False) -> "tuple[dict, list]":
+    """``({item: (png, meta, cached, approximate)}, facts)`` for the views ``items`` drawn
+    ``width`` px wide, by the call's workers; ``cached`` says an image was not drawn by this
+    call, ``approximate`` that it is a fast one (``fast``, below).  An item the document
+    does not have is left out of the dict.
 
     An image is kept by its content (:func:`raster_key`) in the toolbox's store
     (``call.images``), and this version's key of each view on the entry, by ``ids[item]``
@@ -317,6 +371,8 @@ def draw(call: Any, renderer: Renderer, items: Sequence[Any], width: int, *,
     found and not drawn again.  The bytes are the version's snapshot, taken under the
     lock; the workers work with the lock let go, and what they drew is kept under that
     version.  What one chunk drew is kept when another fails; the failure is raised then.
+    The rasterising runs in the pool's render lane (the module's notes): an image finished
+    after its deadline is kept in the store all the same.
 
     ``wire`` is how an item is named to the worker where that differs (``{item: name}``);
     ``fonts`` and ``locale`` are handed to it as resolved here (it sees neither the
@@ -332,16 +388,31 @@ def draw(call: Any, renderer: Renderer, items: Sequence[Any], width: int, *,
     ``affinity`` (a :attr:`~Renderer.whole_document` renderer): the layout task goes to the
     worker that took the last task with that key -- the one holding what ``state`` names,
     say, so it is not sent -- waited for at most ``affinity_wait`` s while busy
-    (:mod:`.worker`'s notes); the rasterising goes to the others first."""
+    (:mod:`.worker`'s notes); the rasterising goes to the others first.
+
+    ``fast``: a view without an exact image held is drawn approximately where the renderer
+    can (:attr:`Renderer.fast`) -- the same layout, cheaper pixels -- kept apart from the
+    exact images; one with an exact image held gets that one."""
+    from .worker import RENDER_LANE
+
+    # The worker tasks' arguments as before unless fast is asked for: ``fast`` last, only then.
+    more = (True,) if fast and _fast(renderer) else ()
     entry, version, limits, store = call.entry, call.entry.version, call.limits, call.images
+    fast = fast and _fast(renderer)
     drawn: dict = {}
     todo = []
     for item in dict.fromkeys(items):
-        key = entry.render_keys.get((version, ids[item], width, fonts, locale))
-        found = store.get(key) if key is not None else None
-        if found is not None:
-            drawn[item] = (found[0], found[1], True)
-        else:
+        place = (version, ids[item], width, fonts, locale)
+        found = None
+        for approximate, where in ((False, place), (True, (*place, "fast"))):
+            key = entry.render_keys.get(where)
+            found = store.get(key) if key is not None else None
+            if found is not None:
+                drawn[item] = (found[0], found[1], True, approximate)
+                break
+            if not fast:
+                break
+        if found is None:
             todo.append(item)
     if not todo:
         return drawn, []
@@ -354,67 +425,84 @@ def draw(call: Any, renderer: Renderer, items: Sequence[Any], width: int, *,
     sent = list(back)
     note = on_facts or (lambda facts, alone: None)
     facts: list = []
-    views: dict = {}                     # sent item -> (key, png, meta, new)
+    views: dict = {}                     # sent item -> (key, png, meta, new, approximate)
     failed: "BaseException | None" = None
+
+    def keeper(keys: list) -> "Callable[[Any], None]":
+        # A chunk finished after its deadline (the render lane): its images kept by content,
+        # for the next call to find.
+        def keep(result: Any) -> None:
+            for key, (png, meta) in zip(keys, result):
+                store.put(key, checked_png(png, renderer), meta)
+        return keep
+
     if renderer.whole_document:
         with call.unlocked():
             laid = call.run(lay_out_views, renderer, data, sent, width, list(fonts), locale,
-                            list(held), state, timeout=limits.render_timeout_for(len(todo)),
-                            affinity=affinity, affinity_wait=affinity_wait)
+                            list(held), state, *more, timeout=limits.render_timeout_for(len(todo)),
+                            affinity=affinity, affinity_wait=affinity_wait, queued=True)
+            rough = set(laid.get("approximate", ()))
             fresh = [view for view in laid["views"] if view[2] is not None]
-            parallel = min(call.parallelism, len(fresh)) or 1
-            chunks = [chunk for chunk in (fresh[start::parallel] for start in range(parallel))
-                      if chunk]
+            # A view a task, so a layout waiting behind them waits at most one; many views
+            # in tasks of up to RENDER_ITEMS, over the workers.
+            size = 1 if len(fresh) <= RENDER_ITEMS else min(
+                RENDER_ITEMS, -(-len(fresh) // max(1, call.parallelism)))
+            chunks = [fresh[start:start + size] for start in range(0, len(fresh), size)]
             results = call.run_all(rasterise_views,
-                                   [(renderer, [(svg, info) for _, _, svg, info in chunk],
-                                     laid["raster"]) for chunk in chunks],
+                                   [(renderer, [(view[2], view[3]) for view in chunk],
+                                     laid["raster"], *more) for chunk in chunks],
                                    timeouts=[limits.render_timeout_for(len(chunk))
-                                             for chunk in chunks])
+                                             for chunk in chunks],
+                                   lane=RENDER_LANE,
+                                   on_late=[keeper([view[1] for view in chunk]) for chunk in chunks])
         facts.append(laid["facts"])
         note(laid["facts"], False)
         for item, key, svg, _ in laid["views"]:
             if svg is None:
-                views[item] = (key, None, None, False)
+                views[item] = (key, None, None, False, item in rough)
         for chunk, result in zip(chunks, results):
             if isinstance(result, BaseException):
                 failed = failed or result
                 continue
             for (item, key, _, _), (png, meta) in zip(chunk, result):
-                views[item] = (key, png, meta, True)
+                views[item] = (key, png, meta, True, item in rough)
     else:
         parallel = call.parallelism
         chunks = [chunk for chunk in (sent[start::parallel] for start in range(parallel))
                   if chunk]
-        tasks = [(renderer, data, chunk, width, list(fonts), locale, list(held), state)
+        tasks = [(renderer, data, chunk, width, list(fonts), locale, list(held), state, *more)
                  for chunk in chunks]
         timeouts = [limits.render_timeout_for(len(chunk)) for chunk in chunks]
         first: list = []
         if first_alone and len(tasks) > 1:
             with call.unlocked():
-                first = call.run_all(render_views, tasks[:1], timeouts=timeouts[:1])
+                first = call.run_all(render_views, tasks[:1], timeouts=timeouts[:1],
+                                     lane=RENDER_LANE)
             if not isinstance(first[0], BaseException):
                 handed = note(first[0]["facts"], True)
                 if handed is not None:
-                    tasks = [(*task[:-1], handed) for task in tasks]
+                    tasks = [(*task[:7], handed, *more) for task in tasks]
         with call.unlocked():
             results = first + call.run_all(render_views, tasks[len(first):],
-                                           timeouts=timeouts[len(first):])
+                                           timeouts=timeouts[len(first):], lane=RENDER_LANE)
         for result in results:
             if isinstance(result, BaseException):
                 failed = failed or result
                 continue
             facts.append(result["facts"])
             note(result["facts"], False)
+            rough = set(result.get("approximate", ()))
             for item, key, png, meta, new in result["views"]:
-                views[item] = (key, png, meta, new)
-    for name, (key, png, meta, new) in views.items():
+                views[item] = (key, png, meta, new, item in rough)
+    for name, (key, png, meta, new, approximate) in views.items():
         if png is None:
             png, meta = held[key]
         else:
             store.put(key, png, meta)
         item = back[name]
-        entry.render_keys.put((version, ids[item], width, fonts, locale), key)
-        drawn[item] = (png, meta, not new)
+        place = (version, ids[item], width, fonts, locale)
+        entry.render_keys.put((*place, "fast") if approximate else place, key)
+        drawn[item] = (png, meta, not new, approximate)
     if failed is not None:
         raise failed                     # what the other chunks drew is kept
     return drawn, facts
@@ -428,11 +516,12 @@ def draw_tiles(call: Any, renderer: Renderer, images: "Sequence[tuple[bytes, str
     rasterised in a worker (:func:`rasterise_tiles`) with the call's locks let go.  The
     tiles are a snapshot already: the caller took them under the lock."""
     from . import tiles
+    from .worker import RENDER_LANE
 
     with call.unlocked():
         views = [(png, *png_size(png), label) for png, label in images]
         tiles.check_size(tiling, [h for _, _, h, _ in views], name=name, what=what,
                          max_edge=call.limits.max_image_edge)
         svg, w, h = tiles.tiled_svg(views, tiling)
-        png = call.run(rasterise_tiles, renderer, svg, list(fonts))
+        png = call.run(rasterise_tiles, renderer, svg, list(fonts), lane=RENDER_LANE)
     return png, w, h
