@@ -954,6 +954,27 @@ in a daemonic process with work that holds the GIL for 1 s: two such renders at 
 1.08 s with subprocess workers and 2.08 s in-process, and an edit asked for during a render
 returned in 8 ms with subprocess workers and 831 ms in-process.
 
+**Affinity: a task to the worker holding its state (0.90.0, production round 38).** A
+worker serves task after task, so what a task leaves in its process -- docx-agent's layout of
+a document and what its text measured -- is there for the next task in that worker, and only
+there. `pool.run(fn, ..., affinity=key, affinity_wait=s)` (also `Call.run`, and the render
+pipeline's `draw(..., affinity=, affinity_wait=)` for a whole-document layout task) sends the
+task to the worker that took the last task with `key`: at once when it is idle; while it is
+busy the task waits for it at most `affinity_wait` s (`None`, the default: as long as the
+deadline allows; `0`: not at all), then takes any idle worker (or starts one). Tasks
+waiting for one holder take it in the order they came, and no other task takes a worker
+tasks are waiting for. The wait is the caller's rule: the time the work would take done afresh, without the
+state, so waiting never costs more than going elsewhere would (at most twice the best
+choice). A key no worker holds goes to any idle worker. Work without a key -- the rasterising
+of a render, say -- prefers the idle workers that hold no key, or held one longest ago, so
+the holders stay free for their keys. A worker killed at a deadline, dead or stopped takes
+its keys with it; the pool remembers `AFFINITY_KEYS` (256) keys, the oldest forgotten first.
+The pool only chooses: a task must give the same result on any worker, making what it does
+not find there. `pool.affinity_counts` counts where keyed tasks went (`hit`, `waited`,
+`elsewhere`, `unheld`); `pool.holder(key)` is the holder's process id. `InProcess` and
+`ThreadRunner` take the keywords and need them not (one process). An application's own
+runner is handed them only with `takes_affinity = True`.
+
 **Threads with the GIL off (free threading, 0.76.0).** On a free-threaded Python with the
 GIL off (`ooxml_edit.tools.gil_enabled()` false: `python3.15t`, `PYTHON_GIL=0`, and lxml 7,
 since lxml 6 turns the GIL back on), threads of one process run side by side, so the work

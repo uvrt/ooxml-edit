@@ -115,7 +115,7 @@ from .session import _folded_use, _misspelt_ref
 from .sources import Rows, qualify, resolve as resolve_rows
 from .rendercache import ContentStore
 from .worker import (InProcess, SubprocessPool, ThreadRunner, WorkerPool, default_workers,
-                     gil_enabled, refuse_while_bootstrapping, run_all)
+                     gil_enabled, refuse_while_bootstrapping, run_all, takes_affinity)
 
 #: A ref's name (``REF``) and a ref's use, ``$name`` or ``$name/rest`` (:mod:`.session`'s,
 #: whose :meth:`~.session.Session.resolve_ref` reads them as a call does).
@@ -687,11 +687,16 @@ class Call:
                 slots.release()
 
     def run(self, fn: Callable[..., Any], *args: Any, timeout: float | None = None,
-            **kwargs: Any) -> Any:
+            affinity: Any = None, affinity_wait: float | None = None, **kwargs: Any) -> Any:
         """Run ``fn`` in a worker process (or in-process: :mod:`.worker`); ``timeout`` (s)
-        defaults to the render deadline."""
-        return self.toolbox.pool.run(fn, *args, timeout=timeout or self.limits.render_timeout,
-                                     **kwargs)
+        defaults to the render deadline.  ``affinity``: to the worker that took the last
+        task with that key, waited for at most ``affinity_wait`` s while busy (the
+        :mod:`.worker` module's notes; an application's runner that does not say it takes
+        them is not handed them)."""
+        pool = self.toolbox.pool
+        if affinity is not None and takes_affinity(pool):
+            kwargs = {**kwargs, "affinity": affinity, "affinity_wait": affinity_wait}
+        return pool.run(fn, *args, timeout=timeout or self.limits.render_timeout, **kwargs)
 
     def run_all(self, fn: Callable[..., Any], calls: Sequence[tuple], *,
                 timeouts: Sequence[float]) -> list[Any]:

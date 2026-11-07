@@ -183,6 +183,22 @@ def worker_pid() -> int:
     return os.getpid()
 
 
+#: What :func:`keep_value` left in this process: a worker's own state, for affinity.
+_KEPT: dict = {}
+
+
+@worker_task
+def keep_value(key: str, value: object, seconds: float = 0.0) -> tuple[int, object]:
+    """Keep ``value`` under ``key`` in this process, after ``seconds``; the pid, and what
+    was kept there before (``None``: nothing -- this worker never held ``key``)."""
+    import os
+    if seconds:
+        time.sleep(seconds)
+    before = _KEPT.get(key)
+    _KEPT[key] = value
+    return os.getpid(), before
+
+
 @worker_task
 def fonts_seen(font_dirs) -> tuple[int, object]:
     """What a renderer in a worker is handed as its font folders, and the worker's pid."""
