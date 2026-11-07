@@ -15,7 +15,9 @@ import pytest
 from ooxml_common.locales import Locale
 
 from ooxml_edit.contrast import luminance, ratio, readable_text
-from ooxml_edit.tools import DocumentFormat, Result, ScaleValue, ToolError, Toolbox, shared
+from ooxml_edit import provenance
+from ooxml_edit.tools import Dataset, DocumentFormat, Result, ScaleValue, ToolError, Toolbox, shared
+from ooxml_edit.tools import string, tool
 from ooxml_edit.tools import scales
 from ooxml_edit.tools.scales import (column_target, parse, read_value, reference_matches,
                                      reference_target)
@@ -143,9 +145,10 @@ class Board:
     """Values ``{address: [text, step now or None, fill]}``; ``written``: the addresses whose
     text was written by reference, with their reference."""
 
-    def __init__(self, values, written=None):
+    def __init__(self, values, written=None, labels=None):
         self.values = values
         self.written = written or {}
+        self.labels = labels or {}           # address: the label record kept there
 
 
 def board_values(call, found_scale, scope):
@@ -161,6 +164,8 @@ def board_values(call, found_scale, scope):
                 out.append(ScaleValue(target, skip=f"no column {target}"))
         elif pattern is not None:
             names = [a for a, source in board.written.items() if reference_matches(pattern, source)]
+            names += [a for a, kept in board.labels.items() if a not in names
+                      and reference_matches(pattern, kept.get("source") or "")]
         elif target in board.values:
             names = [target]
         else:
@@ -173,7 +178,8 @@ def board_values(call, found_scale, scope):
             exact = now is None or fill == found_scale.steps[now].fill
             out.append(ScaleValue(name, text, given=target, now=now, exact=exact,
                                   differs=None if exact else f"fill {fill}",
-                                  where={"slide": name[0]}))
+                                  where={"slide": name[0]}, kept=board.labels.get(name),
+                                  source=board.written.get(name)))
     return out
 
 
@@ -184,6 +190,11 @@ def board_write(call, found_scale, plan, preview):
     if not preview:
         for value, step in plan:
             call.document.values[value.target][1:] = [step.index, step.fill]
+            if found_scale.labels:
+                call.document.values[value.target][0] = step.label
+                call.document.labels[value.target] = {**value.record, "p": 0, "at": 0,
+                                                      "text": step.label}
+                call.document.written.pop(value.target, None)
         WRITES.append([(value.target, step.n) for value, step in plan])
     return Result(changed=[value.target for value, _ in plan], data={"styles": "direct"})
 
@@ -209,14 +220,21 @@ def _clear():
     WRITES.clear()
 
 
+@tool("keep_rows", "Keep a made-up dataset.", {"rate": string("Its North score.")}, documents=())
+def keep_rows(call, rate):
+    rows = [("North", float(rate)), ("South", 3.0)]
+    call.define_dataset("scores", Dataset(("topic", "score"), rows, keys=1), source=None)
+    return Result(summary="Kept d:scores")
+
+
 def _box(fmt=BOARD):
-    return Toolbox([board_style, board_check, *shared.SESSION_TOOLS], formats=[fmt],
+    return Toolbox([board_style, board_check, keep_rows, *shared.SESSION_TOOLS], formats=[fmt],
                    groups=shared.GROUPS, workers=0)
 
 
-def _session(box, values, written=None):
+def _session(box, values, written=None, labels=None):
     session = box.session(clock=CLOCK)
-    session.adopt(Board(values, written), "pptx", "board.pptx")
+    session.adopt(Board(values, written, labels), "pptx", "board.pptx")
     return session
 
 
@@ -335,6 +353,8 @@ def test_the_definitions():
     tool = shared.definition("style_by_value")
     assert tool.group == shared.MISC and tool.mutates
     assert set(tool.canonical["properties"]) == {"doc", "scale", "preview"}
+    assert tool.canonical["properties"]["scale"]["properties"]["show"]["enum"] == ["value", "label"]
+    assert shared.definition("check").canonical["properties"]["scale"]["properties"]["show"]
     steps = tool.canonical["properties"]["scale"]["properties"]["steps"]["items"]
     assert set(steps["properties"]) == {"fill", "min", "max", "value", "text", "label"}
     check = shared.definition("check").canonical["properties"]["scale"]
@@ -342,3 +362,136 @@ def test_the_definitions():
     with _box() as box:
         assert box.tools["style_by_value"].reads({"preview": True})
         assert not box.tools["style_by_value"].reads({})
+        labelled = {"scale": scale(show="label")}
+        assert box.tools["style_by_value"].value_reads(labelled)
+        assert box.tools["check"].value_reads(labelled)
+        assert not box.tools["check"].value_reads({"scale": SCALE})
+
+
+# -- labels (round 38) ---------------------------------------------------------------------------
+
+LABELLED = [{"min": 1, "fill": "C62828", "label": "Low"},
+            {"min": 2.5, "fill": "F9A825", "label": "Middle"},
+            {"min": 4, "fill": "2E7D32", "label": "High"}]
+
+
+def labels(**changes):
+    return scale(**{"steps": LABELLED, "show": "label", **changes})
+
+
+def test_a_label_follows_edits_of_its_own_text():
+    def one(text, at=0, p=0, **more):
+        return {"p": p, "at": at, "text": text, "value": 1.4, **more}
+
+    whole = [one("Low")]
+    assert provenance.labels_after_edit(whole, "Low", "Lowish") == [one("Lowish")]
+    assert provenance.labels_after_edit(whole, "Low", "2,7") == [one("2,7")]
+    assert provenance.labels_after_edit(whole, "Low", "") == []
+    inner = [one("Low", at=7)]
+    old = "Level: Low here"
+    assert provenance.labels_after_edit(inner, old, "Level: Lower here") == [one("Lower", at=7)]
+    assert provenance.labels_after_edit(inner, old, "Our level: Low here") == [one("Low", at=11)]
+    assert provenance.labels_after_edit(inner, old, "Level: Low there") == [one("Low", at=7)]
+    assert provenance.labels_after_edit(inner, old, "Level: Lo") == []         # past its edge
+    assert provenance.labels_after_edit(inner, old, "Level: Hi here") == [one("Hi", at=7)]
+    assert provenance.labels_after_edit(inner, old, old) == inner
+    # A fact, by contrast, goes with an edit of its text; read without the text it was
+    # kept with, a whole holder's label is its text now.
+    assert provenance.facts_after_edit(inner, old, "Level: Lower here") == []
+    assert provenance.labels_found(whole, "Medium", whole=True) == [one("Medium")]
+    assert provenance.labels_found(whole, "Medium") == []
+
+
+def test_show_label_needs_a_label_per_step_none_twice():
+    assert parse(labels()).labels and parse(labels(show="labels")).show == "label"
+    assert not parse(SCALE).labels and parse(scale(show="")).show == "value"
+    with pytest.raises(ToolError) as refused:
+        parse(scale(show="label"))                      # step 2 has no label
+    assert "step 2 has none: give every step a label" in refused.value.message
+    with pytest.raises(ToolError) as refused:
+        parse(labels(steps=[{**LABELLED[0]}, {**LABELLED[1], "label": "low"}]))
+    assert "steps 1 and 2 are both labelled 'low'" in refused.value.message
+    with pytest.raises(ToolError) as refused:
+        parse(scale(show="name"))
+    assert "value (the text is the value, the default) or label" in refused.value.message
+    found = parse(labels())
+    assert found.step_of_label(" high ").n == 3 and found.step_of_label("2") is None
+
+
+def test_style_by_value_writes_each_label_and_keeps_its_value():
+    with _box() as box:
+        session = _session(box, _values(), written={"a2": "d:scores/North/score"})
+        board = session.documents["d1"].document
+        preview = box.dispatch(session, "style_by_value", {"doc": "d1", "scale": labels(), "preview": True})
+        assert preview.ok and preview.summary == "Score: would label 2 value(s), 0 already in their step, 0 skipped"
+        assert board.values["a1"][0] == "1.5" and board.labels == {}
+        result = box.dispatch(session, "style_by_value", {"doc": "d1", "scale": labels()})
+        assert result.ok, result.to_json()
+        assert result.data["targets"] == [{"target": "a1", "value": "1.5", "step": 1, "label": "Low"},
+                                          {"target": "a2", "value": "4,5", "step": 3, "label": "High"}]
+        assert board.values["a1"] == ["Low", 0, "C62828"]
+        assert board.labels["a1"] == {"label": "Low", "value": 1.5, "scale": "Score", "step": 1,
+                                      "p": 0, "at": 0, "text": "Low"}
+        assert board.labels["a2"]["source"] == "d:scores/North/score" and board.labels["a2"]["value"] == 4.5
+        again = box.dispatch(session, "style_by_value", {"doc": "d1", "scale": labels()})
+        assert again.data["targets"][0] == {"target": "a1", "value": "1.5", "shows": "Low", "step": 1,
+                                            "label": "Low", "unchanged": True}
+        # The reference still names the value now its label is there.
+        found = box.dispatch(session, "check", {"doc": "d1", "scale": labels(
+            targets=["{{d:scores/*/score}}"])}).data["scale"]
+        assert found["labels"] == [] and found["right"] == 1 and found["checked"] == 1
+        assert "could not be read now" in found["notes"][0]      # no dataset d:scores here
+
+
+def test_check_flags_labels_that_are_not_their_values():
+    kept = {"a1": {"label": "Low", "value": 1.5, "scale": "Score", "step": 1, "p": 0, "at": 0, "text": "Lowish"},
+            "b1": {"label": "Low", "value": 1.4, "source": "d:scores/North/score", "scale": "Score",
+                   "step": 1, "p": 0, "at": 0, "text": "Low"},
+            "c.1": {"label": "Middle", "value": 3, "scale": "Score", "step": 2, "p": 0, "at": 0,
+                    "text": "Middle"}}
+    values = {"a1": ["Lowish", 0, "C62828"], "a2": ["High", None, None], "a3": ["4,5", None, None],
+              "b1": ["Low", 0, "C62828"], "c.1": ["Middle", 1, "F9A825"]}
+    with _box() as box:
+        session = _session(box, values, labels=kept)
+        assert box.dispatch(session, "keep_rows", {"rate": "2.7"}).ok      # North was 1.4
+        given = labels(targets=["a1", "a2", "a3", "b1", "c.1"])
+        result = box.dispatch(session, "check", {"doc": "d1", "scale": given})
+        assert result.ok, result.to_json()
+        found = result.data["scale"]
+        assert found["labels"] == [
+            {"target": "a1", "slide": "a", "value": "1.5", "shows": "Lowish", "label": "Low", "due": 1,
+             "why": "edited: written 'Low'"},
+            {"target": "a3", "slide": "a", "value": "4,5", "shows": "4,5", "label": "High", "due": 3,
+             "why": "shows its value, not its label"},
+            {"target": "b1", "slide": "b", "value": "2.7", "shows": "Low", "label": "Middle", "due": 2,
+             "why": "its value changed: recorded 1.4, now 2.7"}]
+        assert found["wrong"] == [{"target": "b1", "slide": "b", "value": "2.7", "shows": "Low", "step": 1,
+                                   "due": 2}]
+        assert found["unrecorded"] == [{"target": "a2", "slide": "a", "shows": "High", "label_of": 3}]
+        assert "unrecorded: a step's label with no value kept" in found["notes"][0]
+        assert (found["checked"], found["right"]) == (5, 1)
+        assert found["fix"]["arguments"]["scale"]["targets"] == ["b1", "a3", "a1"]
+        assert result.summary == "scale: 1 of 5 value(s) in their step, 4 not"
+        fixed = box.dispatch(session, "style_by_value", found["fix"]["arguments"])
+        assert fixed.ok, fixed.to_json()
+        board = session.documents["d1"].document
+        assert board.values["b1"] == ["Middle", 1, "F9A825"] and board.labels["b1"]["value"] == 2.7
+        assert board.values["a1"][0] == "Low" and board.values["a3"][0] == "High"
+        again = box.dispatch(session, "check", {"doc": "d1", "scale": given}).data["scale"]
+        assert (again["right"], again["labels"], again["wrong"]) == (4, [], [])
+        assert [e["target"] for e in again["unrecorded"]] == ["a2"] and "fix" not in again
+        skipped = box.dispatch(session, "style_by_value", {"doc": "d1", "scale": given})
+        assert skipped.data["targets"][1]["skipped"].startswith(
+            "'High' is step 3's label, and no value is recorded for it: write its value there")
+
+
+def test_a_label_read_as_a_value_scale_says_how_and_text_steps_still_work():
+    kept = {"a1": {"label": "Low", "value": 1.5, "scale": "Score", "step": 1, "p": 0, "at": 0, "text": "Low"}}
+    with _box() as box:
+        session = _session(box, {"a1": ["Low", 0, "C62828"]}, labels=kept)
+        found = box.dispatch(session, "check", {"doc": "d1", "scale": scale(targets=["a1"])}).data["scale"]
+        assert found["skipped"][0]["why"] == ("'Low' is not one number; it is step 1's label: give the "
+                                              "scale show label")
+        texts = scale(steps=[{"value": "Low", "fill": "C62828"}, {"value": "High", "fill": "2E7D32"}],
+                      targets=["a1"])
+        assert box.dispatch(session, "check", {"doc": "d1", "scale": texts}).data["scale"]["right"] == 1

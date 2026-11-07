@@ -36,6 +36,12 @@ around them) and drops the ones it does, and :func:`facts_found` keeps the ones 
 is still where they say -- a reader's check, since another application may have edited the
 text in between.
 
+**Labels** (0.87.0).  A step's label written in place of a value
+(:mod:`ooxml_edit.tools.scales`) is kept as a fact too -- ``text`` the label as it reads,
+``value`` the value it stands for, ``source`` the reference that value came from (when it
+did) -- but follows edits by :func:`labels_after_edit`: an edit of its own text keeps it,
+stretched over the new text, so a label edited by hand can still be compared with its value.
+
 Format-neutral: which document, which part and which element hold a record is the format
 layer's business (and the embedded objects' own).
 """
@@ -178,6 +184,59 @@ def facts_after_edit(facts: Any, old: str, new: str) -> list[dict[str, Any]]:
     return out
 
 
+# -- labels --------------------------------------------------------------------------------------
+
+
+def labels_found(labels: Any, text: str, *, whole: bool = False) -> list[dict[str, Any]]:
+    """The labels (:func:`labels_after_edit`) whose ``text`` is in ``text`` where their
+    ``p`` and ``at`` say; with ``whole`` -- a holder whose labels are always its whole text,
+    read without the text they were kept with -- every label at its start, its ``text`` the
+    whole of ``text`` now (edited elsewhere: the label as it reads now)."""
+    if not whole:
+        return facts_found(labels, text)
+    out = []
+    for found in labels if isinstance(labels, list) else []:
+        if isinstance(found, Mapping) and found.get("p") == 0 and found.get("at") == 0 and text:
+            out.append({**found, "text": text})
+    return out
+
+
+def labels_after_edit(labels: Any, old: str, new: str) -> list[dict[str, Any]]:
+    """The *labels* of ``old`` after an edit made it ``new``.  A label is a fact whose text
+    stands for a value it records (a step's label written in place of a number,
+    :mod:`ooxml_edit.tools.scales`): unlike a fact, it outlives an edit of its own text, so
+    that text can be checked against the value later.  A label
+
+    * the edit left alone stays, moved with the text before it (as a fact does);
+    * that is all of ``old`` is all of ``new``, whatever the edit (a cell's or a
+      paragraph's whole text, edited by hand);
+    * the edit falls within -- an insertion at its edge too (``Low`` -> ``Lower``) --
+      stretches over the edited text;
+    * the edit reaches past one of its edges goes: what it stands for in the new text is
+      not known."""
+    if old == new:
+        return facts_found(labels, old)
+    start, old_end, new_end = edit_span(old, new)
+    out = []
+    for found in facts_found(labels, old):
+        first = offset(old, found["p"], found["at"])
+        assert first is not None  # facts_found kept only the labels that are where they say
+        last = first + len(found["text"])
+        if first == 0 and last == len(old):
+            if new:
+                out.append({**found, "text": new})
+        elif old_end < first or (old_end == first and start < first):
+            p, at = place(new, first + new_end - old_end)
+            out.append({**found, "p": p, "at": at})
+        elif start > last or (start == last and old_end > last):
+            out.append(found)
+        elif first <= start and old_end <= last:
+            text = new[first:last + new_end - old_end]
+            if text and "\n" not in text:
+                out.append({**found, "text": text})
+    return out
+
+
 # -- holders -------------------------------------------------------------------------------------
 
 
@@ -233,5 +292,5 @@ def _add(found: list[Holder], holder: Holder) -> None:
 
 
 __all__ = ["Holder", "RecordError", "SESSION_ONLY", "VERSION", "dumps", "edit_span",
-           "facts_after_edit", "facts_found", "loads", "note", "offset", "place", "record",
-           "watch"]
+           "facts_after_edit", "facts_found", "labels_after_edit", "labels_found", "loads", "note",
+           "offset", "place", "record", "watch"]
