@@ -249,7 +249,7 @@ DECK_CHECK = ("slides", "include", "boxes", "spacing", "contrast", "scale")
 TEXT_CHECK = ("pages", "include", "min_size", "styles", "range", "copies", "scale")
 #: check's scale (round 36, R31): its nested optional fields.
 SCALE_OPTIONAL = ("scale.steps[].min", "scale.steps[].max", "scale.steps[].value",
-                  "scale.steps[].text", "scale.steps[].label", "scale.name")
+                  "scale.steps[].text", "scale.steps[].label", "scale.name", "scale.show")
 
 
 def _checked(kind, takes, given):
