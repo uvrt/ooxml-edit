@@ -52,6 +52,29 @@ lists the values styled with another step than their value's (``wrong``: a value
 after it was styled, a step's colours changed) and those with none (``none``), with the
 one call that fixes them; scoped as the check is (the format's scope arguments),
 capped (:data:`CHECK_LISTED`, ``left_out``).  Never on by default: the ``scale`` asks for it.
+
+**Labels** (0.87.0): a scale with ``"show": "label"`` writes each step's ``label`` in
+place of the value it stands for -- the text then reads ``Low`` (in the step's colours),
+not ``1,4`` -- and the document keeps, where the label is, the value and where it came
+from (a library's :attr:`ScaleValue.kept`; :func:`ooxml_edit.provenance.labels_after_edit`
+says how such a record follows edits, one of the label's own text included).  Every step
+needs a label, and no two the same.  The value a label stands for is, in order:
+
+* the text, where it reads as a value (a number, or a step's ``value`` text): a value
+  typed, or written by reference (its reference is kept: :attr:`ScaleValue.source`) --
+  also over a label written before;
+* else the value the label's record names: its ``source`` read again now when the
+  session can (a dataset, a table of a document it holds; :meth:`CallContext.fact`) --
+  so a record's value changed since is seen -- or else the value recorded;
+* a step's label with no record names no value: it is reported (``unrecorded``), never
+  guessed.
+
+``style_by_value`` writes the label (keeping the text's own formatting, the step's
+style or colours over it) and the record; ``unchanged`` where the label, the style and the
+record are already right.  ``check(scale=...)`` adds ``labels``: the texts that are not their
+value's label -- ``why``: it shows the value, the value changed (``recorded 1,4, now
+2,7``), the label was edited (``written 'Low'``), the steps changed -- and ``unrecorded``;
+``fix`` writes them all again.  Exact text steps (``value`` texts) work as before.
 """
 
 from __future__ import annotations
@@ -84,6 +107,12 @@ SKIPPED_LISTED = 10
 DEFAULT_NAME = "Step"
 #: A step's text colours, as the tools name them.
 TEXT_COLOURS = {"white": WHITE, "black": BLACK}
+
+#: What a scale's text shows: its value (as written), or its step's label.
+SHOW = ("value", "label")
+#: ``show`` as an agent may send it (rule 1), and what it means.
+_SHOW_SAID = {"": "value", "value": "value", "values": "value", "label": "label",
+              "labels": "label"}
 
 #: Said with a check's fact: how values are read and compared.
 NOTE = ("scale: each value's step from its text as it is now (a number in the locale, or the "
@@ -148,6 +177,26 @@ class Scale:
     by: str                      # "range", "value" or "text"
     given: Mapping[str, Any] = field(default_factory=dict, compare=False)
     notes: tuple[str, ...] = ()
+    show: str = "value"          # "value" or "label" (the module's notes)
+
+    @property
+    def labels(self) -> bool:
+        """Whether the scale's texts show its steps' labels."""
+        return self.show == "label"
+
+    def step_of_label(self, text: str) -> Step | None:
+        """The step whose label ``text`` is (case and surrounding spaces aside), or ``None``."""
+        wanted = _folded(text)
+        return next((s for s in self.steps if s.label and _folded(s.label) == wanted), None)
+
+    def value_of(self, text: str, locale: Any) -> Any:
+        """``text`` as a value of this scale -- a number, or for a scale of texts a step's
+        text -- or ``None`` when it is none."""
+        if self.by == "text":
+            wanted = _folded(text)
+            return next((s.value for s in self.steps if s.value is not None
+                         and _folded(s.value) == wanted), None)
+        return read_value(text, locale)
 
     def style_name(self, step: Step) -> str:
         """The name of a step's style: the scale's name, the step's number, its label."""
@@ -168,15 +217,29 @@ class Scale:
     def due(self, text: str, locale: Any) -> tuple[Step | None, str | None]:
         """The step ``text`` (a value as written) is due, or ``None`` and why not."""
         if self.by == "text":
-            wanted = " ".join(text.split()).casefold()
+            wanted = _folded(text)
             for step in self.steps:
-                if step.value is not None and " ".join(step.value.split()).casefold() == wanted:
+                if step.value is not None and _folded(step.value) == wanted:
                     return step, None
             return None, (f"{_quote(text)} is no step's text; steps take "
                           + ", ".join(repr(s.value) for s in self.steps))
         number = read_value(text, locale)
         if number is None:
             return None, f"{_quote(text)} is not one number"
+        return self.due_number(number)
+
+    def due_value(self, value: Any) -> tuple[Step | None, str | None]:
+        """The step a value -- a number, or a text for a scale of texts, as a label's record
+        keeps it -- is due, or ``None`` and why not."""
+        if self.by == "text" or isinstance(value, str):
+            return self.due(str(value), None) if self.by == "text" else \
+                (None, f"{_quote(str(value))} is not one number")
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None, f"{value!r} is not one number"
+        return self.due_number(float(value))
+
+    def due_number(self, number: float) -> tuple[Step | None, str | None]:
+        """The step a number is due, or ``None`` and why not."""
         if self.by == "value":
             for step in self.steps:
                 if step.number is not None and math.isclose(step.number, number, rel_tol=0, abs_tol=1e-9):
@@ -197,6 +260,10 @@ class Scale:
                      else f"above the last step's max {_num(chosen.max)}")
             return None, f"{_num(number)} is in no step: {where}"
         return chosen, None
+
+
+def _folded(text: str) -> str:
+    return " ".join(str(text).split()).casefold()
 
 
 def _num(value: float | None) -> str:
@@ -253,9 +320,14 @@ def parse(given: Any) -> Scale:
     what is wrong and the way out, with an example scale in ``details``."""
     if not isinstance(given, Mapping):
         raise _refused("scale is an object: {name, steps: [{min or value, fill, text, label}], targets}")
-    unknown = sorted(set(given) - {"name", "steps", "targets"})
+    unknown = sorted(set(given) - {"name", "steps", "targets", "show"})
     if unknown:
-        raise _refused(f"scale has no {', '.join(unknown)}: it takes name, steps and targets")
+        raise _refused(f"scale has no {', '.join(unknown)}: it takes name, steps, targets and show")
+    shown = given.get("show")
+    show = _SHOW_SAID.get(str(shown).strip().lower() if shown is not None else "")
+    if show is None:
+        raise _refused(f"scale show {shown!r}: value (the text is the value, the default) or label "
+                       "(the text becomes its step's label)", example=False)
     name = given.get("name")
     name = DEFAULT_NAME if name in (None, "") else str(name).strip()
     if not name or len(name) > 40 or re.search(r"[\d]$", name):
@@ -375,7 +447,20 @@ def parse(given: Any) -> Scale:
                 if key in seen:
                     raise _refused(f"two steps take {step.value!r}: each text is one step's", example=False)
                 seen.add(key)
-    return Scale(name, tuple(out), tuple(t.strip() for t in targets), by, dict(given), tuple(notes))
+    if show == "label":
+        unnamed = [s.n for s in out if not s.label]
+        if unnamed:
+            raise _refused(f"show label writes each step's label, and step {unnamed[0]} has none: give "
+                           "every step a label", example=False)
+        seen_labels: dict[str, int] = {}
+        for step in out:
+            assert step.label is not None
+            twin = seen_labels.setdefault(_folded(step.label), step.n)
+            if twin != step.n:
+                raise _refused(f"steps {twin} and {step.n} are both labelled {step.label!r}: with show "
+                               "label a label names one step", example=False)
+    return Scale(name, tuple(out), tuple(t.strip() for t in targets), by, dict(given), tuple(notes),
+                 show)
 
 
 def _number(value: Any, where: str) -> float | None:
@@ -413,7 +498,12 @@ class ScaleValue:
     none of this scale's), ``exact`` -- whether it is styled as that step says, and
     ``differs`` what is not (``"fill FFC000"``); ``skip`` -- why it cannot be styled (no
     such cell, a header row), the rest then unread; ``where`` -- what a reader is told of
-    its place (``{"page": 3}``); ``handle`` -- the format's own, for its writer."""
+    its place (``{"page": 3}``); ``handle`` -- the format's own, for its writer.
+
+    For labels (0.87.0): ``kept`` -- the label record the document keeps where the text is
+    (:func:`label_record`'s fields, as the format read them; ``None``: none); ``source`` --
+    the reference the text was written from, where it was (a text fact's); ``record`` --
+    set by :func:`apply` for the writer: the record to keep with the label it writes."""
 
     target: str
     text: str = ""
@@ -424,6 +514,9 @@ class ScaleValue:
     skip: str | None = None
     where: Mapping[str, Any] = field(default_factory=dict)
     handle: Any = None
+    kept: Mapping[str, Any] | None = None
+    source: str | None = None
+    record: dict[str, Any] | None = None
 
 
 def column_target(target: str) -> tuple[str, int] | None:
@@ -484,12 +577,139 @@ def values_of(call: Any, scale: Scale, scope: Mapping[str, Any]) -> list[ScaleVa
     return found
 
 
+# -- labels --------------------------------------------------------------------------------------
+
+
+def label_record(scale: Scale, step: Step, value: Any, source: str | None) -> dict[str, Any]:
+    """What a document keeps with a step's label written in place of a value (the format
+    adds where: ``p``, ``at``, ``text``): the ``label``, the ``value`` it stands for (a
+    number, or a scale of texts' text), the ``source`` it came from (a reference, when it
+    did), the scale's ``name`` and the ``step``'s number."""
+    out: dict[str, Any] = {"label": step.label, "value": _plain(value)}
+    if source:
+        out["source"] = source
+    out.update(scale=scale.name, step=step.n)
+    return out
+
+
+def _plain(value: Any) -> Any:
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return value
+
+
+def _said(value: Any, locale: Any) -> str:
+    """A value as a reply says it: a number in the locale (``1,4``), a text as it is."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return str(value)
+    text = _num(float(value))
+    decimal = getattr(locale, "decimal_separator", ".")
+    return text.replace(".", decimal) if "e" not in text else text
+
+
+def _same_value(a: Any, b: Any) -> bool:
+    if isinstance(a, (int, float)) and isinstance(b, (int, float)) and not isinstance(a, bool) \
+            and not isinstance(b, bool):
+        return math.isclose(float(a), float(b), rel_tol=1e-12, abs_tol=1e-12)
+    return a is not None and b is not None and _folded(str(a)) == _folded(str(b))
+
+
+def _same_text(a: str | None, b: str | None) -> bool:
+    """Whether a text reads as a label: the same, spaces around and between aside."""
+    return a is not None and b is not None and " ".join(a.split()) == " ".join(b.split())
+
+
+@dataclass
+class Reading:
+    """A target's value as :func:`read` found it: ``value`` (a number, or a text) and
+    ``said`` as a reply says it; ``step`` it is due, or ``why`` not; ``label`` -- its text
+    is a label, the value its record's; ``source`` its reference; ``changed`` -- the
+    source's value now is not the one recorded (``recorded 1,4, now 2,7``); ``recorded`` --
+    the value is the record's, its source not read now (``unread`` why);
+    ``unrecorded`` -- the text is this step's label, and no value is recorded for it."""
+
+    value: Any = None
+    said: str = ""
+    step: Step | None = None
+    why: str | None = None
+    label: bool = False
+    source: str | None = None
+    changed: str | None = None
+    recorded: bool = False
+    unread: str | None = None
+    unrecorded: Step | None = None
+
+
+def read(call: Any, scale: Scale, value: ScaleValue) -> Reading:
+    """The value ``value``'s target stands for and its step (the module's notes)."""
+    locale = getattr(call, "locale", None)
+    text = value.text
+    if not scale.labels:
+        step, why = scale.due(text, locale)
+        if step is None and value.kept:
+            kept_step = value.kept.get("step")
+            why = f"{why}; it is step {kept_step}'s label: give the scale show label"
+        return Reading(scale.value_of(text, locale), text, step, why, source=value.source)
+    shown = scale.value_of(text, locale)
+    if shown is not None:
+        step, why = scale.due_value(shown)
+        return Reading(shown, text, step, why, source=value.source)
+    kept = value.kept
+    if kept is not None and kept.get("value") is not None:
+        recorded = kept.get("value")
+        source = kept.get("source") if isinstance(kept.get("source"), str) else None
+        reading = Reading(recorded, _said(recorded, locale), label=True, source=source)
+        if source is not None:
+            now, unread = _source_value(call, scale, source)
+            if now is None:
+                reading.recorded, reading.unread = True, unread
+            else:
+                if not _same_value(now, recorded):
+                    reading.changed = f"recorded {_said(recorded, locale)}, now {_said(now, locale)}"
+                reading.value, reading.said = now, _said(now, locale)
+        reading.step, reading.why = scale.due_value(reading.value)
+        return reading
+    step = scale.step_of_label(text)
+    if step is not None:
+        return Reading(said=text, label=True, unrecorded=step,
+                       why=f"{_quote(text)} is step {step.n}'s label, and no value is recorded for it: "
+                       "write its value there (typed, or by reference {{d:...}}), then label it")
+    return Reading(said=text, why=f"{_quote(text)} is not one number, nor a step's label")
+
+
+def _source_value(call: Any, scale: Scale, source: str) -> tuple[Any, str | None]:
+    """The value ``source`` (a reference, without braces) names now, as this scale reads
+    it, or ``None`` and why it could not be read."""
+    fact = getattr(call, "fact", None)
+    if fact is None:
+        return None, "no session to read it in"
+    try:
+        text, _record = fact(source)
+    except ToolError as error:
+        return None, error.message
+    found = scale.value_of(text, getattr(call, "locale", None))
+    if found is None:
+        return None, f"{source} now reads {_quote(text)}, no value of this scale"
+    return found, None
+
+
+def reads_values(arguments: Mapping[str, Any]) -> bool:
+    """Whether a call's ``scale`` shows labels, whose values may be read again from their
+    sources: the dispatcher then holds the documents that have values to read
+    (:attr:`~.registry.Tool.value_reads`)."""
+    given = arguments.get(PARAM)
+    shown = given.get("show") if isinstance(given, Mapping) else None
+    return isinstance(shown, str) and _SHOW_SAID.get(shown.strip().lower()) == "label"
+
+
 # -- applying ------------------------------------------------------------------------------------
 
 
 #: ``write(call, scale, plan, preview) -> Result``: a library writes each ``(value, step)``
 #: of ``plan`` (nothing when ``preview``), its result's ``data`` saying what it made
-#: (``styles``) -- the rest of the reply is :func:`apply`'s.
+#: (``styles``) -- the rest of the reply is :func:`apply`'s.  A scale that shows labels:
+#: the library writes ``step.label`` in place of the value's text, keeping the text's own
+#: formatting, and keeps ``value.record`` (:func:`label_record`) where the label is.
 Writer = Callable[[Any, Scale, list[tuple[ScaleValue, Step]], bool], Result]
 
 
@@ -498,6 +718,14 @@ def _entry(value: ScaleValue) -> dict[str, Any]:
     if value.given and value.given != value.target:
         out["from"] = value.given
     return out
+
+
+def _label_right(value: ScaleValue, reading: Reading, step: Step) -> bool:
+    """Whether a label scale's text is its value's label, and its record says so."""
+    kept = value.kept
+    return (_same_text(value.text, step.label) and kept is not None
+            and _same_value(kept.get("value"), reading.value)
+            and (kept.get("source") or None) == (reading.source or None))
 
 
 def apply(call: Any, given: Any, preview: bool, write: Writer) -> Result:
@@ -513,14 +741,22 @@ def apply(call: Any, given: Any, preview: bool, write: Writer) -> Result:
             entries.append({**entry, "skipped": value.skip})
             skipped += 1
             continue
-        step, why = scale.due(value.text, call.locale)
-        entry["value"] = value.text
+        reading = read(call, scale, value)
+        step = reading.step
+        entry["value"] = reading.said
+        if scale.labels and reading.label:
+            entry["shows"] = value.text
+        if reading.recorded:
+            entry["recorded"] = f"{reading.source} not read now ({reading.unread}): the value recorded"
         if step is None:
-            entries.append({**entry, "skipped": why})
+            entries.append({**entry, "skipped": reading.why})
             skipped += 1
             continue
         entry["step"] = step.n
-        if value.now == step.index and value.exact:
+        if scale.labels:
+            entry["label"] = step.label
+        text_right = not scale.labels or _label_right(value, reading, step)
+        if value.now == step.index and value.exact and text_right:
             entries.append({**entry, "unchanged": True})
             unchanged += 1
             continue
@@ -528,6 +764,10 @@ def apply(call: Any, given: Any, preview: bool, write: Writer) -> Result:
             entry["was"] = value.now + 1
         elif value.differs:
             entry["was"] = value.differs
+        if reading.changed:
+            entry["changed"] = reading.changed
+        if scale.labels:
+            value.record = label_record(scale, step, reading.value, reading.source)
         entries.append(entry)
         plan.append((value, step))
     result = write(call, scale, plan, preview) if plan or preview else Result()
@@ -540,7 +780,8 @@ def apply(call: Any, given: Any, preview: bool, write: Writer) -> Result:
         data["left_out"] = len(entries) - LISTED
     if scale.notes:
         result.warnings.extend(n for n in scale.notes if n not in result.warnings)
-    verb = "would style" if preview else "styled"
+    verb = ("would label" if preview else "labelled") if scale.labels else \
+        ("would style" if preview else "styled")
     result.summary = (f"{scale.name}: {verb} {len(plan)} value(s), {unchanged} already in their step, "
                       f"{skipped} skipped")
     if not plan:
@@ -553,13 +794,32 @@ def apply(call: Any, given: Any, preview: bool, write: Writer) -> Result:
 # -- the check -----------------------------------------------------------------------------------
 
 
+def _label_why(value: ScaleValue, reading: Reading, step: Step) -> str:
+    """Why a label scale's text is not its value's label (:func:`report`)."""
+    if not reading.label:
+        return "shows its value, not its label" if value.kept is None else \
+            "shows a value typed over its label"
+    if reading.changed:
+        return f"its value changed: {reading.changed}"
+    kept = value.kept or {}
+    written = kept.get("label")
+    if isinstance(written, str) and not _same_text(value.text, written):
+        return f"edited: written {_quote(written)}"
+    if isinstance(written, str) and written != step.label:
+        return f"the steps changed: written as step {kept.get('step')}'s label {_quote(written)}"
+    return "not its value's label"
+
+
 def report(call: Any, given: Any, scope: Mapping[str, Any]) -> dict[str, Any]:
     """``check``'s fact for ``scale`` (the module's notes)."""
     scale = parse(given)
     values = values_of(call, scale, scope)
     wrong: list[dict[str, Any]] = []
     none: list[dict[str, Any]] = []
+    labels: list[dict[str, Any]] = []
+    unrecorded: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
+    recorded = 0
     right = 0
     for value in values:
         entry = _entry(value)
@@ -567,13 +827,24 @@ def report(call: Any, given: Any, scope: Mapping[str, Any]) -> dict[str, Any]:
         if value.skip:
             skipped.append({**entry, "why": value.skip})
             continue
-        step, why = scale.due(value.text, call.locale)
-        entry["value"] = value.text
-        if step is None:
-            skipped.append({**entry, "why": why})
+        reading = read(call, scale, value)
+        step = reading.step
+        if reading.unrecorded is not None:
+            unrecorded.append({**entry, "shows": value.text, "label_of": reading.unrecorded.n})
             continue
-        if value.now == step.index and value.exact:
+        entry["value"] = reading.said
+        if scale.labels and reading.label:
+            entry["shows"] = value.text
+        if step is None:
+            skipped.append({**entry, "why": reading.why})
+            continue
+        recorded += reading.recorded
+        styled = value.now == step.index and value.exact
+        text_right = not scale.labels or _label_right(value, reading, step)
+        if styled and text_right:
             right += 1
+        if styled:
+            pass
         elif value.now is None:
             none.append({**entry, "due": step.n})
         else:
@@ -581,21 +852,37 @@ def report(call: Any, given: Any, scope: Mapping[str, Any]) -> dict[str, Any]:
             if value.now == step.index and value.differs:
                 item["differs"] = value.differs
             wrong.append(item)
-    listed = (wrong + none)[:CHECK_LISTED]
+        if not text_right:
+            labels.append({**entry, "shows": value.text, "label": step.label, "due": step.n,
+                           "why": _label_why(value, reading, step)})
+    found = wrong + none + labels + unrecorded
+    listed = found[:CHECK_LISTED]
+    kept = {id(e) for e in listed}
     data: dict[str, Any] = {"checked": len(values) - len(skipped), "right": right,
-                            "wrong": [e for e in listed if "step" in e],
-                            "none": [e for e in listed if "step" not in e]}
-    left = len(wrong) + len(none) - len(listed)
+                            "wrong": [e for e in wrong if id(e) in kept],
+                            "none": [e for e in none if id(e) in kept]}
+    if scale.labels:
+        data["labels"] = [e for e in labels if id(e) in kept]
+        data["unrecorded"] = [e for e in unrecorded if id(e) in kept]
+    left = len(found) - len(listed)
     if left > 0:
         data["left_out"] = left
     if skipped:
         data["skipped"] = skipped[:SKIPPED_LISTED]
         if len(skipped) > SKIPPED_LISTED:
             data["skipped_left_out"] = len(skipped) - SKIPPED_LISTED
-    if wrong or none:
-        data["fix"] = _fix(call, scale, [e["target"] for e in wrong + none])
-    if scale.notes:
-        data["notes"] = list(scale.notes)
+    if wrong or none or labels:
+        data["fix"] = _fix(call, scale, [e["target"] for e in wrong + none + labels])
+    notes = list(scale.notes)
+    if unrecorded:
+        notes.append("unrecorded: a step's label with no value kept for it, so its step cannot be "
+                     "checked; write its value there (typed, or by reference {{d:...}}), then "
+                     "style_by_value with show label")
+    if recorded:
+        notes.append(f"{recorded} label(s) checked against the value recorded: their source "
+                     "could not be read now")
+    if notes:
+        data["notes"] = notes
     return data
 
 
@@ -612,7 +899,7 @@ def _fix(call: Any, scale: Scale, targets: list[str]) -> dict[str, Any]:
 
 
 def summary(data: Mapping[str, Any]) -> str:
-    wrong = len(data["wrong"]) + len(data["none"]) + data.get("left_out", 0)
+    wrong = data["checked"] - data["right"]
     return (f"scale: {data['right']} of {data['checked']} value(s) in their step, {wrong} not"
             + (f", {len(data.get('skipped') or ()) + data.get('skipped_left_out', 0)} skipped"
                if data.get("skipped") else ""))
@@ -649,6 +936,7 @@ def with_scale(handler: Callable[..., Any], scope: Sequence[str],
 
 
 __all__ = ["CHECK_LISTED", "DEFAULT_NAME", "EXAMPLE", "LISTED", "MAX_STEPS", "MAX_TARGETS", "NOTE",
-           "PARAM", "Scale", "ScaleValue", "Step", "TOOL", "Writer", "apply", "column_target", "parse",
-           "read_value", "reference_matches", "reference_target", "report", "summary", "values_of",
+           "PARAM", "Reading", "SHOW", "Scale", "ScaleValue", "Step", "TOOL", "Writer", "apply",
+           "column_target", "label_record", "parse", "read", "read_value", "reads_values",
+           "reference_matches", "reference_target", "report", "summary", "values_of",
            "with_scale"]

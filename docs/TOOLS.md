@@ -636,6 +636,17 @@ stored in the document. A library gives `DocumentFormat.scale_values(call, scale
 and calls `scales.apply(call, scale, preview, write)` in its handler; the module's notes say
 what a value, a step and a target are.
 
+**A step's label in place of its value** (0.87.0, production round 38). With `"show":
+"label"` the scale writes each step's `label` where its value was (every step needs one, no
+two the same), and the library keeps the value it stands for -- with its reference, when the
+value was written from one -- where the label is (`scales.label_record`; read back as
+`ScaleValue.kept`, followed through edits by `ooxml_edit.provenance.labels_after_edit`: an
+edit of the label itself keeps the record). A label's value is the text where it reads as a
+value, else its record's `source` read again (a dataset, a held document's table) or else the
+value recorded. `check(scale=...)` then lists `labels` that are not their value's (`why`: it
+shows the value, the value changed, the label was edited, the steps changed) and
+`unrecorded` labels (no value kept: said, never guessed), with the one `fix`.
+
 **Numbers no value holds** (0.83.0, production round 36, R28; `ooxml_edit.tools.numbers`).
 `check` with `include: ["numbers"]` -- opt in, never a default -- reads each paragraph's,
 shape's or table cell's own text and compares its numbers with every value the session
