@@ -7,8 +7,9 @@ name: Free threading
 # it is installed first and the other installs find it already there.  The first check
 # is that importing the package and its dependencies leaves the GIL off, without
 # PYTHON_GIL set (an extension that has not declared itself free-threading safe turns the
-# GIL back on, with a RuntimeWarning).  The suite then runs with PYTHON_GIL=0 and
-# RuntimeWarning an error.
+# GIL back on, with a RuntimeWarning).  The suite then runs with PYTHON_GIL=0, and with
+# RuntimeWarning and an unraisable exception (Python's "Exception ignored in: ...", such
+# as an lxml lock's failed assertion, which would otherwise pass as a warning) errors.
 
 on:
   push:
@@ -73,4 +74,4 @@ jobs:
       - name: Test
         env:
           PYTHON_GIL: "0"
-        run: python -W error::RuntimeWarning -m pytest -q -W error::RuntimeWarning
+        run: python -W error::RuntimeWarning -m pytest -q -W error::RuntimeWarning -W error::pytest.PytestUnraisableExceptionWarning

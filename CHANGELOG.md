@@ -4,6 +4,19 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet. Each vers
 reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
 earlier ones were never tagged.
 
+## 0.93.1 -- unreleased
+- **No lock warning from lxml 7 when a cell gets rich text** (production round 41). On lxml
+  7 (7.0.0b1; Python 3.15t and 3.15 alike) writing rich text into a cell printed "Exception
+  ignored in: 'lxml.etree.RWLock.unlock_write' ... AssertionError" for each marked run whose
+  cell font came from the stylesheet: lxml 7 gives a document its parser's lock, and its
+  `extend()` releases the target's lock early, then a second time, when the first element's
+  document shares that lock and a later one's does not (here a new `b` before copies of the
+  stylesheet's `sz` and `name`). A run's properties are appended one at a time instead, and
+  an inline string's runs are passed to `extend()` as a list (lxml 7 warns when it
+  truth-tests an element). The same bytes as before, on every Python. The free-threading
+  workflow's suite now fails on an unraisable exception
+  (`-W error::pytest.PytestUnraisableExceptionWarning`).
+
 ## 0.93.0 -- unreleased
 - **A tool's name, however it is written** (production round 40, R44). A `batch`'s and a
   `read_batch`'s ops read a tool's name as a direct call does, and both read more:
