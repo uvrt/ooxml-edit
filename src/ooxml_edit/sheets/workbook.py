@@ -1154,6 +1154,120 @@ class Worksheet:
         self._place(node, target)
         self._touch(target)
 
+    def set_style(self, cell: Cell, style: int) -> bool:
+        """Give the cell the format ``style`` (an index into the workbook's :class:`Styles`),
+        its value and formula untouched; whether anything changed.  A position without a
+        cell gets a cell holding only the format (``<c r="B2" s="3"/>``, a formatted blank);
+        format 0 given to a blank cell that holds nothing else removes it, as a blank
+        written there would.  The style is not checked against the table: the caller gives
+        one :class:`Styles` made or found."""
+        if not (1 <= cell.row <= MAX_ROW and 1 <= cell.column <= MAX_COLUMN):
+            raise UnitError(f"row {cell.row}, column {cell.column} is outside the sheet")
+        if isinstance(style, bool) or not isinstance(style, int) or style < 0:
+            raise ArgumentError(f"style {style!r} is not a cell format index")
+        node = self._find(cell)
+        if node is None:
+            if not style:
+                return False
+            node = self._create(cell)
+        elif _style_of(node) == style:
+            return False
+        if style:
+            node.set("s", str(style))
+        else:
+            node.attrib.pop("s", None)
+            if len(node) == 0 and not set(node.attrib) - {"r", "t"}:
+                self._remove_cell(node)
+                self._touch()
+                return True
+        self._touch(cell)
+        return True
+
+    def cells_in(self, area: "Area") -> Iterator[Cell]:
+        """The positions in ``area`` that hold a cell (a value, a formula or only a
+        format), row by row in document order; nothing is made where there is none."""
+        first, last = area.first, area.last
+        for number, row in self._index():
+            if first.row <= number <= last.row:
+                for column, _ in self._cells(row):
+                    if first.column <= column <= last.column:
+                        yield Cell(number, column)
+
+    def row_style(self, row: int) -> int:
+        """Row ``row``'s own format (``s`` with ``customFormat``, ECMA-376 Part 1,
+        18.3.1.73): what a cell made in it takes; 0 when it has none."""
+        node = self._row(row, create=False)
+        given = "" if node is None else node.get("s", "")
+        return int(given) if given.isdigit() and _flag(node.get("customFormat")) else 0
+
+    def set_row_style(self, row: int, style: int) -> bool:
+        """Give row ``row`` a format of its own (``s`` and ``customFormat="1"``), or with 0
+        take it away; whether anything changed.  The cells it holds keep theirs: a caller
+        formatting a whole row sets them too (:meth:`set_style`), as Excel does."""
+        if not 1 <= row <= MAX_ROW:
+            raise UnitError(f"row {row} is outside the sheet")
+        if isinstance(style, bool) or not isinstance(style, int) or style < 0:
+            raise ArgumentError(f"style {style!r} is not a cell format index")
+        if self.row_style(row) == style:
+            return False
+        node = self._row(row, create=bool(style))
+        if node is None:
+            return False
+        if style:
+            node.set("s", str(style))
+            node.set("customFormat", "1")
+        else:
+            node.attrib.pop("s", None)
+            node.attrib.pop("customFormat", None)
+            if len(node) == 0 and not set(node.attrib) - {"r", "spans"}:
+                remove(node)
+                self._order = None
+        self.workbook.package.mark_dirty(self.part)
+        return True
+
+    def row_height(self, row: int) -> float | None:
+        """Row ``row``'s height in points when it has one of its own (``ht`` with
+        ``customHeight``); ``None`` when it takes the sheet's default or fits its text."""
+        node = self._row(row, create=False)
+        if node is None or not _flag(node.get("customHeight")):
+            return None
+        try:
+            return float(node.get("ht", ""))
+        except ValueError:
+            return None
+
+    def set_row_height(self, row: int, height: "float | int | None") -> bool:
+        """Give row ``row`` a height of its own in points (``ht`` and ``customHeight="1"``,
+        ECMA-376 Part 1, 18.3.1.73), or with ``None`` take it away (the row fits its text
+        again); whether anything changed.  A row with no cells is written as a row element
+        holding only its height; one left with nothing is removed."""
+        if not 1 <= row <= MAX_ROW:
+            raise UnitError(f"row {row} is outside the sheet")
+        if height is not None:
+            if isinstance(height, bool) or not isinstance(height, (int, float)) \
+                    or not math.isfinite(height) or not 0 <= height <= 409:
+                raise ArgumentError(f"a row height is 0 to 409 points, not {height!r}")
+        node = self._row(row, create=height is not None)
+        if node is None:
+            return False
+        if height is None:
+            if node.get("ht") is None and node.get("customHeight") is None:
+                return False
+            node.attrib.pop("ht", None)
+            node.attrib.pop("customHeight", None)
+            if len(node) == 0 and not set(node.attrib) - {"r", "spans"}:
+                remove(node)
+                self._order = None
+            self.workbook.package.mark_dirty(self.part)
+            return True
+        wanted = number_text(height)
+        if node.get("ht") == wanted and _flag(node.get("customHeight")):
+            return False
+        node.set("ht", wanted)
+        node.set("customHeight", "1")
+        self.workbook.package.mark_dirty(self.part)
+        return True
+
     def clear(self, cell: Cell) -> None:
         """Remove a cell entirely, style and all."""
         node = self._find(cell)
@@ -1523,6 +1637,11 @@ def _rich_text(item: Element) -> str:
 _RUN_ORDER = ("b", "i", "strike", "condense", "extend", "outline", "shadow", "u",
               "vertAlign", "sz", "color", "rFont", "family", "charset", "scheme")
 _MARKS = {"b": "bold", "i": "italic", "strike": "strike"}
+
+
+def _flag(value: str | None) -> bool:
+    """An ST_Boolean attribute's value: true for ``1`` or ``true``, false when left out."""
+    return (value or "").strip().lower() in {"1", "true"}
 
 
 def _true(node: Element) -> bool:

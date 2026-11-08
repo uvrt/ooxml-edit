@@ -4,6 +4,21 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet. Each vers
 reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
 earlier ones were never tagged.
 
+## 0.95.0 -- unreleased
+- **A cell's format and a row's height, set on their own** (production round 44, R53; for
+  xlsx-agent's formatting). `Worksheet.set_style(cell, style)` gives a cell a format with
+  its value and formula untouched: a position without a cell gets a formatted blank
+  (`<c r s/>`), format 0 on a blank that holds nothing else removes it. `row_height(row)`
+  reads a row's own height, `set_row_height(row, points)` writes `ht` with `customHeight`
+  (0 to 409 points; a row without cells is written holding only its height) and `None`
+  takes it away (a row left with nothing is removed). `row_style(row)` and
+  `set_row_style(row, style)` read and write a row's own format (`s` with `customFormat`),
+  and `cells_in(area)` gives the positions an area holds a cell at, making none.
+  `Styles.add_format(xf)` finds an
+  identical cell format or appends it, through the same index `with_number_format` and
+  `with_wrap_text` use, so a format made by the caller is reused like theirs. Additive:
+  nothing that exists changes its bytes.
+
 ## 0.94.0 -- unreleased
 - **A copy's numbered lists stated to run on** (production round 43). `check`'s `copies`
   items take `lists`: `run_on` where the caller says one numbered list counts on through

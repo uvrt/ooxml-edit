@@ -169,6 +169,18 @@ class Styles:
             wanted.set("applyNumberFormat", "1")
         return self._derived(xfs, base, wanted)
 
+    def add_format(self, wanted: Element) -> int:
+        """The index of the cell format ``wanted`` (an ``xf`` element, not in the tree): an
+        identical existing one's (the same attributes, in any order, and children), or its
+        own once appended to ``cellXfs``.  Its ``fontId``, ``fillId``, ``borderId`` and
+        ``numFmtId`` must name what the stylesheet has; the caller finds or adds those."""
+        if not isinstance(wanted, etree._Element) or wanted.tag != _X + "xf":
+            raise ArgumentTypeError("a cell format is an xf element")
+        xfs = self._xfs()
+        if not xfs:
+            raise IndexError("the stylesheet has no cell formats to add to")
+        return self._derived(xfs, xfs[0], copy.deepcopy(wanted))
+
     def _derived(self, xfs: list[Element], base: Element, wanted: Element) -> int:
         """``wanted`` (a changed copy of ``base``): an identical format's index, or its own
         once appended."""
