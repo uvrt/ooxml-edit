@@ -10,6 +10,7 @@ footprint is the shared strings' and styles' appends.
 from __future__ import annotations
 
 import io
+import sys
 import zipfile
 
 import pytest
@@ -155,3 +156,17 @@ def test_wrapped_text_format_and_font_and_custom_height():
     assert not stock.custom_height(500)
     stock.write(Cell(FIRST_INPUT, 2), "two\nlines", style=wrapped)
     assert outside_footprint(before, wb.to_bytes(), cells={"Stock": ["B10"]}) == []
+
+
+@pytest.mark.parametrize("shared", [True, False])
+def test_writing_rich_text_leaves_no_exception_ignored(monkeypatch, shared):
+    # lxml 7's extend() unlocked a document lock twice ("Exception ignored in:
+    # 'lxml.etree.RWLock.unlock_write'") when a run's marks, made new, came before the
+    # copies of the stylesheet's font; the runs are appended one at a time instead.
+    ignored: list = []
+    monkeypatch.setattr(sys, "unraisablehook", lambda raised: ignored.append(raised.exc_value))
+    _, wb = _open(shared=shared)
+    stock = wb.sheet("Stock")
+    assert stock.write(Cell(FIRST_INPUT, 2), RICH)
+    wb.to_bytes()
+    assert ignored == []

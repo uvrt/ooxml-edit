@@ -1022,7 +1022,7 @@ class Worksheet:
             index = self.workbook.add_rich_string(value.item)
             if index is None:
                 inline = etree.Element(_X + "is")
-                inline.extend(value.item)
+                inline.extend(list(value.item))  # lxml 7 warns on extend(element)
                 node.set("t", "inlineStr")
                 _before_extensions(node, inline)
             else:
@@ -1555,7 +1555,12 @@ def _run_properties(font: Element | None, run: Run) -> Element | None:
     if not found:
         return None
     properties = etree.Element(_X + "rPr")
-    properties.extend(found[local] for local in _RUN_ORDER if local in found)
+    # One append() at a time, not extend(): the copies belong to the stylesheet's parser and
+    # the marks to lxml's default one, and lxml 7's extend() mishandles its document locks
+    # when the elements' documents carry different parsers' locks.
+    for local in _RUN_ORDER:
+        if local in found:
+            properties.append(found[local])
     return properties
 
 
