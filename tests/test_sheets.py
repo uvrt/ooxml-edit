@@ -12,6 +12,7 @@ import datetime as dt
 import io
 import re
 import zipfile
+from dataclasses import replace
 
 import pytest
 from lxml import etree
@@ -19,7 +20,8 @@ from lxml import etree
 from sheets_synthetic import FIRST_INPUT, SHOP_URI, Shop
 from ooxml_edit.history import History
 from ooxml_edit.opc import OpcPackage
-from ooxml_edit.sheets import (MAX_TEXT, Cell, Content, Formula, SharedFormulaError, Workbook,
+from ooxml_edit.errors import ArgumentError, ArgumentTypeError, UnitError
+from ooxml_edit.sheets import (MAX_TEXT, Area, Cell, Content, Formula, SharedFormulaError, Workbook,
                                date_serial, outside_footprint)
 
 X = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
@@ -314,6 +316,94 @@ def test_the_style_index_reuses_and_appends_cell_formats():
     assert root.find(X + "numFmts").get("count") == "3"
     with pytest.raises(IndexError):
         styles.with_number_format(99, 14)
+
+
+@pytest.mark.parametrize("options", [{}, {"rless": True}], ids=["r", "rless"])
+def test_a_cell_s_format_is_set_with_its_value_and_formula_kept(options):
+    data, book = _open(**options)
+    stock = book.sheet("Stock")
+    before = stock.content(Cell(FIRST_INPUT, 4))
+    assert stock.set_style(Cell(FIRST_INPUT, 4), 3) is True
+    assert stock.set_style(Cell(FIRST_INPUT, 4), 3) is False          # a no-op
+    assert stock.content(Cell(FIRST_INPUT, 4)) == replace(before, style=3)
+    formula = stock.content(Cell(FIRST_INPUT + 1, 1))
+    assert stock.set_style(Cell(FIRST_INPUT + 1, 1), 4) is True
+    assert stock.content(Cell(FIRST_INPUT + 1, 1)) == replace(formula, style=4)
+    # a position with no cell: a formatted blank, in its place; format 0 takes it away
+    assert stock.set_style(Cell(40, 3), 2) is True
+    assert stock.style(Cell(40, 3)) == 2 and stock.content(Cell(40, 3)).kind == "blank"
+    assert stock.set_style(Cell(40, 2), 0) is False
+    edited = book.to_bytes()
+    node = _cell(edited, "C40")
+    assert node.get("s") == "2" and len(node) == 0
+    assert stock.set_style(Cell(40, 3), 0) is True
+    assert book.to_bytes() != edited
+    assert outside_footprint(data, book.to_bytes(),
+                             cells={"Stock": [f"D{FIRST_INPUT}", f"A{FIRST_INPUT + 1}"]}) == []
+    with pytest.raises(UnitError):
+        stock.set_style(Cell(0, 1), 1)
+    with pytest.raises(ArgumentError):
+        stock.set_style(Cell(1, 1), True)
+
+
+def test_a_row_s_height_is_set_and_taken_away():
+    data, book = _open()
+    stock = book.sheet("Stock")
+    assert stock.row_height(FIRST_INPUT) is None
+    assert stock.set_row_height(FIRST_INPUT, 30) is True
+    assert stock.set_row_height(FIRST_INPUT, 30) is False
+    assert stock.row_height(FIRST_INPUT) == 30.0 and stock.custom_height(FIRST_INPUT)
+    assert stock.set_row_height(60, 12.75) is True          # a row with no cells
+    root = etree.fromstring(_parts(book.to_bytes())[STOCK])
+    rows = {node.get("r"): node for node in root.iter(X + "row")}
+    assert rows[str(FIRST_INPUT)].get("ht") == "30" and rows["60"].get("ht") == "12.75"
+    assert rows["60"].get("customHeight") == "1" and len(rows["60"]) == 0
+    assert [int(r) for r in rows] == sorted(int(r) for r in rows)
+    assert stock.set_row_height(60, None) is True and stock.set_row_height(60, None) is False
+    assert stock.set_row_height(FIRST_INPUT, None) is True
+    assert book.to_bytes() == data or outside_footprint(data, book.to_bytes()) == []
+    stock.write(Cell(60, 1), "after")                       # the row index is still right
+    assert stock.value(Cell(60, 1)) == "after"
+    for wrong in (-1, 410, float("nan"), True, "12"):
+        with pytest.raises(ArgumentError):
+            stock.set_row_height(5, wrong)
+
+
+def test_a_row_s_format_and_the_cells_held_in_an_area():
+    data, book = _open(rless=True)
+    stock = book.sheet("Stock")
+    held = list(stock.cells_in(Area(Cell(FIRST_INPUT, 2), Cell(FIRST_INPUT + 1, 4))))
+    assert held == [Cell(FIRST_INPUT, 2), Cell(FIRST_INPUT, 3), Cell(FIRST_INPUT, 4),
+                    Cell(FIRST_INPUT + 1, 2), Cell(FIRST_INPUT + 1, 3), Cell(FIRST_INPUT + 1, 4)]
+    assert list(stock.cells_in(Area(Cell(70, 1), Cell(80, 9)))) == []
+    assert stock.row_style(FIRST_INPUT) == 0
+    assert stock.set_row_style(FIRST_INPUT, 3) is True and stock.set_row_style(FIRST_INPUT, 3) is False
+    assert stock.row_style(FIRST_INPUT) == 3
+    assert stock.set_row_style(70, 2) is True and stock.style(Cell(70, 5), inherited=True) == 2
+    assert stock.set_row_style(70, 0) is True and stock.row_style(70) == 0
+    assert stock.set_row_style(FIRST_INPUT, 0) is True
+    stock.write(Cell(70, 1), "after")                       # the row index is still right
+    assert stock.value(Cell(70, 1)) == "after"
+    with pytest.raises(ArgumentError):
+        stock.set_row_style(5, -1)
+
+
+def test_a_cell_format_is_found_or_added():
+    _, book = _open()
+    styles = book.styles
+    root = book.package.tree(styles.part)
+    xfs = root.find(X + "cellXfs").findall(X + "xf")
+    same = etree.fromstring(etree.tostring(xfs[3]))
+    same.attrib.update(dict(reversed(list(same.attrib.items()))))
+    assert styles.add_format(same) == 3                      # identical: reused
+    other = etree.fromstring(etree.tostring(xfs[3]))
+    other.set("applyAlignment", "1")
+    etree.SubElement(other, X + "alignment").set("wrapText", "1")
+    added = styles.add_format(other)
+    assert added == styles.count - 1 and styles.add_format(other) == added
+    assert styles.wraps_text(added)
+    with pytest.raises(ArgumentTypeError):
+        styles.add_format(etree.Element(X + "font"))
 
 
 # -- history -----------------------------------------------------------------------------------

@@ -9,13 +9,16 @@ Besides those it reads number format codes with ooxml-common (:mod:`ooxml_common
 * :mod:`.workbook` -- :class:`Workbook` and :class:`Worksheet`: cells written by position
   (:meth:`Worksheet.write`: text, :class:`RichText` -- runs with the cell's font, bold,
   italic, struck through (:func:`rich_runs` reads them, :meth:`Worksheet.runs`) --
-  numbers, booleans, dates, :class:`Formula`, blanks),
+  numbers, booleans, dates, :class:`Formula`, blanks), a cell's format set alone
+  (:meth:`Worksheet.set_style`), a row's own height and format
+  (:meth:`Worksheet.set_row_height`, :meth:`Worksheet.set_row_style`), the cells an area
+  holds (:meth:`Worksheet.cells_in`),
   shared strings indexed once, rows with or without ``r``, tables, the calculation chain
   and ``calcPr``; shared formula groups (:meth:`Worksheet.shared_group`) and a master taken
   out of its group with its members' formulas kept (:meth:`Worksheet.release_shared`); references (:class:`Cell`, :class:`Area`, :func:`parse_formula`);
 * :mod:`.styles` -- :class:`Styles`: a cell format's number format, whether it shows a
   date, its font, whether it wraps text, and the format a value needs (a date's number
-  format, wrapped text), reused or appended;
+  format, wrapped text) or a caller made (:meth:`Styles.add_format`), reused or appended;
 * :mod:`.footprint` -- :func:`outside_footprint`: what an edit may change, written down and
   checked, for tests and for a caller that verifies a saved package.
 """
