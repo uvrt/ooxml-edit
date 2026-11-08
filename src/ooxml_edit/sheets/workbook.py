@@ -1197,7 +1197,9 @@ class Worksheet:
         """Row ``row``'s own format (``s`` with ``customFormat``, ECMA-376 Part 1,
         18.3.1.73): what a cell made in it takes; 0 when it has none."""
         node = self._row(row, create=False)
-        given = "" if node is None else node.get("s", "")
+        if node is None:
+            return 0
+        given = node.get("s", "")
         return int(given) if given.isdigit() and _flag(node.get("customFormat")) else 0
 
     def set_row_style(self, row: int, style: int) -> bool:
