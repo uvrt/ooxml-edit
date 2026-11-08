@@ -151,3 +151,25 @@ def test_render_of_a_range_runs_in_a_read_batch_with_a_check_of_copies():
         assert result.data["ops"][0]["data"]["range"] == ["p:1..p:4"]
         assert [image.caption for image in result.images] == ["ops[0] d1 page 1"]
         assert SEEN[-1]["locked"] == ["d1", "d2"]
+
+
+def test_a_copy_says_its_lists_run_on_and_a_wrong_value_is_refused_with_the_valid_ones():
+    """Round 43: ``lists`` in a copies item, stated by the caller (never inferred): ``run_on``
+    or ``sample`` (the default, left out); a natural other spelling is read with a warning,
+    anything else refused naming both values."""
+    item = _sent("check", "docx")["copies"]["items"]
+    assert item["properties"]["lists"]["enum"] == ["sample", "run_on"]
+    assert "lists" not in item["required"] and "valueAliases" not in json.dumps(item)
+    with _box() as box:
+        session = _session(box)
+        copies = [{"blocks": "p:5", "reference": {"block": "p:1"}, "lists": "run_on"}]
+        result = box.dispatch(session, "check", {"doc": "d1", "copies": copies})
+        assert result.ok and SEEN[-1]["copies"] == copies
+        read = box.dispatch(session, "check", {"doc": "d1", "copies": [
+            {"blocks": "p:5", "reference": {"block": "p:1"}, "lists": "runs_on"}]})
+        assert read.ok and SEEN[-1]["copies"][0]["lists"] == "run_on"
+        assert any("read as 'run_on'" in w for w in read.warnings)
+        wrong = box.dispatch(session, "check", {"doc": "d1", "copies": [
+            {"blocks": "p:5", "reference": {"block": "p:1"}, "lists": "restart"}]})
+        assert wrong.error.code == "invalid_arguments" and wrong.error.field == "copies[0].lists"
+        assert wrong.error.valid_options == ["sample", "run_on"]

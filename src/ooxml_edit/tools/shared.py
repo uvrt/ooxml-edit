@@ -221,12 +221,19 @@ class Spec:
 _BLOCK_RANGES = array(string(), "Documents: blocks, spans p:A..t:B or sections s:2; their "
                       "facts, pages.", or_single=True, optional=True)
 #: ``check``'s ``copies`` (round 35, R19): each copy's blocks and what it was made from, in
-#: this document or another open one (:func:`_checked_documents` locks it too).
+#: this document or another open one (:func:`_checked_documents` locks it too); round 43:
+#: ``lists`` -- ``run_on`` where the caller says the copies' numbered lists count on from copy
+#: to copy (never inferred: a copy that counts on looks the same as one that should not).
 _COPIES = array(obj({"blocks": string("The copy's block or span."),
                      "reference": obj({"doc": string("Its document. Default doc.",
                                                      optional=True),
                                        "block": string("Its block or span.")},
-                                      "What it was made from.")}),
+                                      "What it was made from."),
+                     # Round 43: numbered lists that run on through the copies, as stated.
+                     "lists": string("run_on: numbered lists count on from the copy before.",
+                                     enum=["sample", "run_on"], optional=True,
+                                     aliases={"runs_on": "run_on", "run on": "run_on",
+                                              "run-on": "run_on", "continue": "run_on"})}),
                 "Documents: copies compared with their reference.", optional=True)
 
 

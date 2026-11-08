@@ -149,6 +149,10 @@ another open document): `check`'s `documents` is a function naming `doc` and eve
 or a workbook's handler is wrapped (`shared._with_taken`) to refuse one given, naming it.
 `range` takes one string as a list of one: `orSingle`, a validation keyword
 (`array(..., or_single=True)`), never sent to a provider.
+A copy also takes `lists` (0.94.0, round 43): `run_on` where the caller states that the
+copies' numbered lists count on from one copy to the next (never inferred: in Word's XML
+such a copy looks the same as one that should have begun again), `sample` the default.
+`runs_on`, `run on`, `run-on` and `continue` are read as `run_on` (aliases, never sent).
 
 *Renders in a read_batch* (0.80.0, round 35, R20). A reviewer's round -- pages or slides
 drawn, a check, a few reads -- was four turns: `read_batch` refused `render` ("call it on
