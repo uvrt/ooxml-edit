@@ -431,6 +431,8 @@ class Workbook:
             = None
         #: The first index of each rich item, by its canonical form; built when first needed.
         self._rich_index: dict[tuple, int] | None = None
+        #: The shared strings' ``extLst`` when they were indexed, which new items go before.
+        self._string_extensions: Element | None = None
         self._styles: Styles | None = None
         #: Cells counted ``t="s"`` per sheet, by the tree they were counted in.
         self._string_uses: dict[str, tuple[Element, int]] = {}
@@ -494,13 +496,15 @@ class Workbook:
     def _string_table(self) -> tuple[Element, int, list[str], dict[str, int],
                                      list[Element]] | None:
         """The shared strings, indexed once -- again only when the tree was replaced (an
-        undo) or changed under this index."""
+        undo) or changed at its end under this index (an item added or the last one gone,
+        :func:`_index_intact`: a check of the last item, not a count of every item, which
+        a table of many thousand would pay at every write)."""
         part = self._shared_strings_part()
         root = self.package.tree(part) if part else None
         if root is None:
             return None
         cached = self._strings
-        if cached is None or cached[0] is not root or cached[1] != len(root):
+        if cached is None or cached[0] is not root or not _index_intact(root, cached[4]):
             texts: list[str] = []
             plain: dict[str, int] = {}
             items: list[Element] = []
@@ -510,8 +514,9 @@ class Workbook:
                     plain.setdefault(text, len(texts))
                 texts.append(text)
                 items.append(item)
-            cached = self._strings = (root, len(root), texts, plain, items)
+            cached = self._strings = (root, len(items), texts, plain, items)
             self._rich_index = None
+            self._string_extensions = root.find(_X + "extLst")
         return cached
 
     def shared_string(self, index: int) -> str:
@@ -569,7 +574,11 @@ class Workbook:
         part = self._shared_strings_part()
         assert table is not None and part is not None  # the callers checked there is one
         root, _, texts, plain, items = table
-        extensions = root.find(_X + "extLst")
+        # Found when the table was indexed (a search of every item at every append is what
+        # a table of many thousand cannot pay), and still the table's.
+        extensions = self._string_extensions
+        if extensions is not None and extensions.getparent() is not root:
+            extensions = self._string_extensions = root.find(_X + "extLst")
         if extensions is not None:
             extensions.addprevious(item)
         else:
@@ -577,7 +586,7 @@ class Workbook:
         self.package.mark_dirty(part)
         texts.append(text)
         items.append(item)
-        self._strings = (root, len(root), texts, plain, items)
+        self._strings = (root, len(items), texts, plain, items)
         return len(texts) - 1
 
     # -- styles ------------------------------------------------------------------------------
@@ -679,6 +688,8 @@ class Worksheet:
         #: ``(first row, first column, last row, last column)`` of the cells, or ``None``
         #: until computed and after a cell is removed.
         self._bounds: tuple[int, int, int, int] | None = None
+        #: The bounds the ``dimension`` was last written for, and what was written.
+        self._bounds_ref: tuple[tuple[int, int, int, int], str] | None = None
         if self._data is None:
             raise ValueError(f"sheet {name!r} has no sheetData")
 
@@ -1338,7 +1349,7 @@ class Worksheet:
         column = 0
         for node in row.iterchildren(_X + "c"):
             given = node.get("r")
-            column = Cell.parse(given).column if given else column + 1
+            column = _column_of(given) if given else column + 1
             yield column, node
 
     def _find(self, cell: Cell) -> Element | None:
@@ -1437,6 +1448,10 @@ class Worksheet:
             self._bounds = self._measure()
         elif cell is not None:
             low_row, low_column, high_row, high_column = self._bounds
+            if low_row <= cell.row <= high_row and low_column <= cell.column <= high_column \
+                    and self._bounds_ref is not None and self._bounds_ref[0] == self._bounds \
+                    and dimension.get("ref") == self._bounds_ref[1]:
+                return      # inside what the dimension already says
             self._bounds = (min(low_row, cell.row), min(low_column, cell.column),
                             max(high_row, cell.row), max(high_column, cell.column))
         if self._bounds is None:
@@ -1444,21 +1459,43 @@ class Worksheet:
         else:
             low_row, low_column, high_row, high_column = self._bounds
             wanted = Area(Cell(low_row, low_column), Cell(high_row, high_column)).ref
+            self._bounds_ref = (self._bounds, wanted)
         if dimension.get("ref") != wanted:
             dimension.set("ref", wanted)
 
     def _measure(self) -> tuple[int, int, int, int] | None:
-        """The rectangle every cell is in, or ``None`` for a sheet without cells."""
-        bounds: tuple[int, int, int, int] | None = None
+        """The rectangle every cell is in, or ``None`` for a sheet without cells.  Every
+        cell is placed as :meth:`_cells` places it, in line: a sheet may hold a million."""
+        low_row = low_column = MAX_ROW + 1
+        high_row = high_column = 0
+        known, digits, tag = _COLUMNS, _DIGITS, _X + "c"
         for number, row in self._index():
-            for column, _ in self._cells(row):
-                if bounds is None:
-                    bounds = (number, column, number, column)
+            column = first = last = 0
+            for node in row.iterchildren(tag):
+                given = node.get("r")
+                if given:
+                    letters = given.rstrip(digits)
+                    column = known.get(letters, 0)
+                    if not column or not 0 < len(given) - len(letters) <= 7:
+                        column = _column_of(given)
                 else:
-                    low_row, low_column, high_row, high_column = bounds
-                    bounds = (min(low_row, number), min(low_column, column),
-                              max(high_row, number), max(high_column, column))
-        return bounds
+                    column += 1
+                if not first or column < first:
+                    first = column
+                if column > last:
+                    last = column
+            if last:
+                if number < low_row:
+                    low_row = number
+                if number > high_row:
+                    high_row = number
+                if first < low_column:
+                    low_column = first
+                if last > high_column:
+                    high_column = last
+        if not high_row:
+            return None
+        return (low_row, low_column, high_row, high_column)
 
 
 class Table:
@@ -1602,6 +1639,37 @@ def _check_text(text: str) -> None:
 def _style_of(node: Element) -> int:
     raw = node.get("s")
     return int(raw) if raw and raw.isdigit() else 0
+
+
+#: Column letters as references write them (upper case, no ``$``) and their numbers, filled
+#: as met: a cell's column is looked up rather than matched (a sheet may hold a million).
+_COLUMNS: dict[str, int] = {}
+_DIGITS = "0123456789"
+
+
+def _column_of(ref: str) -> int:
+    """The column of a cell reference, as :meth:`Cell.parse` reads it (an
+    :class:`ArgumentError` for one that is not)."""
+    letters = ref.rstrip(_DIGITS)
+    column = _COLUMNS.get(letters)
+    if column is not None and 0 < len(ref) - len(letters) <= 7:
+        return column
+    column = Cell.parse(ref).column
+    if 1 <= len(letters) <= 3 and letters.isascii() and letters.isalpha() \
+            and letters.isupper():
+        _COLUMNS[letters] = column
+    return column
+
+
+def _index_intact(root: Element, items: list[Element]) -> bool:
+    """Whether the shared strings' index (``items``, the ``si`` children in order) still
+    ends where the table does: its last item still in the table, and no item after it."""
+    if not items:
+        return root.find(_X + "si") is None
+    last = items[-1]
+    if last.getparent() is not root:
+        return False
+    return not any(node.tag == _X + "si" for node in last.itersiblings())
 
 
 def _bisect(order: list[tuple[int, Element]], number: int) -> int:
