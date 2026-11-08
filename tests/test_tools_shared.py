@@ -290,7 +290,7 @@ def test_each_kinds_toolbox_is_sent_check_with_its_own_parameters_only():
     with Toolbox([text, *TEXT_TOOLS], formats=[TEXT]) as box:
         assert _check_params(box) == {"doc", *TEXT_CHECK}
         assert set(box.tools["check"].optional_parameters()) == {
-            *TEXT_CHECK, "copies[].reference.doc", *SCALE_OPTIONAL}
+            *TEXT_CHECK, "copies[].reference.doc", "copies[].lists", *SCALE_OPTIONAL}
         session = box.session(clock=CLOCK)
         session.open(synthetic.outer_package(), "text.docx")
         # an older prompt's deck parameter still reaches the handler and its refusal

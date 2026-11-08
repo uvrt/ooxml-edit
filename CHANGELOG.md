@@ -4,6 +4,16 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet. Each vers
 reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
 earlier ones were never tagged.
 
+## 0.94.0 -- unreleased
+- **A copy's numbered lists stated to run on** (production round 43). `check`'s `copies`
+  items take `lists`: `run_on` where the caller says one numbered list counts on through
+  the copies of a sample (1-2 in the first copy, 3-4 in the next), `sample` (the default)
+  where each numbers as its sample shows. Never inferred -- the sample cannot show it --
+  so the caller states it; docx-agent 0.1.70 compares a run's later copies against the copy
+  before them. `runs_on`, `run on`, `run-on` and `continue` are read as `run_on` with a
+  warning; any other value is refused naming both. A document's parameter alone, as
+  `copies` is; check is a reading tool, never strict, so Claude's strict set is unchanged.
+
 ## 0.93.1 -- unreleased
 - **No lock warning from lxml 7 when a cell gets rich text** (production round 41). On lxml
   7 (7.0.0b1; Python 3.15t and 3.15 alike) writing rich text into a cell printed "Exception
