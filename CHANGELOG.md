@@ -4,6 +4,18 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet. Each vers
 reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
 earlier ones were never tagged.
 
+## 0.95.1 -- unreleased
+- **The cell writer on a sheet of many rows** (production round 44, xlsx-agent lane P: one
+  write on a sheet of 50,000 rows took seconds, a thousand new strings half a minute). Each
+  new shared string no longer counts every item of the table twice (lxml's `len` walks
+  them) nor searches it for its `extLst`: the index is checked at its end (its last item
+  still the table's last) and found again only when that changed under it or the tree was
+  replaced. A cell's column is looked up from its letters rather than matched (the same
+  column `Cell.parse` gives, the same refusal for a reference that is none); the sheet is
+  measured for its `dimension` in one pass, and a write inside the `dimension` as last
+  written leaves it. Nothing changes its bytes: tests/test_sheets_speed.py holds each
+  shortcut to the long way round.
+
 ## 0.95.0 -- unreleased
 - **A cell's format and a row's height, set on their own** (production round 44, R53; for
   xlsx-agent's formatting). `Worksheet.set_style(cell, style)` gives a cell a format with
