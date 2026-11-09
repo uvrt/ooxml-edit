@@ -652,6 +652,8 @@ class DocumentEntry:
         with self._drafts_ended:
             now = time.monotonic()
             waiting = {token for token, since in self.drafts_in_flight.items() if now - since >= longer_than}
+            if not waiting:
+                return 0.0              # (none to wait for: no time said to be waited)
             while waiting & self.drafts_in_flight.keys():
                 self._drafts_ended.wait()
             return time.monotonic() - now

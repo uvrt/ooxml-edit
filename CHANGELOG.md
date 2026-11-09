@@ -19,6 +19,8 @@ earlier ones were never tagged.
   draw what they would have -- on the draft it was not, and their ids differed from the
   calls run one at a time. The format says whether a draft drew (`BlockEdits.drew`,
   optional; without it, as before); `Result.block` says `lock: "drew ids, then failed"`.
+- A call that takes the lock with no long draft in flight no longer reports a few
+  milliseconds as `waited` (the time to look, on a busy machine).
 
 ## 0.101.0 -- unreleased
 - **A save copies untouched parts as their compressed entries** (round 46; the user's
