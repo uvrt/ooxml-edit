@@ -94,10 +94,23 @@ def column_letters(index: int) -> str:
 
 
 def column_index(letters: str) -> int:
-    """``A`` -> 1, ``AA`` -> 27."""
+    """``A`` -> 1, ``AA`` -> 27, ``XFD`` -> 16384 (:data:`MAX_COLUMN`), case aside.  Only
+    a column's letters: one to three of ``A`` to ``Z`` on the sheet's grid.  Anything else
+    -- ``""``, a cell (``"A1"``), a ``$``, spaces, other letters, a column past ``XFD`` --
+    is :class:`~ooxml_edit.errors.ArgumentError` (a ``ValueError``) naming the text;
+    not text, :class:`~ooxml_edit.errors.ArgumentTypeError`."""
+    if not isinstance(letters, str):
+        raise ArgumentTypeError(f"a column's letters are text, not {type(letters).__name__}")
+    if not 1 <= len(letters) <= 3 or not all("A" <= ch <= "Z" or "a" <= ch <= "z"
+                                             for ch in letters):
+        raise ArgumentError(f"{letters!r} is not a column's letters (one to three of A to "
+                            f"Z, as A, AA or {column_letters(MAX_COLUMN)})")
     value = 0
     for letter in letters.upper():
         value = value * 26 + ord(letter) - 64
+    if value > MAX_COLUMN:
+        raise ArgumentError(f"{letters!r} is past the sheet's last column, "
+                            f"{column_letters(MAX_COLUMN)}")
     return value
 
 
@@ -120,7 +133,12 @@ class Cell:
         match = _CELL.fullmatch(text.strip())
         if match is None:
             raise ArgumentError(f"{text!r} is not a cell reference")
-        return cls(int(match.group(4)), column_index(match.group(2)))
+        try:
+            column = column_index(match.group(2))
+        except ArgumentError:
+            raise ArgumentError(f"{text!r} is past the sheet's last column, "
+                                f"{column_letters(MAX_COLUMN)}") from None
+        return cls(int(match.group(4)), column)
 
     def moved(self, rows: int = 0, columns: int = 0) -> "Cell":
         return Cell(self.row + rows, self.column + columns)
