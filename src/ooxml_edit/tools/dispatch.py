@@ -158,6 +158,10 @@ class CallContext:
         self.op = 0
         #: ``ref name -> the op that would have made it``: the refs of a batch's failed ops.
         self.failed_refs: dict[str, int] = {}
+        #: Round 47: whether a call checked a ref name against the document's refs (whose
+        #: it is, :meth:`Call._own_ref`) -- what a call on a draft checks again when its
+        #: change is applied, as it does refs it used or made.
+        self.refs_read = False
         #: The roles the calls run with: the session's, a view's, or the dispatch's own.
         self.roles: tuple[str, ...] = ROLES
         #: The application's context of the calls (:attr:`Call.caller`); none by default.
@@ -326,8 +330,54 @@ class Call:
             name = folded
         if doc is None:
             raise ToolError("invalid_arguments", "a ref needs a document")
+        self._own_ref(doc, name, address)
         self.context.refs.setdefault(doc, {})[name] = address
         self.result.refs[name] = address
+
+    def _own_refs_first(self, arguments: Mapping[str, Any]) -> None:
+        """Before a changing call's handler runs: refuse a ref name it is given (``ref``, or
+        ``ref`` in the objects of a list argument, ``items[].ref``) that another caller's
+        ref has (:meth:`_own_ref`) -- what it makes is somewhere new, so it would point that
+        ref elsewhere -- before anything is made, so the refusal draws no new ids."""
+        if not self.context.caller or self.entry is None:
+            return
+        names = [arguments.get("ref")]
+        for value in arguments.values():
+            if isinstance(value, list):
+                names += [item.get("ref") for item in value if isinstance(item, Mapping)]
+        for name in names:
+            if isinstance(name, str):
+                folded = name if REF.match(name) else fold_ref(name)
+                if folded is not None:
+                    self._own_ref(self.entry.doc_id, folded, None)
+
+    def _own_ref(self, doc: str, name: str, address: str | None) -> None:
+        """Refuse to point ``name`` at ``address`` (``None``: somewhere new) when another
+        caller's ref has that name and names another address (round 47: a ref is its
+        definer's, :mod:`.session`).  A call with no context may point any ref, as before; a
+        ref this call (or batch) defined already is its own."""
+        caller = self.context.caller
+        if not caller or name in self.context.refs.get(doc, {}):
+            return
+        self.context.refs_read = True
+        entry = self.entries.get(doc)
+        if entry is None or entry.refs.get(name, address) == address:
+            return
+        owner = entry.ref_owner(name)
+        if owner is None or dict(owner) == dict(caller):
+            return
+        taken = set(self.refs(doc))
+        n = 2
+        while f"{name[:28]}_{n}" in taken:
+            n += 1
+        other = f"{name[:28]}_{n}"
+        # The owner is not named: a caller's context is the application's, never the model's
+        # (Call.caller), and an error's details reach the model.
+        raise ToolError("invalid_arguments", f"ref {name!r} was defined by another caller (it "
+                        f"names {entry.refs[name]}), and only its definer points it elsewhere: "
+                        f"give this one another name, such as {other!r}", field="ref",
+                        details={"ref": name, "address": entry.refs[name]},
+                        valid_options=[other])
 
     def refs(self, doc: str | None = None) -> dict[str, str]:
         """Every ref of a document this call can use: kept ones, then this call's own."""
@@ -1828,7 +1878,7 @@ class Toolbox:
         document's lock (:meth:`_run_block`); ``None``: nothing.  The refs, when it used or
         made one; its retry keys; the datasets it named (the same, and as stale); whether
         the document is tracked."""
-        if (context.refs or _uses_refs(clean)) and entry.refs != committed.refs:
+        if (context.refs or context.refs_read or _uses_refs(clean)) and entry.refs != committed.refs:
             return "the document's refs changed"
         for key in made_keys:
             if key in entry.keys:
@@ -2062,6 +2112,8 @@ class Toolbox:
             read: list[str] = []
             arguments = self._with_refs(tool, arguments, entries, primary, context, read)
             call = Call(self, session, tool, arguments, entries, primary, context)
+            if changing:
+                call._own_refs_first(arguments)
             call.result.warnings += ignored + early + read
             self._with_datasets(tool, arguments, call)
             arguments = self._with_facts(tool, arguments, call)
@@ -2386,7 +2438,7 @@ class Toolbox:
         its new version (so undo can bring back the refs of the state it returns to)."""
         for doc in set(context.refs) | set(changed):
             if doc in entries:
-                entries[doc].keep_refs(context.refs.get(doc, {}))
+                entries[doc].keep_refs(context.refs.get(doc, {}), context.caller)
 
     def _batch_checks(self, session: Session, entries: Mapping[str, DocumentEntry],
                       context: CallContext, combined: Result, after: "After | None") -> None:
@@ -2767,6 +2819,12 @@ class Toolbox:
             if rename is not None:
                 outcomes[:] = rename(outcomes)
                 caught_first = rename(caught_first)
+                # Round 47: the failed ops' errors too, which the summary quotes (an op that
+                # failed on ids an earlier op of the batch made, named by a ref).
+                for error in errors.values():
+                    error.message = rename(error.message)
+                    error.valid_options = rename(error.valid_options)
+                    error.details = rename(error.details)
             with collect_warnings() as caught_late:
                 stopped = self._run_trailing(
                     session, [(index, ops[index], None) for index in range(split, len(ops))],
@@ -2981,6 +3039,8 @@ class Toolbox:
             call = Call(self, session, tool, arguments,
                         {doc: held[doc] for doc in [*doc_ids, *found] if doc in held},
                         primary, context)
+            if tool.changes(arguments):
+                call._own_refs_first(arguments)
             call.result.warnings += read
             self._with_datasets(tool, arguments, call)
             arguments = self._with_facts(tool, arguments, call)

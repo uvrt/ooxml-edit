@@ -81,12 +81,24 @@ Refs (round 23, V5).  A creating call may name what it made (``ref``); later cal
 ``$name`` for it.  The application reads a document's refs outside a call with
 :meth:`Session.refs` -- a copy, ``{name: address}`` -- and resolves one with
 :meth:`Session.resolve_ref`, as a call's handler does with
-:meth:`~.dispatch.Call.resolve_ref`.
+:meth:`~.dispatch.Call.resolve_ref`.  Both take the document's lock, so they wait for an edit
+in flight; :meth:`Session.read_refs` and :meth:`Session.read_resolve_ref` read them at the
+committed version instead, as :meth:`Session.read_lock` reads the document (round 47): the
+refs a call defined are committed with the version it leaves, and with the version it
+found when it changed nothing else.
+
+Refs by caller (round 47).  A ref is its definer's: the context of the call that defined it
+(:attr:`~.dispatch.Call.caller`, :attr:`DocumentEntry.ref_owners`).  A call with a context
+that would point another caller's ref somewhere else is refused, naming the ref, its owner
+and the way out (another name); using it, or naming the same address again, is fine.  A ref
+defined by a call with no context is shared, as before: any caller may point it elsewhere
+(and then owns it), and a call with no context may point any ref elsewhere.
 """
 
 from __future__ import annotations
 
 import codecs
+import dataclasses
 import datetime as _dt
 import itertools
 import re
@@ -507,6 +519,11 @@ class DocumentEntry:
     #: The refs as they were at each version: undo and redo bring them back with the
     #: content, so a ref never outlives what it names (ids are reused once freed).
     ref_states: dict[int, dict[str, str]] = field(default_factory=dict, repr=False)
+    #: Round 47: who defined each ref -- ``(name, address) -> the defining call's context``
+    #: (:attr:`~.dispatch.Call.caller`); a ref with no entry, or an empty context, is
+    #: shared.  Keyed by the address too, so undo and redo, which bring back a version's
+    #: refs (:attr:`ref_states`), bring back their owners with them.
+    ref_owners: dict[tuple[str, str], Mapping[str, Any]] = field(default_factory=dict, repr=False)
     #: Who made each step: the version a call's change made -> its :class:`StepOwner`.
     #: A step made outside a call (the library's API directly) has none.
     owners: dict[int, StepOwner] = field(default_factory=dict, repr=False)
@@ -587,6 +604,13 @@ class DocumentEntry:
         version = self.version
         committed = self.committed
         if committed is not None and committed.version == version:
+            if committed.refs != self.refs:
+                # Round 47: a call that only defined refs (the version as it was): the
+                # same version with its refs now, so refs read at the committed version
+                # are never behind.
+                self.committed = committed.with_refs(
+                    dict(self.refs), dict(self.ref_states.get(version, self.refs)),
+                    dict(self.ref_owners))
             return
         try:
             make = read_copy(self.document)
@@ -597,7 +621,7 @@ class DocumentEntry:
         self.committed = Committed(version, data, make, dict(self.refs),
                                    dict(self.ref_states.get(version, self.refs)),
                                    tracking=self.tracking, owners=dict(self.owners),
-                                   seq=self.change_seq)
+                                   seq=self.change_seq, ref_owners=dict(self.ref_owners))
 
     # -- calls in flight, and the changes made (round 45, lane B) ---------------------------
 
@@ -725,7 +749,8 @@ class DocumentEntry:
             document=document, size=self.size, font_dirs=self.font_dirs, locale=self.locale,
             baseline_problems=self.baseline_problems, tracking=committed.tracking,
             render_cache=LRU(1), check_cache=LRU(1), render_keys=LRU(16), font_keys=LRU(16),
-            keys=dict(self.keys), refs=dict(committed.refs), owners=dict(committed.owners))
+            keys=dict(self.keys), refs=dict(committed.refs), owners=dict(committed.owners),
+            ref_owners=dict(committed.ref_owners))
         entry.ref_states[committed.version] = dict(committed.ref_state)
         entry._snapshot = (committed.version, committed.data)
         return entry
@@ -809,10 +834,27 @@ class DocumentEntry:
             return None
         return history.mark()
 
-    def keep_refs(self, defined: dict[str, str]) -> None:
-        """Add refs a call defined, and remember the set as this version's."""
+    def keep_refs(self, defined: dict[str, str], owner: Mapping[str, Any] | None = None) -> None:
+        """Add refs a call defined, and remember the set as this version's.  ``owner``: the
+        defining call's context (round 47, :attr:`ref_owners`); none or empty, shared.  A ref
+        named again at the address it has keeps its owner."""
+        for name, address in defined.items():
+            if self.refs.get(name) == address:
+                continue
+            if owner:
+                self.ref_owners[(name, address)] = dict(owner)
+            else:
+                self.ref_owners.pop((name, address), None)
         self.refs.update(defined)
         self.ref_states[self.version] = dict(self.refs)
+
+    def ref_owner(self, name: str) -> Mapping[str, Any] | None:
+        """The context of the call that defined ref ``name`` as it is now (round 47);
+        ``None`` for a shared ref, or a name the document has not."""
+        address = self.refs.get(name)
+        if address is None:
+            return None
+        return self.ref_owners.get((name, address)) or None
 
     def scoped_refs(self, step: Any, *, undone: bool) -> None:
         """Refs after a scoped undo or redo (:class:`~ooxml_edit.history.ScopedStep`): the
@@ -873,7 +915,8 @@ class Committed:
     def __init__(self, version: int, data: bytes, make: Callable[[bytes], Any],
                  refs: dict[str, str], ref_state: dict[str, str], *,
                  tracking: dict[str, Any] | None = None,
-                 owners: dict[int, StepOwner] | None = None, seq: int = 0) -> None:
+                 owners: dict[int, StepOwner] | None = None, seq: int = 0,
+                 ref_owners: dict[tuple[str, str], Mapping[str, Any]] | None = None) -> None:
         self.version = version
         self.tracking = tracking
         self.owners = owners or {}
@@ -885,6 +928,8 @@ class Committed:
         self.make = make
         self.refs = refs
         self.ref_state = ref_state
+        #: Who defined each ref (:attr:`DocumentEntry.ref_owners`), as committed.
+        self.ref_owners = ref_owners or {}
         self._entry: DocumentEntry | None = None
         self._failed = False
         self._lock = threading.Lock()
@@ -907,11 +952,29 @@ class Committed:
                     tracking=self.tracking, render_cache=live.render_cache,
                     check_cache=live.check_cache, render_keys=live.render_keys,
                     font_keys=live.font_keys, log=live.log, refs=dict(self.refs),
-                    owners=dict(self.owners), pinned=self.version, live=live)
+                    owners=dict(self.owners), ref_owners=dict(self.ref_owners),
+                    pinned=self.version, live=live)
                 entry.ref_states[self.version] = dict(self.ref_state)
                 entry._snapshot = (self.version, self.data)
                 self._entry = entry
             return self._entry
+
+    def with_refs(self, refs: dict[str, str], ref_state: dict[str, str],
+                  ref_owners: dict[tuple[str, str], Mapping[str, Any]]) -> "Committed":
+        """This version with other refs (round 47: a call that only defined refs): its
+        bytes and copy shared -- a reader made already is kept, its document and lock
+        shared, with the refs now -- for the calls that read it next; the readers holding
+        this one keep the refs they began with."""
+        again = Committed(self.version, self.data, self.make, refs, ref_state,
+                          tracking=self.tracking, owners=self.owners, seq=self.seq,
+                          ref_owners=ref_owners)
+        with self._lock:
+            again._failed = self._failed
+            if self._entry is not None:
+                again._entry = dataclasses.replace(
+                    self._entry, refs=dict(refs), ref_states={self.version: dict(ref_state)},
+                    ref_owners=dict(ref_owners))
+        return again
 
 
 #: Changes kept per document for what a read learns changed since its version
@@ -1468,24 +1531,30 @@ class Session:
         refs as the valid options."""
         if not isinstance(value, str):
             return value
-        known = self.refs(doc_id)
-        match = REF_USE.match(value)
-        if match is None:
-            folded = _folded_use(value, known)
-            if folded is not None:
-                match = REF_USE.match(folded)
-        if match is None:
-            meant = _misspelt_ref(value, known)
-            if meant is not None:
-                raise ToolError("not_found", f"{value!r} is no ref; did you mean ${meant}? "
-                                "A ref is lowercase",
-                                valid_options=[f"${key}" for key in sorted(known)])
+        return _resolve_in(doc_id, value, self.refs(doc_id))
+
+    def read_refs(self, doc_id: str) -> dict[str, str]:
+        """:meth:`refs` at the document's committed version (round 47), as
+        :meth:`read_lock` reads the document: without the document's lock, so it never
+        waits for an edit in flight, whose refs are the document's once its call has
+        ended.  A document with no committed version that is the one now -- a format that
+        does not copy its documents (:attr:`DocumentFormat.read_copy`), or a change made
+        outside a call -- takes its lock as :meth:`read_lock` does, keeps the version now
+        as committed, and reads its refs.  A copy: changing it changes nothing."""
+        entry = self.entry(doc_id)
+        committed = entry.committed
+        if committed is not None and entry.pinned is None and committed.version == entry.version:
+            return dict(committed.refs)
+        with entry.lock:
+            entry.commit(self.formats.get(entry.kind))
+            return dict(entry.refs)
+
+    def read_resolve_ref(self, doc_id: str, value: str) -> str:
+        """:meth:`resolve_ref` with the refs at the document's committed version
+        (:meth:`read_refs`): never waits for an edit in flight."""
+        if not isinstance(value, str):
             return value
-        name, rest = match.group(1), match.group(2) or ""
-        if name not in known:
-            raise ToolError("not_found", f"no ref ${name} in {doc_id}",
-                            valid_options=[f"${key}" for key in sorted(known)])
-        return known[name] + rest
+        return _resolve_in(doc_id, value, self.read_refs(doc_id))
 
     # -- datasets ----------------------------------------------------------------------------
 
@@ -1876,6 +1945,28 @@ def narrowed(roles: Sequence[str], context: Mapping[str, Any], wanted: Any = Non
 
 #: No context: what a call made on a session itself sees.
 NO_CONTEXT: Mapping[str, Any] = Session.context
+
+
+def _resolve_in(doc_id: str, value: str, known: Mapping[str, str]) -> str:
+    """``value`` as an address in ``doc_id`` whose refs are ``known``
+    (:meth:`Session.resolve_ref`)."""
+    match = REF_USE.match(value)
+    if match is None:
+        folded = _folded_use(value, known)
+        if folded is not None:
+            match = REF_USE.match(folded)
+    if match is None:
+        meant = _misspelt_ref(value, known)
+        if meant is not None:
+            raise ToolError("not_found", f"{value!r} is no ref; did you mean ${meant}? "
+                            "A ref is lowercase",
+                            valid_options=[f"${key}" for key in sorted(known)])
+        return value
+    name, rest = match.group(1), match.group(2) or ""
+    if name not in known:
+        raise ToolError("not_found", f"no ref ${name} in {doc_id}",
+                        valid_options=[f"${key}" for key in sorted(known)])
+    return known[name] + rest
 
 
 def _is_text(blob: Blob) -> bool:
