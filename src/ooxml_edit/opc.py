@@ -1003,7 +1003,8 @@ def _copy_entry(archive: zipfile.ZipFile, info: zipfile.ZipInfo, entry: "ZipPart
     zipfile adds, here and in the central directory)."""
     out = zipfile.ZipInfo(info.filename, date_time=info.date_time)
     out.compress_type = entry.method
-    out.external_attr = info.external_attr
+    # As zipfile gives an entry it writes (its _open_to_write): rw------- when none.
+    out.external_attr = info.external_attr or 0o600 << 16
     out.create_system = info.create_system
     out.flag_bits = entry.flags
     out.file_size = entry.size

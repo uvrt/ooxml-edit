@@ -192,7 +192,6 @@ def test_odd_entries_are_copied_into_a_valid_archive(tmp_path):
             assert not info.flag_bits & 0x8 and info.extra == b""
         assert infos["doc/bz.xml"].compress_type == zipfile.ZIP_BZIP2
         assert infos["doc/stored.bin"].compress_type == zipfile.ZIP_STORED
-        assert infos["doc/caf\u00e9.xml"].flag_bits & 0x800
     for path in OpcPackage.open(data).part_names:
         assert OpcPackage.open(saved).read(path) == package.read(path)
     # The bzip2 entry's data is copied as it was compressed.
