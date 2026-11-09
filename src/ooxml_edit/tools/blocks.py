@@ -64,6 +64,11 @@ class BlockEdits(Protocol):
         """Whether a validated changing call of ``tool`` may run on a draft.  Unknown tools:
         ``False`` (they keep the document's lock)."""
 
+    def alone(self, tool: str, arguments: Mapping[str, Any]) -> bool:
+        """Optional: whether an admitted call is worth a draft even with no other edit of
+        its document in flight (``block_edits="auto"``) -- one that may run long, so an edit
+        that comes while it runs need not wait for it.  Without it: ``False``."""
+
     def draft(self, document: Any, committed: Any) -> Any:
         """An editable copy of ``document`` at ``committed``'s version
         (:class:`~.session.Committed`), recording what a call does on it; its ``document``

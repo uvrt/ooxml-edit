@@ -18,6 +18,7 @@ from types import SimpleNamespace
 import pytest
 
 from ooxml_edit.tools import Dataset, Result, Toolbox, ToolError, array, integer, number, obj, shared, string, tool
+from ooxml_edit.tools import dispatch
 from ooxml_edit.tools.blocks import BlockConflict, token_renamer, renamed
 from ooxml_edit.tools.limits import Limits
 from ooxml_edit.xml import make
@@ -169,6 +170,72 @@ def test_one_caller_alone_runs_every_call_as_before():
         result = box.dispatch(session, "toy_block_add", {"doc": doc, "text": "one"})
         assert result.ok and result.block is None and hook.drafts == 0
         assert session.entry(doc).document.items()[-1] == "one"
+
+
+def test_auto_drafts_beside_another_edit_never_beside_reads_alone():
+    """``auto``: a draft only while another call edits the document (its change not yet
+    made); calls in flight that only read, or are past their change (at their checks), never
+    wait for an edit, so a draft would spare nothing."""
+    box, hook = _box("auto")
+    with box:
+        session, doc = _open(box)
+        entry = session.entry(doc)
+        entry.enter()                               # a read in flight
+        try:
+            result = box.dispatch(session, "toy_block_add", {"doc": doc, "text": "one"})
+        finally:
+            entry.leave()
+        assert result.ok and result.block is None and hook.drafts == 0
+        assert entry.editing == 0
+        entry.begin_edit()                          # another edit in flight
+        try:
+            result = box.dispatch(session, "toy_block_add", {"doc": doc, "text": "two"})
+        finally:
+            entry.end_edit()
+        assert result.ok and _shape(result.block) == {"tries": 1, "conflicts": []} and hook.drafts == 1
+        assert entry.editing == 0 and entry.document.items()[-2:] == ["one", "two"]
+
+
+def test_an_edit_counts_as_editing_until_its_change_is_made_not_through_its_checks(monkeypatch):
+    box, _hook = _box("auto")
+    with box:
+        session, doc = _open(box)
+        entry = session.entry(doc)
+        seen: list[int] = []
+        original = dispatch.After.run
+
+        def run(self, result):
+            seen.append(entry.editing)
+            return original(self, result)
+
+        monkeypatch.setattr(dispatch.After, "run", run)
+        thread, slow = _thread(lambda: box.dispatch(session, "toy_block_add",
+                                                    {"doc": doc, "text": "slow", "stall": STALL}))
+        time.sleep(0.3)
+        assert entry.editing == 1                    # its change in the making
+        result = box.dispatch(session, "toy_block_add", {"doc": doc, "text": "beside"})
+        thread.join()
+        assert slow["result"].ok and slow["result"].block is None
+        assert result.ok and result.block is not None    # drafted beside it
+        assert entry.editing == 0
+        seen.clear()
+        assert box.dispatch(session, "toy_block_add", {"doc": doc, "text": "alone"}).ok
+        assert seen == [0]                          # at its checks after, no longer editing
+
+
+def test_a_call_the_format_says_is_worth_a_draft_alone_drafts_alone():
+    class Alone(ToyBlocks):
+        def alone(self, tool, arguments):
+            return arguments.get("text") == "long"
+
+    box, hook = _box("auto", Alone())
+    with box:
+        session, doc = _open(box)
+        short = box.dispatch(session, "toy_block_add", {"doc": doc, "text": "short"})
+        long = box.dispatch(session, "batch", {"ops": [
+            {"tool": "toy_block_add", "arguments": {"doc": doc, "text": "long"}}]})
+        assert short.ok and short.block is None
+        assert long.ok and _shape(long.block) == {"tries": 1, "conflicts": []} and hook.drafts == 1
 
 
 def test_an_admitted_call_runs_on_a_draft_and_its_change_is_one_step_of_its_own():

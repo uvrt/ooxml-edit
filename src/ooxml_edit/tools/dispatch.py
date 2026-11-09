@@ -968,10 +968,11 @@ class Toolbox:
 
         ``block_edits`` (round 45, lane B) -- when a changing call a format admits runs on a
         draft of its document, so edits of other blocks run beside it (:mod:`.blocks`):
-        ``"auto"`` (the default) while another call names the same document, ``"always"``
+        ``"auto"`` (the default) while another call edits the same document, or when the
+        format says the call is worth a draft alone (``BlockEdits.alone``), ``"always"``
         for every one it admits, ``"off"`` never.  Results and bytes are the same either
-        way; ``"auto"`` leaves one caller's calls exactly as they were.  Not a tool
-        argument."""
+        way; ``"auto"`` leaves a call made with no other edit in flight exactly as it was.
+        Not a tool argument."""
         if block_edits not in BLOCK_MODES:
             raise ArgumentError(f"block_edits is one of {', '.join(BLOCK_MODES)}, not {block_edits!r}")
         #: When a changing call runs on a draft (:mod:`.blocks`): ``auto``, ``always``, ``off``.
@@ -1425,18 +1426,19 @@ class Toolbox:
             # document keeps the version it leaves as committed, before it lets the lock go.
             reads_only = self._reads_only(tool, clean)
             counted = self._enter(session, doc_ids)
+            editing = _Editing([] if reads_only else [entry for entry, _n in counted.values()])
             try:
                 # Round 45 (lane B): a changing call the format admits, beside another
-                # call on its document, runs on a draft (blocks.py); else as before.
+                # edit of its document, runs on a draft (blocks.py); else as before.
                 drafted = (None if reads_only else
                            self._block_entry(session, tool, clean, doc_ids, reading, roles,
-                                             counted))
+                                             counted, editing))
                 outcome = None
                 if drafted is not None:
                     if holding is not None:
                         holding.set()
                     outcome = self._run_block(session, tool, clean, drafted, roles, caller,
-                                              turn, block)
+                                              turn, block, editing)
                 if outcome is not None:
                     result, entries, primary = outcome
                 else:
@@ -1462,9 +1464,11 @@ class Toolbox:
                                 for entry in locked:
                                     entry.commit(session.formats.get(entry.kind))
                                 after.committed(locked)
+                    editing.done()
                     if after is not None:
                         after.run(result)
             finally:
+                editing.done()
                 for entry, _count in counted.values():
                     entry.leave()
         except ToolError as error:
@@ -1568,28 +1572,50 @@ class Toolbox:
 
     def _block_entry(self, session: Session, tool: Tool, clean: Mapping[str, Any],
                      doc_ids: Sequence[str], reading: Sequence[str], roles: Sequence[str],
-                     counted: Mapping[str, tuple[DocumentEntry, int]]) -> DocumentEntry | None:
+                     counted: Mapping[str, tuple[DocumentEntry, int]],
+                     editing: "_Editing") -> DocumentEntry | None:
         """The document a changing call runs on a draft of (:mod:`.blocks`), or ``None``: it
         names one document and reads no other, its format drafts and admits it, and -- with
-        ``block_edits="auto"`` -- another call names that document now."""
+        ``block_edits="auto"`` -- another call edits that document now (its change not yet
+        made: :meth:`DocumentEntry.begin_edit`), or the format says the call is worth a
+        draft alone (``BlockEdits.alone``: one that may run long).  A draft costs a copy
+        of the blocks changed and a check of them; beside reads and checks alone, which
+        never wait for an edit, nothing waits that it would spare."""
         if self.block_edits == "off" or len(doc_ids) != 1 or reading:
             return None
         found = counted.get(doc_ids[0])
         if found is None:
             return None
-        entry, running = found
-        if self.block_edits == "auto" and running <= 1:
-            return None
+        entry, _running = found
         fmt = session.formats.get(entry.kind)
         hook = getattr(fmt, "blocks", None)
         if hook is None or getattr(fmt, "read_copy", None) is None or entry.pinned is not None:
             return None
         try:
             admitted = self._admitted(hook, tool, clean, entry.kind, entry.doc_id, roles)
+            if admitted and self.block_edits == "auto" and editing.beside(entry) == 0:
+                admitted = self._alone(hook, tool, clean, roles)
         except Exception:  # noqa: BLE001 -- not admitted: the call runs as before
             logger.exception("the %s format's admits failed", entry.kind)
             return None
         return entry if admitted else None
+
+    def _alone(self, hook: Any, tool: Tool, clean: Mapping[str, Any], roles: Sequence[str]) -> bool:
+        """Whether the format says an admitted call is worth a draft with no other edit in
+        flight (``BlockEdits.alone``): a batch when one of its ops is."""
+        alone = getattr(hook, "alone", None)
+        if alone is None:
+            return False
+        if tool.composite:
+            for op in (clean.get("ops") or [])[:self._trailing(clean.get("ops") or [], roles)]:
+                try:
+                    op_tool, op_clean = self._prepare(op, None, roles)
+                except ToolError:
+                    continue
+                if op_tool.changes(op_clean) and alone(op_tool.name, op_clean):
+                    return True
+            return False
+        return bool(alone(tool.name, clean))
 
     def _admitted(self, hook: Any, tool: Tool, clean: Mapping[str, Any], kind: str, doc: str,
                   roles: Sequence[str]) -> bool:
@@ -1618,7 +1644,7 @@ class Toolbox:
 
     def _run_block(self, session: Session, tool: Tool, clean: dict[str, Any],
                    entry: DocumentEntry, roles: Sequence[str], caller: Mapping[str, Any],
-                   turn: "_Turn | None", stats: dict[str, Any]
+                   turn: "_Turn | None", stats: dict[str, Any], editing: "_Editing"
                    ) -> tuple[Result, dict[str, DocumentEntry], DocumentEntry] | None:
         """The call on a draft of ``entry``'s committed version, its change applied under
         the document's lock (:mod:`.blocks`): ``(result, entries, primary)``; ``None`` when
@@ -1693,6 +1719,7 @@ class Toolbox:
                     result.version = committed.version
                     after.retarget(drafted, entry)
                     after.keep(entry, committed)
+                    editing.done()
                     return self._finish_block(result, drafting, after, committed, entry), \
                         {doc: entry}, entry
                 try:
@@ -1758,6 +1785,7 @@ class Toolbox:
                     if (version == committed.version and entry.version == drafted.version
                             and all(old == new for old, new in renames.items())):
                         current = mine      # the draft is this version: kept to reuse
+                editing.done()
                 return (self._finish_block(result, drafting, after, mine, entry, rename),
                         {doc: entry}, entry)
             finally:
@@ -3493,6 +3521,24 @@ class After:
             result.warnings.extend(caught)
         for then in self._then:
             then()
+
+
+class _Editing:
+    """A changing call counted as editing its documents (:meth:`DocumentEntry.begin_edit`)
+    from when it begins until its change is made (:meth:`done`, once), before its checks."""
+
+    def __init__(self, entries: Sequence[DocumentEntry]) -> None:
+        self._counts = {id(entry): (entry, entry.begin_edit()) for entry in entries}
+
+    def beside(self, entry: DocumentEntry) -> int:
+        """How many other calls edited ``entry`` when this one began."""
+        found = self._counts.get(id(entry))
+        return found[1] - 1 if found is not None else 0
+
+    def done(self) -> None:
+        counts, self._counts = self._counts, {}
+        for entry, _count in counts.values():
+            entry.end_edit()
 
 
 class _Drafting:

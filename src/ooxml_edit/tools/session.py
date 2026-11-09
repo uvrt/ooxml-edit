@@ -520,9 +520,12 @@ class DocumentEntry:
     pinned: int | None = field(default=None, repr=False)
     live: "DocumentEntry | None" = field(default=None, repr=False)
     #: Round 45 (lane B): the calls naming this document that are running now, this one
-    #: included (``Toolbox`` counts them, :meth:`enter`): with another one running, a
-    #: changing call the format admits is prepared on a draft (:mod:`.blocks`).
+    #: included (``Toolbox`` counts them, :meth:`enter`).
     in_flight: int = field(default=0, repr=False)
+    #: Round 45 (lane B): the changing calls editing this document now -- preparing or
+    #: applying their change, not yet at their checks (:meth:`begin_edit`): with
+    #: ``block_edits="auto"``, a call is prepared on a draft only beside another one.
+    editing: int = field(default=0, repr=False)
     _flight_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     #: Round 45 (lane B): the changes the dispatcher made to the document, counted
     #: (:meth:`note_change`): the count, the version the last one left, and each part's
@@ -594,6 +597,18 @@ class DocumentEntry:
         """The call :meth:`enter` counted has ended."""
         with self._flight_lock:
             self.in_flight -= 1
+
+    def begin_edit(self) -> int:
+        """Count a changing call as editing this document (until :meth:`end_edit`: its
+        change made, before its checks); how many edit now, it included."""
+        with self._flight_lock:
+            self.editing += 1
+            return self.editing
+
+    def end_edit(self) -> None:
+        """The edit :meth:`begin_edit` counted is done."""
+        with self._flight_lock:
+            self.editing -= 1
 
     def note_change(self, parts: Iterable[str] | None, before: int | None) -> None:
         """Count a change the dispatcher made, under the document's lock: ``parts`` the

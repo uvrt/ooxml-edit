@@ -27,9 +27,12 @@ earlier ones were never tagged.
   (`touched`) and what each op changed (`touched_by_op`, `BlockEdits.replay_changes`) are
   read from the document once applied, never from the draft (the document keeps what it
   read of its earlier states, so only the blocks changed are read again).
-  `Toolbox(block_edits="auto")` -- the default -- drafts a call only while another call names
-  the same document, so one caller's calls run exactly as before; `"always"` (tests),
-  `"off"`. `Result.block` (for the application, never the model) says how a call ran on a
+  `Toolbox(block_edits="auto")` -- the default -- drafts a call only while another call
+  edits the same document (its change not yet made: `DocumentEntry.begin_edit`, `editing`;
+  reads and checks never wait for an edit, so a draft beside them alone spares nothing),
+  or when the format says the call is worth a draft alone (`BlockEdits.alone`: one that
+  may run long, docx-agent's fills from a dataset); otherwise one caller's calls run
+  exactly as before. `"always"` (tests), `"off"`. `Result.block` (for the application, never the model) says how a call ran on a
   draft: its tries, its drafts' CPU, each conflict's reason, why it took the lock; a result with
   `data.timing` says `redo` there. `OpcPackage.set_tree` installs a part's new tree.
   tests/test_tools_block_edits.py (a toy format: commit order, conflicts and tries, the
