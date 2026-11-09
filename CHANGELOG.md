@@ -4,7 +4,7 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet. Each vers
 reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
 earlier ones were never tagged.
 
-## 0.99.0 -- unreleased
+## 0.100.0 -- unreleased
 - **Edits of different blocks of one document run at the same time** (production round 45,
   R64 stage 3; `ooxml_edit.tools.blocks`). A format may say how
   (`DocumentFormat.blocks`, a `BlockEdits`: docx-agent's Word documents): a changing call it
