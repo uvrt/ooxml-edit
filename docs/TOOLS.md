@@ -241,8 +241,9 @@ behind.
 context of its call (`Call.caller`, a view's `context`; `DocumentEntry.ref_owners`, kept
 by name and address, so undo and redo bring back each ref with its owner). A call with a
 context that would point another caller's ref elsewhere is refused (`invalid_arguments`,
-field `ref`) naming the ref, its owner and a free name to give instead (`valid_options`,
-`table_2`; `details` holds the ref, its address and its owner) -- before its handler runs
+field `ref`) naming the ref, its address and a free name to give instead (`valid_options`,
+`table_2`; `details` holds the ref and its address) -- never the owner's context, which is the
+application's and never shown to the model -- before its handler runs
 when the name is in its `ref` argument, or in `ref` of the objects of a list argument
 (`items[].ref`): what a creating call makes is somewhere new, so nothing is made and no
 id is drawn; else when the handler names it (`Call.define_ref`). Using another caller's

@@ -14,8 +14,8 @@ earlier ones were never tagged.
   the call, see them at once (`tests/test_tools_ref_owners.py`).
 - **A ref belongs to the caller that defined it** (round 47, R80). A call whose
   context differs from the one that defined a ref, pointing it elsewhere, is refused
-  (`invalid_arguments`, field `ref`): the ref, its owner and a free name to give
-  (`valid_options`). A name in the call's `ref` (or `items[].ref`) is checked before its
+  (`invalid_arguments`, field `ref`): the ref, its address and a free name to give
+  (`valid_options`); never the owner's context, which the model is not shown. A name in the call's `ref` (or `items[].ref`) is checked before its
   handler runs, so a refused creating call makes nothing and draws no id; `Call.define_ref`
   checks every other. Using another caller's ref works; a ref a call with no context
   defined is shared, and such a call may point any ref, as before. Owners are kept by name

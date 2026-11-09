@@ -365,11 +365,12 @@ class Call:
         while f"{name[:28]}_{n}" in taken:
             n += 1
         other = f"{name[:28]}_{n}"
-        who = ", ".join(f"{key}={value}" for key, value in owner.items())
-        raise ToolError("invalid_arguments", f"ref {name!r} was defined by {who} (it names "
-                        f"{entry.refs[name]}), and only its definer points it elsewhere: give "
-                        f"this one another name, such as {other!r}", field="ref",
-                        details={"ref": name, "address": entry.refs[name], "owner": dict(owner)},
+        # The owner is not named: a caller's context is the application's, never the model's
+        # (Call.caller), and an error's details reach the model.
+        raise ToolError("invalid_arguments", f"ref {name!r} was defined by another caller (it "
+                        f"names {entry.refs[name]}), and only its definer points it elsewhere: "
+                        f"give this one another name, such as {other!r}", field="ref",
+                        details={"ref": name, "address": entry.refs[name]},
                         valid_options=[other])
 
     def refs(self, doc: str | None = None) -> dict[str, str]:

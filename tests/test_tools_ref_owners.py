@@ -6,7 +6,7 @@ document's lock, does not hold them up.  A call that only names something (its v
 was) is committed too, so refs read at the committed version are never behind.
 
 A ref is the caller's that defined it: another caller pointing it elsewhere is refused, naming
-the ref, its owner and another name to give; using it works.  A ref a call with no context
+the ref, its address and another name to give (never the owner's context); using it works.  A ref a call with no context
 defined is shared.  Undo and redo bring back each ref with its owner.  A call on a draft whose
 refs were changed before its change is applied is prepared again on what is committed then.
 """
@@ -14,6 +14,7 @@ refs were changed before its change is applied is prepared again on what is comm
 from __future__ import annotations
 
 import dataclasses
+import json
 import threading
 import time
 
@@ -197,8 +198,9 @@ def test_pointing_another_callers_ref_elsewhere_is_refused_with_the_way_out():
         refused = box.dispatch(two, "toy_ref_make", {"doc": doc, "text": "b", "ref": "table"})
         assert not refused.ok and refused.error.code == "invalid_arguments"
         assert refused.error.field == "ref" and refused.error.valid_options == ["table_2"]
-        assert "agent=one" in refused.error.message and "'table_2'" in refused.error.message
-        assert refused.error.details == {"ref": "table", "address": "item:1", "owner": {"agent": "one"}}
+        assert "another caller" in refused.error.message and "'table_2'" in refused.error.message
+        assert "agent" not in json.dumps(refused.to_json())                 # no caller context
+        assert refused.error.details == {"ref": "table", "address": "item:1"}
         assert session.entry(doc).version == version and session.entry(doc).document.items() == ["a"]
         # The way out works; using the other caller's ref works.
         _ok(box.dispatch(two, "toy_ref_make", {"doc": doc, "text": "b", "ref": "table_2"}))
@@ -311,7 +313,7 @@ def test_a_ref_another_caller_took_before_a_drafts_change_is_applied_is_refused(
         _ok(box.dispatch(one, "toy_ref_name", {"doc": doc, "name": "spot", "address": "item:9"}))
         thread.join()
         result = slow["result"]
-        assert not result.ok and result.error.field == "ref" and "agent=one" in result.error.message
+        assert not result.ok and result.error.field == "ref" and "another caller" in result.error.message
         assert session.entry(doc).version == version and session.refs(doc) == {"spot": "item:9"}
 
 
