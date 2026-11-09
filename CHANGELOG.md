@@ -4,6 +4,48 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet. Each vers
 reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
 earlier ones were never tagged.
 
+## 0.100.0 -- unreleased
+- **Edits of different blocks of one document run at the same time** (production round 45,
+  R64 stage 3; `ooxml_edit.tools.blocks`). A format may say how
+  (`DocumentFormat.blocks`, a `BlockEdits`: docx-agent's Word documents): a changing call it
+  admits runs on a *draft* -- an editable copy of the last committed version -- with no lock
+  of the document held, so calls on other blocks run beside it; then, under the document's
+  lock and briefly, the format checks that what the call read and changed is as it was
+  (`BlockEdits.check`: its blocks and those around them, the facts of the whole document it
+  used, every other part unchanged since -- each change the dispatcher makes is counted by
+  its parts, `DocumentEntry.note_change`, `parts_changed_since`), the dispatcher checks what
+  it read of the session (refs, a retry key, its datasets, tracking), and the patch is
+  applied as the call's own undo step and version (`BlockEdits.apply`, `settle`), its ids
+  renamed where another call drew them first. Another call's change first is a conflict: the
+  call is prepared again, at most `Limits.block_tries` (3) times -- once only after a
+  preparation of more than `Limits.block_redo_cpu` (2 s) of its thread's CPU, so a long
+  call costs at most one run more -- then runs under the lock
+  for its whole run, as calls a format does not admit (whole-document calls, session tools,
+  reads of other documents) always do. Such a call -- any that takes the document's lock
+  -- first waits for each draft in flight for longer than `block_redo_cpu` seconds to be
+  applied (or to take the lock, or fail), so a fields update does not make a long fill run
+  again (`DocumentEntry.wait_for_long_drafts`, `draft_began`, `draft_ended`; never for a
+  draft begun meanwhile, nor when its thread holds the lock already: bounded, no
+  deadlock); `Result.block` says `waited`. Serializable: a committed call's result and change are
+  those of the same call run alone at the moment it committed. A batch's reads after its last
+  change read the version it made; its checks run on it (`After`); what it changed
+  (`touched`) and what each op changed (`touched_by_op`, `BlockEdits.replay_changes`) are
+  read from the document once applied, never from the draft (the document keeps what it
+  read of its earlier states, so only the blocks changed are read again).
+  `Toolbox(block_edits="auto")` -- the default -- drafts a call only while another call
+  edits the same document (its change not yet made: `DocumentEntry.begin_edit`, `editing`;
+  reads and checks never wait for an edit, so a draft beside them alone spares nothing),
+  or when the format says the call is worth a draft alone (`BlockEdits.alone`: one that
+  may run long, docx-agent's fills from a dataset); otherwise one caller's calls run
+  exactly as before. `"always"` (tests), `"off"`. `Result.block` (for the application, never the model) says how a call ran on a
+  draft: its tries, its drafts' CPU, each conflict's reason, why it took the lock; a result with
+  `data.timing` says `redo` there. `OpcPackage.set_tree` installs a part's new tree.
+  tests/test_tools_block_edits.py (a toy format: commit order, conflicts and tries, the
+  lock past them, refusals of the committed version, retry keys, datasets made on a draft,
+  the change count, many callers).
+- A source argument a strict decoder filled with `""` (a table cell's `from` beside its
+  text) is no source: the dispatcher no longer refuses it as an address (round 45, lane D).
+
 ## 0.99.0 -- unreleased
 - **Parts stay compressed until they are edited** (production round 46: a workbook with a
   534 MB sheet in a 70 MB file took 1.25 GB open). An

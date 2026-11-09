@@ -253,6 +253,7 @@ USED_BY: dict[str, dict[str, str]] = {
         "DATASET_PREFIX": "xlsx-agent",
         "Dataset": "docx-agent, pptx-agent, xlsx-agent",
         "DatasetEntry": "docx-agent, pptx-agent, xlsx-agent",
+        "DocumentEntry": "docx-agent",
         "DocumentFormat": "docx-agent, pptx-agent, xlsx-agent",
         "FolderCatalogue": "docx-agent, pptx-agent",
         "InProcess": "docx-agent, pptx-agent",
@@ -289,6 +290,11 @@ USED_BY: dict[str, dict[str, str]] = {
         "definitions_for": "docx-agent, pptx-agent",
         "free_strings": "xlsx-agent",
         "openai_problems": "docx-agent, pptx-agent, xlsx-agent",
+    },
+    "ooxml_edit.tools.blocks": {
+        "BlockConflict": "docx-agent",
+        "renamed": "docx-agent",
+        "token_renamer": "docx-agent",
     },
     "ooxml_edit.tools.assets": {
         "MAX_RESULTS": "docx-agent, pptx-agent",

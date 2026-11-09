@@ -208,6 +208,18 @@ class OpcPackage:
         # A rels part that changed invalidates its cached relationships.
         self._rels_cache.pop(part_for_rels(path), None)
 
+    def set_tree(self, path: str, root: Element) -> None:
+        """Make ``root`` the part's tree, marked dirty: what :meth:`restore` does for one
+        part.  For an edit that built the part's new content elsewhere and installs it whole
+        (round 45: a change prepared on a copy of the document, :mod:`.tools.blocks`).  The
+        part must exist."""
+        path = normalize_part_path(path)
+        if path not in self._parts:
+            raise KeyError(f"no part {path!r}")
+        self._trees[path] = root
+        self._dirty.add(path)
+        self._rels_cache.pop(part_for_rels(path), None)
+
     @property
     def dirty_parts(self) -> frozenset[str]:
         return frozenset(self._dirty)

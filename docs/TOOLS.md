@@ -84,6 +84,23 @@ another; edits of one document still run one at a time. A format without `read_c
 under the lock, as before. Saving refuses new validation problems unless the application (never the
 model) passes `allow_new_problems=True`.
 
+**Edits of different blocks at the same time (round 45, R64, 0.100.0).** Where a format says
+how (`DocumentFormat.blocks`, `ooxml_edit.tools.blocks`; docx-agent's Word documents), a
+changing call it admits, made while another call edits the same document (or one the format
+says may run long), runs on a draft --
+an editable copy of the last committed version -- without the document's lock, and its
+change is applied under the lock, briefly, when what it read and changed is as it was;
+else it is prepared again (at most `Limits.block_tries` times) and then runs under the lock.
+Each committed call's result and change are those of the same call run alone when it
+committed, so the commit order is a serial order. Whole-document calls, session tools and
+calls a format does not admit hold the lock for their whole run, as before; so does every
+other call made with no other edit of the document in flight (`Toolbox(block_edits="auto")`:
+reads and checks never wait for an edit, so a draft beside them alone would spare nothing).
+A call that takes the lock first waits for any draft in flight for longer than
+`Limits.block_redo_cpu` seconds to be applied, so it does not make a long fill run again.
+`Result.block` tells the application how a call ran on a draft, and how long a call waited
+for one.
+
 **What a call changed (round 13, R2, 0.57.0).** Every result carries `result.touched`, for
 the application and never in what the model reads (`to_json`, `to_text`): what the call
 changed, one entry per thing, each with its `"doc"` and the rest in the format's own
