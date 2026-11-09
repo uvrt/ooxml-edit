@@ -17,6 +17,19 @@ bytes of one version, made once and shared by every reader of it), in a worker p
 (:meth:`~.dispatch.Call.on_snapshot`): reads of one document run side by side, and an edit
 does not wait for them.
 
+Committed versions (round 45).  Where a format copies its documents
+(:attr:`DocumentFormat.read_copy`), a changing call keeps the version it leaves as the
+document's committed one before it lets the lock go (:meth:`DocumentEntry.commit`: the
+version's bytes, refs and what the format's copy needs), and a reading call works on a copy
+of the committed version under the copy's own lock (:meth:`Session.read_lock`,
+:meth:`DocumentEntry.reader`): a read never waits for an edit in flight -- which changes
+the document, never the copy -- nor an edit for a read.  A caller's own change is committed
+before its call returns, so its next read sees it.  The copy shares the document's caches
+(keyed by version: equal versions are equal content) and call log, and is never changed.
+A changing call's checks run on the copy of the version it made, after it let the lock go
+(:class:`~.dispatch.After`), so the next edit does not wait for them either.  Edits of one
+document still run one at a time, under its lock.
+
 Fonts.  :attr:`Session.font_dirs` is the application's own font folders, for every render
 and every measurement of text the session's documents make: application configuration,
 never a tool argument.  ``None`` (the default) leaves it to the renderers, which read
@@ -72,7 +85,7 @@ import itertools
 import re
 import threading
 import uuid
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
 from os import PathLike, fspath
@@ -298,6 +311,16 @@ class DocumentFormat:
     #: document``.  It refuses a state that is not these bytes' (an
     #: :class:`~ooxml_edit.errors.ArgumentError` saying what to pass instead).
     open_with_state: Callable[[bytes, Any], Any] | None = None
+    #: Round 45: reads of a committed version.  ``read_copy(document) -> make``, called
+    #: under the document's lock at a version no edit is changing (when a changing call
+    #: has ended, or a read finds none taken yet): what a copy of the document at this
+    #: version needs, taken now; ``make(data)``, called later with no lock held and the
+    #: version's bytes, opens that copy -- one that answers every reading call exactly as
+    #: the document did at that version (its ids, its version, its settings) and shares the
+    #: document's caches that are keyed by content.  Reading calls work on the copy
+    #: (:meth:`Session.read_lock`) and never wait for an edit in flight; the copy is never
+    #: changed.  ``None``: reads take the document's lock, as before.
+    read_copy: Callable[[Any], Callable[[bytes], Any]] | None = None
 
 
 #: :attr:`DocumentEntry.render_keys` and :attr:`DocumentEntry.font_keys`, in entries.
@@ -305,37 +328,116 @@ RENDER_KEYS = 4096
 FONT_KEYS = 256
 
 
+class FairRLock:
+    """A re-entrant lock that serves its waiters in the order they asked (round 45, R64):
+    a document's lock.  ``threading.RLock`` lets whichever waiter the scheduler wakes take
+    it, so a call that has waited behind a long edit can be passed by one that came later,
+    again and again; here, when the holder lets go, the longest waiting caller has it next
+    -- a short edit waits at most for the calls that asked before it.  ``acquire``,
+    ``release``, ``with`` and ``_is_owned`` as ``threading.RLock``'s (``timeout`` in
+    seconds, ``-1`` none; a waiter whose timeout passes leaves the queue)."""
+
+    __slots__ = ("_mutex", "_owner", "_count", "_waiting")
+
+    def __init__(self) -> None:
+        self._mutex = threading.Lock()
+        self._owner: int | None = None
+        self._count = 0
+        #: ``(gate, thread)``: each waiter blocks on its own gate, released when it is handed
+        #: the lock.
+        self._waiting: "deque[tuple[Any, int]]" = deque()
+
+    def acquire(self, blocking: bool = True, timeout: float = -1) -> bool:
+        me = threading.get_ident()
+        with self._mutex:
+            if self._owner == me:
+                self._count += 1
+                return True
+            if self._owner is None and not self._waiting:
+                self._owner, self._count = me, 1
+                return True
+            if not blocking:
+                return False
+            gate = threading.Lock()
+            gate.acquire()
+            waiter = (gate, me)
+            self._waiting.append(waiter)
+        got = gate.acquire(timeout=timeout) if timeout is not None and timeout >= 0 else gate.acquire()
+        if got:
+            return True                         # handed over: owner and count set already
+        with self._mutex:
+            if self._owner == me:               # handed over as the wait ran out
+                return True
+            self._waiting.remove(waiter)
+            return False
+
+    def release(self) -> None:
+        with self._mutex:
+            if self._owner != threading.get_ident():
+                raise RuntimeError("cannot release un-acquired lock")
+            self._count -= 1
+            if self._count:
+                return
+            if self._waiting:
+                gate, thread = self._waiting.popleft()
+                self._owner, self._count = thread, 1
+                gate.release()
+            else:
+                self._owner = None
+
+    def _is_owned(self) -> bool:
+        return self._owner == threading.get_ident()
+
+    def __enter__(self) -> bool:
+        return self.acquire()
+
+    def __exit__(self, *exc: Any) -> None:
+        self.release()
+
+    def __repr__(self) -> str:
+        return f"<FairRLock owner={self._owner} count={self._count} waiting={len(self._waiting)}>"
+
+
 class LRU:
-    """A small least-recently-used cache."""
+    """A small least-recently-used cache, safe to share between threads (round 45: a
+    document's caches are shared by the calls reading its committed version, which do not
+    hold its lock)."""
 
     def __init__(self, size: int) -> None:
         self.size = size
         self._items: OrderedDict[Hashable, Any] = OrderedDict()
+        self._lock = threading.Lock()
 
     def get(self, key: Hashable, default: Any = None) -> Any:
-        if key not in self._items:
-            return default
-        self._items.move_to_end(key)
-        return self._items[key]
+        with self._lock:
+            if key not in self._items:
+                return default
+            self._items.move_to_end(key)
+            return self._items[key]
 
     def put(self, key: Hashable, value: Any) -> None:
-        self._items[key] = value
-        self._items.move_to_end(key)
-        while len(self._items) > self.size:
-            self._items.popitem(last=False)
+        with self._lock:
+            self._items[key] = value
+            self._items.move_to_end(key)
+            while len(self._items) > self.size:
+                self._items.popitem(last=False)
 
     def __contains__(self, key: Hashable) -> bool:
-        return key in self._items
+        with self._lock:
+            return key in self._items
 
     def keys(self) -> list[Hashable]:
         """The keys, least recently used first."""
-        return list(self._items)
+        with self._lock:
+            return list(self._items)
 
     def __len__(self) -> int:
-        return len(self._items)
+        with self._lock:
+            return len(self._items)
 
     def clear(self) -> None:
-        self._items.clear()
+        with self._lock:
+            self._items.clear()
 
 
 @dataclass
@@ -440,7 +542,7 @@ class DocumentEntry:
     locale: Any = None
     baseline_problems: list[Any] = field(default_factory=list)
     tracking: dict[str, Any] | None = None
-    lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
+    lock: FairRLock = field(default_factory=FairRLock, repr=False)
     render_cache: LRU = field(default_factory=lambda: LRU(16), repr=False)
     check_cache: LRU = field(default_factory=lambda: LRU(16), repr=False)
     #: What each view was drawn as, by version: ``(version, view, options...)`` -> the
@@ -467,6 +569,11 @@ class DocumentEntry:
     _own_version: int = field(default=0, repr=False)
     #: ``(version, bytes)`` of the last :meth:`snapshot`.
     _snapshot: tuple[int, bytes] | None = field(default=None, repr=False)
+    #: Round 45: the last committed version, for reads (:meth:`commit`, :meth:`reader`).
+    committed: "Committed | None" = field(default=None, repr=False)
+    #: A reader's (:meth:`reader`): the version it is of, and the entry it reads for.
+    pinned: int | None = field(default=None, repr=False)
+    live: "DocumentEntry | None" = field(default=None, repr=False)
 
     @property
     def history(self) -> Any:
@@ -475,6 +582,8 @@ class DocumentEntry:
     @property
     def version(self) -> int:
         """The document's state number: its history's version (LE1), else a local count."""
+        if self.pinned is not None:
+            return self.pinned
         history = self.history
         if history is not None and hasattr(history, "version"):
             return history.version
@@ -482,8 +591,45 @@ class DocumentEntry:
 
     def bump(self) -> None:
         """Count a change in a document without a history (the dispatcher calls this)."""
+        if self.pinned is not None:
+            return
         if self.history is None or not hasattr(self.history, "version"):
             self._own_version += 1
+
+    # -- reads of the committed version (round 45) ------------------------------------------
+
+    def commit(self, fmt: "DocumentFormat | None") -> None:
+        """Keep this version as the committed one, for reads that do not wait for the edit
+        after it (:meth:`reader`): its bytes (:meth:`snapshot`), its refs and what the
+        format's copy needs (:attr:`DocumentFormat.read_copy`).  Under the document's lock,
+        at a version no edit is changing; once per version.  A format without
+        ``read_copy``, or one that cannot copy this document, keeps nothing."""
+        read_copy = getattr(fmt, "read_copy", None)
+        if read_copy is None or self.pinned is not None:
+            return
+        version = self.version
+        committed = self.committed
+        if committed is not None and committed.version == version:
+            return
+        try:
+            make = read_copy(self.document)
+            data = self.snapshot()
+        except Exception:  # noqa: BLE001 -- reads take the lock, as before
+            self.committed = None
+            return
+        self.committed = Committed(version, data, make, dict(self.refs),
+                                   dict(self.ref_states.get(version, self.refs)),
+                                   tracking=self.tracking, owners=dict(self.owners))
+
+    def reader(self) -> "DocumentEntry | None":
+        """The entry reads work on: a copy of the document at its committed version, when
+        that is the version now (:meth:`commit`) -- taken without the document's lock, so
+        a read never waits for an edit in flight, which changes the document, not the copy.
+        ``None``: no committed version is the one now (read under the lock)."""
+        committed = self.committed
+        if committed is None or self.pinned is not None or committed.version != self.version:
+            return None
+        return committed.entry(self)
 
     @contextmanager
     def batch(self, owner: StepOwner | None = None) -> Iterator[None]:
@@ -595,8 +741,9 @@ class DocumentEntry:
     def cached(self, cache: LRU, key: Hashable, compute: Callable[[], Any]) -> Any:
         """``compute()`` cached under ``(version, key)``: a later edit makes a new entry."""
         full = (self.version, key)
-        if full in cache:
-            return cache.get(full)
+        found = cache.get(full, _MISSING)
+        if found is not _MISSING:
+            return found
         value = compute()
         cache.put(full, value)
         return value
@@ -604,6 +751,54 @@ class DocumentEntry:
     def describe(self) -> dict[str, Any]:
         return {"doc": self.doc_id, "kind": self.kind, "name": self.name, "source": self.source,
                 "version": self.version}
+
+
+_MISSING = object()
+
+
+class Committed:
+    """A committed version of a document, for its reads (:meth:`DocumentEntry.commit`):
+    the version, its bytes, the format's ``make`` for a copy, the refs then; the reader
+    entry made from them once, when a read first asks (:meth:`entry`)."""
+
+    def __init__(self, version: int, data: bytes, make: Callable[[bytes], Any],
+                 refs: dict[str, str], ref_state: dict[str, str], *,
+                 tracking: dict[str, Any] | None = None,
+                 owners: dict[int, StepOwner] | None = None) -> None:
+        self.version = version
+        self.tracking = tracking
+        self.owners = owners or {}
+        self.data = data
+        self.make = make
+        self.refs = refs
+        self.ref_state = ref_state
+        self._entry: DocumentEntry | None = None
+        self._failed = False
+        self._lock = threading.Lock()
+
+    def entry(self, live: DocumentEntry) -> DocumentEntry | None:
+        """The reader entry: the copy, pinned to :attr:`version`, with a lock of its own,
+        sharing ``live``'s caches (keyed by version: equal versions are equal content) and
+        call log.  ``None`` when the copy cannot be made (reads take the lock)."""
+        with self._lock:
+            if self._entry is None and not self._failed:
+                try:
+                    document = self.make(self.data)
+                except Exception:  # noqa: BLE001 -- reads take the lock, as before
+                    self._failed = True
+                    return None
+                entry = DocumentEntry(
+                    doc_id=live.doc_id, kind=live.kind, name=live.name, source=live.source,
+                    document=document, size=live.size, font_dirs=live.font_dirs,
+                    locale=live.locale, baseline_problems=live.baseline_problems,
+                    tracking=self.tracking, render_cache=live.render_cache,
+                    check_cache=live.check_cache, render_keys=live.render_keys,
+                    font_keys=live.font_keys, log=live.log, refs=dict(self.refs),
+                    owners=dict(self.owners), pinned=self.version, live=live)
+                entry.ref_states[self.version] = dict(self.ref_state)
+                entry._snapshot = (self.version, self.data)
+                self._entry = entry
+            return self._entry
 
 
 _DOC_ID = re.compile(r"^d(\d+)$")
@@ -910,6 +1105,36 @@ class Session:
             for entry in entries:
                 stack.enter_context(entry.lock)
             yield entries
+
+    @contextmanager
+    def read_lock(self, doc_ids: Iterable[str]) -> Iterator[list[DocumentEntry]]:
+        """:meth:`lock` for a call that only reads (round 45): each document's committed
+        version (:meth:`DocumentEntry.reader`), its copy's lock held instead of the
+        document's -- so the read never waits for an edit in flight, nor an edit for it --
+        where its format copies documents (:attr:`DocumentFormat.read_copy`).  A document
+        with no committed version yet takes its lock as before, keeps the version now as
+        committed (:meth:`DocumentEntry.commit`) and lets the lock go for the copy.  Taken
+        in :func:`doc_order`, as :meth:`lock`'s; the entries are readers or documents."""
+        ordered = sorted(set(doc_ids), key=doc_order)
+        entries = [self.entry(doc_id) for doc_id in ordered]
+        with ExitStack() as stack:
+            taken: list[DocumentEntry] = []
+            for entry in entries:
+                fmt = self.formats.get(entry.kind)
+                copies = getattr(fmt, "read_copy", None) is not None
+                reader = entry.reader() if copies else None
+                if reader is None and copies:
+                    with entry.lock:
+                        entry.commit(fmt)
+                        reader = entry.reader()
+                if reader is None:
+                    # A format that does not copy, or could not copy it: under its lock.
+                    stack.enter_context(entry.lock)
+                    taken.append(entry)
+                    continue
+                stack.enter_context(reader.lock)
+                taken.append(reader)
+            yield taken
 
     def undo(self, doc_id: str, steps: int = 1, *, scope: str | None = None,
              caller: Mapping[str, Any] | None = None) -> int:

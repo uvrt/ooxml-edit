@@ -4,6 +4,28 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet. Each vers
 reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
 earlier ones were never tagged.
 
+## 0.96.0 -- unreleased
+- **Reads never wait for an edit in flight; an edit holds a document only while it changes
+  it** (production round 45, R64 stages 1 and 2; twelve agents on one document waited for
+  each other most of their run). A format may copy its documents
+  (`DocumentFormat.read_copy(document) -> make`, docx-agent's Word documents): a changing
+  call then keeps the version it leaves as committed before it lets the lock go
+  (`DocumentEntry.commit`: the version's bytes, refs, tracking and owners, and what the
+  format's copy needs), and a reading call -- a reading call of a tool of no role of its
+  own, or a `read_batch` -- works on a copy of the last committed version under the
+  copy's own lock (`Session.read_lock`, `DocumentEntry.reader`). It never waits for an edit
+  in flight, which changes the document, never the copy, and no edit waits for it; each
+  caller's own change is committed before its call returns, so its next read sees it. The
+  copy is made once per version, when a read first asks, and shares the document's caches
+  (keyed by version) and call log. A changing call's checks (`DocumentFormat.checks`) run
+  on the copy of the version it made once its locks are let go (`dispatch.After`), so the
+  next edit no longer waits for them; a result's `version` is taken under the lock. A
+  document's lock is now first come, first served (`session.FairRLock`): a short edit that
+  waited behind a long one is not passed by later ones. `LRU` is safe to share between
+  threads. Results, ids, versions and bytes are those of the same calls one after another
+  (tests/test_tools_committed_reads.py; docx-agent compares both ways). A format without
+  `read_copy` reads and checks under the lock, as before.
+
 ## 0.95.1 -- unreleased
 - **The cell writer on a sheet of many rows** (production round 44, xlsx-agent lane P: one
   write on a sheet of 50,000 rows took seconds, a thousand new strings half a minute). Each

@@ -45,7 +45,15 @@ place before the handler runs (``call.facts`` says what went where) and lists th
 result's ``data.facts``; a reference that names no single value refuses the call.
 
 **Checks.**  Handlers say what they touched (``call.touch(page)``); after a changing call
-the dispatcher asks the document's format for the facts (``DocumentFormat.checks``) once.
+the dispatcher asks the document's format for the facts (``DocumentFormat.checks``) once --
+where the format copies documents (``DocumentFormat.read_copy``, round 45), on the copy of
+the version the call made, once its locks are let go (:class:`After`).
+
+**Reads of the committed version** (round 45).  A call that only reads -- a reading call of
+a tool of no role of its own, or a ``read_batch`` -- works on each document's last
+committed version (:meth:`~.session.Session.read_lock`) where the format copies documents:
+it never waits for an edit in flight.  A changing call keeps the version it leaves as
+committed before it lets its locks go.
 
 **What changed.**  Every call watches its document (:meth:`DocumentEntry.watch`); the
 parts whose bytes changed, in the format's addresses (``DocumentFormat.touched``), are the
@@ -1387,13 +1395,33 @@ class Toolbox:
                     session, tool, clean,
                     hint=lambda value: self._source_hint(session, doc_ids, value))
             reading = [doc for doc in found if doc not in doc_ids]
-            with session.lock(doc_ids + reading) as locked:
+            # Round 45: a call that only reads works on each document's committed version
+            # and never waits for an edit in flight (Session.read_lock); one that changes a
+            # document keeps the version it leaves as committed, before it lets the lock go.
+            reads_only = self._reads_only(tool, clean)
+            locking = session.read_lock if reads_only else session.lock
+            # Round 45 (stage 2): a changing call's checks run on the version it made once
+            # its locks are let go (After), where its format copies documents.
+            after = None if reads_only else After()
+            with locking(doc_ids + reading) as locked:
                 if holding is not None:
                     holding.set()
                 entries = {entry.doc_id: entry for entry in locked}
                 primary = entries[doc_ids[0]] if doc_ids else None
-                result = self._run(session, tool, clean, entries, primary, reading,
-                                   roles=roles, caller=caller, turn=turn)
+                try:
+                    result = self._run(session, tool, clean, entries, primary, reading,
+                                       roles=roles, caller=caller, turn=turn, after=after)
+                    if primary is not None and result.version is None:
+                        # The version the call left, under its lock (round 45: its checks
+                        # run after the lock is let go, when another call may change it).
+                        result.version = primary.version
+                finally:
+                    if after is not None:
+                        for entry in locked:
+                            entry.commit(session.formats.get(entry.kind))
+                        after.committed(locked)
+            if after is not None:
+                after.run(result)
         except ToolError as error:
             result = Result.failure(error)
         except Exception as exc:  # noqa: BLE001 -- the model gets an error result
@@ -1466,6 +1494,16 @@ class Toolbox:
             event.wait()        # the earlier read holds its locks (or has ended)
         return self._dispatch(session, name, arguments, roles=roles, context=caller,
                               holding=holding, turn=turn)
+
+    @staticmethod
+    def _reads_only(tool: Tool, arguments: Mapping[str, Any]) -> bool:
+        """Whether a validated call only reads its documents, so it may work on their
+        committed versions (round 45, :meth:`Session.read_lock`): a ``read_batch``, or a
+        reading call of a tool of no role of its own (not a session tool: undo,
+        close_document, save_document, which act on the document itself)."""
+        if tool.composite:
+            return not tool.mutates
+        return tool.role is None and not tool.changes(arguments)
 
     def _side_by_side(self, name: str, arguments: Any) -> bool:
         """Whether a call of a turn only reads its documents, so it may run beside the
@@ -1563,7 +1601,8 @@ class Toolbox:
              reading: Sequence[str] = (), *, roles: Sequence[str] = ROLES,
              caller: Mapping[str, Any] = NO_CONTEXT, turn: "_Turn | None" = None,
              failed_refs: Mapping[str, int] | None = None,
-             holding: Mapping[str, DocumentEntry] | None = None) -> Result:
+             holding: Mapping[str, DocumentEntry] | None = None,
+             after: "After | None" = None) -> Result:
         """One call, its documents' locks held (``entries``; ``reading``: those it only
         takes rows from).  ``failed_refs``: for a batch's read after its last change, the
         refs its failed ops would have made (:meth:`CallContext.missing_ref`).
@@ -1582,7 +1621,7 @@ class Toolbox:
             edited = {doc: entry for doc, entry in entries.items() if doc not in reading}
             outcome = self._run_batch(session, arguments, edited, primary,
                                       {doc: entries[doc] for doc in reading},
-                                      roles=roles, caller=caller)
+                                      roles=roles, caller=caller, after=after)
             if turn is not None:
                 turn.made(entries, before)
             return outcome
@@ -1637,16 +1676,24 @@ class Toolbox:
             _report_facts(call, result)
             if call.version_used is not None:
                 result.version = call.version_used
+                # A reader's document is its live one's (round 45): moved on is the live's.
+                now = (primary.live or primary).version if primary is not None else 0
                 if (call.released and primary is not None
-                        and primary.version != call.version_used
+                        and now != call.version_used
                         and not (turn is not None and turn.explains(
-                            primary.doc_id, call.version_used, primary.version, since))):
-                    result.warnings.append(moved_on(primary.doc_id, call.version_used,
-                                                    primary.version))
+                            primary.doc_id, call.version_used, now, since))):
+                    result.warnings.append(moved_on(primary.doc_id, call.version_used, now))
             if changing and result.ok:
                 self._keep_refs(entries, context, [primary.doc_id] if primary else [])
                 if primary is not None:
-                    result.checks = {**self._checks(session, primary, context), **result.checks}
+                    own = result.checks
+
+                    def checked(entry: DocumentEntry, result: Result = result,
+                                own: dict = own, context: CallContext = context) -> None:
+                        result.checks = {**self._checks(session, entry, context), **own}
+
+                    if after is None or not after.defer(session, primary, checked):
+                        checked(primary)
             if result.ok:
                 self._keep_datasets(session, context, result)
             else:
@@ -1894,6 +1941,25 @@ class Toolbox:
             if doc in entries:
                 entries[doc].keep_refs(context.refs.get(doc, {}))
 
+    def _batch_checks(self, session: Session, entries: Mapping[str, DocumentEntry],
+                      context: CallContext, combined: Result, after: "After | None") -> None:
+        """A batch's checks, one per document it changed, into ``combined``: once its locks
+        are let go, on the versions it made (``after``, round 45), where every document's
+        format copies documents; else now."""
+        docs = sorted(entries, key=doc_order)
+        found: dict[str, dict[str, Any]] = {}
+        if after is None or not all(after.can_defer(session, entries[doc]) for doc in docs):
+            _set_checks(combined, {doc: self._checks(session, entries[doc], context)
+                                   for doc in docs})
+            return
+        for doc in docs:
+            def checked(entry: DocumentEntry, doc: str = doc) -> None:
+                found[doc] = self._checks(session, entry, context)
+
+            after.defer(session, entries[doc], checked)
+        after.then(lambda: _set_checks(combined, {doc: found[doc] for doc in docs
+                                                  if doc in found}))
+
     def _checks(self, session: Session, entry: DocumentEntry,
                 context: CallContext) -> dict[str, Any]:
         fmt = session.formats.get(entry.kind)
@@ -1975,9 +2041,11 @@ class Toolbox:
                    entries: dict[str, DocumentEntry], primary: DocumentEntry | None,
                    reading: Mapping[str, DocumentEntry] | None = None, *,
                    roles: Sequence[str] = ROLES,
-                   caller: Mapping[str, Any] = NO_CONTEXT) -> Result:
+                   caller: Mapping[str, Any] = NO_CONTEXT,
+                   after: "After | None" = None) -> Result:
         """``entries``: the documents the ops change (one undo step each); ``reading``:
-        the documents they only take rows from, locked but left alone."""
+        the documents they only take rows from, locked but left alone.  ``after``: where
+        the checks go to run once the locks are let go (round 45)."""
         ops = arguments.get("ops") or []
         limits = session.limits
         if len(ops) > limits.max_batch_ops:
@@ -1985,7 +2053,7 @@ class Toolbox:
                             field="ops")
         if not arguments.get("atomic"):
             return self._run_partial(session, ops, entries, reading or {}, primary,
-                                     roles=roles, caller=caller)
+                                     roles=roles, caller=caller, after=after)
         notes: list[str] = []
         prepared = self._ops(arguments, notes, roles)
         last = max((index for index, tool, clean in prepared if tool.changes(clean)),
@@ -2038,12 +2106,11 @@ class Toolbox:
                 entries[doc].bump()
             self._keep_refs(entries, context, list(entries))
             changing = any(tool.changes(clean) for _, tool, clean in prepared)
-            checks = {doc: self._checks(session, entries[doc], context)
-                      for doc in sorted(entries, key=doc_order)} if changing else {}
             self._keep_datasets(session, context, combined)
         combined.warnings[:0] = notes
         combined.warnings.extend(caught)
-        _set_checks(combined, checks)
+        if changing:
+            self._batch_checks(session, entries, context, combined, after)
         self._batch_touched(session, entries, changes, context, combined)
         if primary is not None:
             combined.version = primary.version
@@ -2145,7 +2212,8 @@ class Toolbox:
                      entries: dict[str, DocumentEntry],
                      reading: Mapping[str, DocumentEntry],
                      primary: DocumentEntry | None = None, *, roles: Sequence[str] = ROLES,
-                     caller: Mapping[str, Any] = NO_CONTEXT) -> Result:
+                     caller: Mapping[str, Any] = NO_CONTEXT,
+                     after: "After | None" = None) -> Result:
         """A batch whose ops apply one by one: a failing op is rolled back alone and
         reported, and the ops after it still run.  What applied is one undo step; the reads
         after the last change run after it (:meth:`_run_trailing`)."""
@@ -2201,8 +2269,8 @@ class Toolbox:
                 if doc in context.changed_at:
                     entries[doc].bump()
             self._keep_refs(entries, context, list(entries))
-            checks = {doc: self._checks(session, entries[doc], context)
-                      for doc in sorted(entries, key=doc_order)} if changing else {}
+            if changing:
+                self._batch_checks(session, entries, context, combined, after)
             self._keep_datasets(session, context, combined)
             if primary is not None:
                 combined.version = primary.version
@@ -2215,7 +2283,6 @@ class Toolbox:
             if errors and len(errors) == len(outcomes):
                 raise _none_applied(outcomes, errors, not_run)
         combined.warnings.extend(caught)
-        _set_checks(combined, checks)
         self._batch_touched(session, entries, changes, context, combined)
         done = [outcome for outcome in outcomes if "error" not in outcome]
         if errors:
@@ -2914,6 +2981,69 @@ def _not_run(timeout: float, first: int, total: int, elapsed: float
     else:
         text += "; resend them as smaller batches"
     return text, data
+
+
+class After:
+    """A changing call's work after its change -- its checks -- run once its locks are let
+    go (round 45, R64 stage 2): on the version it made, through that version's read copy
+    (:meth:`DocumentEntry.commit`, kept before the locks were let go), so the next edit of
+    the document does not wait for them.  The checks of a version are the same on its copy
+    as on the document (equal versions are equal content).  Where the format does not copy
+    documents (:attr:`~.session.DocumentFormat.read_copy`), the work is done under the
+    locks, as before (:meth:`defer` says no)."""
+
+    def __init__(self) -> None:
+        self._work: list[tuple[DocumentEntry, Callable[[DocumentEntry], None]]] = []
+        self._then: list[Callable[[], None]] = []
+        self._kept: dict[str, tuple[Any, int]] = {}
+
+    @staticmethod
+    def can_defer(session: Session, entry: DocumentEntry) -> bool:
+        fmt = session.formats.get(entry.kind)
+        return (entry.pinned is None and fmt is not None and fmt.checks is not None
+                and getattr(fmt, "read_copy", None) is not None)
+
+    def defer(self, session: Session, entry: DocumentEntry,
+              work: Callable[[DocumentEntry], None]) -> bool:
+        """``work(entry)`` after the locks are let go, on the version's copy; ``False``
+        (nothing deferred: do it now) where it cannot be."""
+        if not self.can_defer(session, entry):
+            return False
+        self._work.append((entry, work))
+        return True
+
+    def then(self, work: Callable[[], None]) -> None:
+        """``work()`` after every deferred piece."""
+        self._then.append(work)
+
+    def committed(self, entries: Iterable[DocumentEntry]) -> None:
+        """The versions the call leaves, as committed (under the locks, last)."""
+        for entry in entries:
+            self._kept[entry.doc_id] = (entry.committed, entry.version)
+
+    def run(self, result: Result) -> None:
+        """The deferred work, each piece under its copy's lock; the warnings it raises go to
+        ``result``.  A copy that cannot be made: the document's lock, while the document is
+        still at the version (else the checks are said not to have run)."""
+        for entry, work in self._work:
+            committed, version = self._kept.get(entry.doc_id, (None, None))
+            reader = (committed.entry(entry) if committed is not None
+                      and committed.version == version else None)
+            with collect_warnings() as caught:
+                if reader is not None:
+                    with reader.lock:
+                        work(reader)
+                else:
+                    with entry.lock:
+                        if entry.version == version:
+                            work(entry)
+                        else:
+                            result.warnings.append(
+                                f"{entry.doc_id}: the checks after this change did not run: "
+                                "the document changed first; call check")
+            result.warnings.extend(caught)
+        for then in self._then:
+            then()
 
 
 class _Turn:
