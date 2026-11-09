@@ -158,6 +158,10 @@ class CallContext:
         self.op = 0
         #: ``ref name -> the op that would have made it``: the refs of a batch's failed ops.
         self.failed_refs: dict[str, int] = {}
+        #: Round 47: whether a call checked a ref name against the document's refs (whose
+        #: it is, :meth:`Call._own_ref`) -- what a call on a draft checks again when its
+        #: change is applied, as it does refs it used or made.
+        self.refs_read = False
         #: The roles the calls run with: the session's, a view's, or the dispatch's own.
         self.roles: tuple[str, ...] = ROLES
         #: The application's context of the calls (:attr:`Call.caller`); none by default.
@@ -349,6 +353,7 @@ class Call:
         caller = self.context.caller
         if not caller or name in self.context.refs.get(doc, {}):
             return
+        self.context.refs_read = True
         entry = self.entries.get(doc)
         if entry is None or entry.refs.get(name, address) == address:
             return
@@ -1854,7 +1859,7 @@ class Toolbox:
         document's lock (:meth:`_run_block`); ``None``: nothing.  The refs, when it used or
         made one; its retry keys; the datasets it named (the same, and as stale); whether
         the document is tracked."""
-        if (context.refs or _uses_refs(clean)) and entry.refs != committed.refs:
+        if (context.refs or context.refs_read or _uses_refs(clean)) and entry.refs != committed.refs:
             return "the document's refs changed"
         for key in made_keys:
             if key in entry.keys:

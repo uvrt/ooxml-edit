@@ -298,3 +298,20 @@ def test_a_ref_another_caller_took_before_a_drafts_change_is_applied_is_refused(
         result = slow["result"]
         assert not result.ok and result.error.field == "ref" and "agent=one" in result.error.message
         assert session.entry(doc).version == version and session.refs(doc) == {"spot": "item:9"}
+
+
+def test_a_refusal_for_another_callers_ref_is_said_of_the_refs_the_change_is_applied_to():
+    with _box(blocks="always") as box:
+        session, doc = _open(box)
+        one, two = session.view(context={"agent": "one"}), session.view(context={"agent": "two"})
+        _ok(box.dispatch(one, "toy_ref_name", {"doc": doc, "name": "spot", "address": "item:5"}))
+        thread, slow = _thread(lambda: box.dispatch(two, "batch", {"ops": [
+            {"tool": "toy_ref_after", "arguments": {"doc": doc, "target": "item:0", "ref": "spot"}},
+            {"tool": "toy_ref_after", "arguments": {"doc": doc, "target": "item:0", "stall": STALL}}]}))
+        time.sleep(0.3)                          # its draft: op 0 refused, spot naming item:5
+        _ok(box.dispatch(one, "toy_ref_name", {"doc": doc, "name": "spot", "address": "item:9"}))
+        thread.join()
+        result = _ok(slow["result"])
+        assert result.block["conflicts"] == ["the document's refs changed"]
+        assert result.data["failed"] == [0]
+        assert result.data["ops"][0]["error"]["details"]["address"] == "item:9"
