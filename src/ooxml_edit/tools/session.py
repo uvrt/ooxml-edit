@@ -641,7 +641,8 @@ class DocumentEntry:
         one begun or turned long meanwhile, so the wait is bounded by those drafts alone.
         Not when this thread holds the lock already (their changes wait for it).  The
         seconds waited."""
-        if self.lock._is_owned():
+        owned = getattr(self.lock, "_is_owned", None)     # threading.RLock's own test
+        if owned is not None and owned():
             return 0.0
         with self._drafts_ended:
             now = time.monotonic()
