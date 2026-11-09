@@ -32,7 +32,7 @@ classifiers = [
 # every library shares (number format codes, the measured date names, the locale), standard
 # library only and never importing this package.  Neither is on PyPI: install ooxml-common
 # from its repository first (README, "Install").
-dependencies = ["lxml>=4.9", "ooxml-common>=0.29.0"]
+dependencies = ["lxml>=4.9", "ooxml-common>=0.44.0"]
 
 [project.optional-dependencies]
 # markdown-it-py: tests only, to check ooxml_edit.markdown against the parser the format
