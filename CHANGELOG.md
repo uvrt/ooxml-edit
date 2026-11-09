@@ -18,7 +18,7 @@ earlier ones were never tagged.
   untouched part over 1 MB (`opc.SAVE_STREAMED`) through 64 KB at a time -- the size set
   first, as `writestr` sets it -- where this Python's deflate writes the same bytes for
   pieces as for the whole (zlib; `opc.pieces_compress_alike`, tried once); with zlib-ng
-  (CPython's on Windows from 3.14), which does not, and for smaller parts, the part is
+  (CPython's on Windows from 3.14, known by its version strings), which does not, and for smaller parts, the part is
   inflated whole and written as before. The bytes saved are those of before either way
   (checked against every part held inflated, `tests/test_opc_compressed.py`). Undo, redo, `opened`
   and the scoped snapshots keep the entries (`PackageSnapshot.raw` may hold a `ZipPart`;

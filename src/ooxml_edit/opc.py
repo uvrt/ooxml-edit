@@ -63,11 +63,20 @@ def pieces_compress_alike() -> bool:
     given at once, as zlib does (its output does not depend on how its input is split
     without a flush).  zlib-ng -- CPython's own on Windows from 3.14, and some systems'
     zlib -- does not: there a part is compressed whole, so the bytes saved are always
-    those of before.  Tried once, on made-up XML."""
+    those of before.  zlib-ng is known by its version strings; any other deflate is also
+    tried once, on made-up XML."""
     global _ALIKE
     if _ALIKE is None:
         import random
         import zlib
+
+        names = " ".join(str(getattr(zlib, name, "")) for name in
+                         ("ZLIB_VERSION", "ZLIB_RUNTIME_VERSION", "ZLIBNG_VERSION"))
+        if hasattr(zlib, "ZLIBNG_VERSION") or "ng" in names.lower():
+            # zlib-ng (or zlib-ng's zlib-compatible build): a sample may compress alike
+            # while a part does not, as CI's Windows legs showed.
+            _ALIKE = False
+            return _ALIKE
 
         rng = random.Random(46)
         sample = b"".join(b'<row r="%d"><c r="A%d" s="%d"><v>%d</v></c></row>'
