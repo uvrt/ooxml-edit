@@ -31,6 +31,7 @@ Each line is a module, then which siblings import what from it.
 - `ooxml_edit.history` -- docx-agent, pptx-agent, xlsx-agent: `History`; docx-agent, pptx-agent: `Snapshottable`
 - `ooxml_edit.markdown` -- xlsx-agent: `Line`, `Run`, `merge`, `parse`, `plain`, `to_markdown`
 - `ooxml_edit.opc` -- docx-agent, pptx-agent, xlsx-agent: `OpcPackage`, `REL_OFFICE_DOCUMENT`, `rels_path_for`; docx-agent, pptx-agent: `CONTENT_TYPES_PART`, `Relationship`, `normalize_part_path`; pptx-agent: `RELS_NS`, `REL_IMAGE`, `numbered_template`, `part_for_rels`, `resolve_target`
+- `ooxml_edit.properties` -- xlsx-agent: `CustomProperty`, `PropertyError`, `check_core`, `check_custom`, `core_changes`, `custom_changes`, `read_core`, `read_custom`, `w3cdtf`, `write_core`, `write_custom`
 - `ooxml_edit.pictures` -- docx-agent: `SVG_CONTENT_TYPE`, `attach`, `looks_like_svg`, `native_size`, `parse`, `recolor`, `theme_class`
 - `ooxml_edit.pictures.svg` -- pptx-agent: `ASVG_NS`, `SVG_BLIP_EXT_URI`, `SVG_CONTENT_TYPE`, `SVG_LIMIT`, `SVG_NS`, `THEME_SLOTS`, `attach`, `drop`, `looks_like_svg`, `native_size`, `recolor`, `stroke_units`, `svg_blip`, `theme_class`
 - `ooxml_edit.provenance` -- docx-agent, pptx-agent: `RecordError`, `dumps`, `labels_after_edit`, `labels_found`, `loads`; pptx-agent: `VERSION`, `facts_after_edit`, `facts_found`, `offset`, `place`, `record`

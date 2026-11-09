@@ -4,6 +4,27 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet. Each vers
 reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
 earlier ones were never tagged.
 
+## 0.96.0 -- unreleased
+- **Document properties, one implementation for every library** (production round 44, R62;
+  `ooxml_edit.properties`): `read_core`/`write_core` and `read_custom`/`write_custom` on any
+  `OpcPackage`. Core properties (ECMA-376 Part 2, §11) by name -- title, subject, creator,
+  keywords, description, last_modified_by, revision, created, modified, category,
+  content_status, language, identifier, version, last_printed; the element's own name and
+  `author`, `status`, `comments` taken too -- written in the order the applications write
+  them (measured from Excel for Mac 16.106: title, subject, creator, keywords, description,
+  lastModifiedBy, created, modified, category), dates in UTC, whole seconds; `None` removes
+  one. Custom properties (Part 1, §22.3) as name -> `CustomProperty(value, type, linked)`,
+  read from every value type (text, integers, numbers, bool, dates; others kept with their
+  type's name), written as `vt:lpwstr`, `vt:i4` (a whole number within 32 bits), `vt:r8`
+  (others; a whole one without ".0", as Excel wrote 2**40 back), `vt:bool` or
+  `vt:filetime`, each with the user-defined format id and the next `pid`; a name differing
+  only in case is the same property; a linked property is not given a value. A package
+  without either part gets it, related from the root; the custom part goes with its last
+  property. `check_core`/`check_custom` list every problem first (`PropertyError`), and
+  nothing changes the modified date unless asked. docx-agent and pptx-agent each have
+  their own today (`edit/properties.py`); they can move onto this one
+  (`tests/test_properties.py`).
+
 ## 0.95.1 -- unreleased
 - **The cell writer on a sheet of many rows** (production round 44, xlsx-agent lane P: one
   write on a sheet of 50,000 rows took seconds, a thousand new strings half a minute). Each
