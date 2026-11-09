@@ -68,7 +68,20 @@ alone, as before.
 
 Calls on one document run one at a time in the order the model emitted them; calls on
 different documents run concurrently. A mutating call is one undo step, and a failed one
-changes nothing. Saving refuses new validation problems unless the application (never the
+changes nothing.
+
+**Reads of the committed version (round 45, R64, 0.97.0).** Where a format copies its
+documents (`DocumentFormat.read_copy`; docx-agent's Word documents), a changing call keeps
+the version it leaves as committed before it lets the document's lock go
+(`DocumentEntry.commit`), and a reading call -- `check`, `render`, a read tool, a
+`read_batch` -- works on a copy of the last committed version under the copy's own lock
+(`Session.read_lock`): it never waits for an edit in flight, and an edit never waits for
+it. Several agents on one document each see their own changes (committed before their call
+returns) and the others' committed ones. A changing call's checks run on the copy of the
+version it made once its lock is let go (`dispatch.After`), so the next edit does not wait
+for them. Results, ids, versions and cache keys are those the same calls give one after
+another; edits of one document still run one at a time. A format without `read_copy` reads
+under the lock, as before. Saving refuses new validation problems unless the application (never the
 model) passes `allow_new_problems=True`.
 
 **What a call changed (round 13, R2, 0.57.0).** Every result carries `result.touched`, for
