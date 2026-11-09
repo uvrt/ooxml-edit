@@ -85,7 +85,7 @@ import itertools
 import re
 import threading
 import uuid
-from collections import OrderedDict, deque
+from collections import OrderedDict
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
 from os import PathLike, fspath
@@ -328,76 +328,6 @@ RENDER_KEYS = 4096
 FONT_KEYS = 256
 
 
-class FairRLock:
-    """A re-entrant lock that serves its waiters in the order they asked (round 45, R64):
-    a document's lock.  ``threading.RLock`` lets whichever waiter the scheduler wakes take
-    it, so a call that has waited behind a long edit can be passed by one that came later,
-    again and again; here, when the holder lets go, the longest waiting caller has it next
-    -- a short edit waits at most for the calls that asked before it.  ``acquire``,
-    ``release``, ``with`` and ``_is_owned`` as ``threading.RLock``'s (``timeout`` in
-    seconds, ``-1`` none; a waiter whose timeout passes leaves the queue)."""
-
-    __slots__ = ("_mutex", "_owner", "_count", "_waiting")
-
-    def __init__(self) -> None:
-        self._mutex = threading.Lock()
-        self._owner: int | None = None
-        self._count = 0
-        #: ``(gate, thread)``: each waiter blocks on its own gate, released when it is handed
-        #: the lock.
-        self._waiting: "deque[tuple[Any, int]]" = deque()
-
-    def acquire(self, blocking: bool = True, timeout: float = -1) -> bool:
-        me = threading.get_ident()
-        with self._mutex:
-            if self._owner == me:
-                self._count += 1
-                return True
-            if self._owner is None and not self._waiting:
-                self._owner, self._count = me, 1
-                return True
-            if not blocking:
-                return False
-            gate = threading.Lock()
-            gate.acquire()
-            waiter = (gate, me)
-            self._waiting.append(waiter)
-        got = gate.acquire(timeout=timeout) if timeout is not None and timeout >= 0 else gate.acquire()
-        if got:
-            return True                         # handed over: owner and count set already
-        with self._mutex:
-            if self._owner == me:               # handed over as the wait ran out
-                return True
-            self._waiting.remove(waiter)
-            return False
-
-    def release(self) -> None:
-        with self._mutex:
-            if self._owner != threading.get_ident():
-                raise RuntimeError("cannot release un-acquired lock")
-            self._count -= 1
-            if self._count:
-                return
-            if self._waiting:
-                gate, thread = self._waiting.popleft()
-                self._owner, self._count = thread, 1
-                gate.release()
-            else:
-                self._owner = None
-
-    def _is_owned(self) -> bool:
-        return self._owner == threading.get_ident()
-
-    def __enter__(self) -> bool:
-        return self.acquire()
-
-    def __exit__(self, *exc: Any) -> None:
-        self.release()
-
-    def __repr__(self) -> str:
-        return f"<FairRLock owner={self._owner} count={self._count} waiting={len(self._waiting)}>"
-
-
 class LRU:
     """A small least-recently-used cache, safe to share between threads (round 45: a
     document's caches are shared by the calls reading its committed version, which do not
@@ -542,7 +472,7 @@ class DocumentEntry:
     locale: Any = None
     baseline_problems: list[Any] = field(default_factory=list)
     tracking: dict[str, Any] | None = None
-    lock: FairRLock = field(default_factory=FairRLock, repr=False)
+    lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
     render_cache: LRU = field(default_factory=lambda: LRU(16), repr=False)
     check_cache: LRU = field(default_factory=lambda: LRU(16), repr=False)
     #: What each view was drawn as, by version: ``(version, view, options...)`` -> the

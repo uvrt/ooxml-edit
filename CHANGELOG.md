@@ -19,10 +19,8 @@ earlier ones were never tagged.
   copy is made once per version, when a read first asks, and shares the document's caches
   (keyed by version) and call log. A changing call's checks (`DocumentFormat.checks`) run
   on the copy of the version it made once its locks are let go (`dispatch.After`), so the
-  next edit no longer waits for them; a result's `version` is taken under the lock. A
-  document's lock is now first come, first served (`session.FairRLock`): a short edit that
-  waited behind a long one is not passed by later ones. `LRU` is safe to share between
-  threads. Results, ids, versions and bytes are those of the same calls one after another
+  next edit no longer waits for them; a result's `version` is taken under the lock. `LRU`
+  is safe to share between threads. Results, ids, versions and bytes are those of the same calls one after another
   (tests/test_tools_committed_reads.py; docx-agent compares both ways). A format without
   `read_copy` reads and checks under the lock, as before.
 
