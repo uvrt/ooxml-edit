@@ -4,9 +4,9 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet. Each vers
 reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
 earlier ones were never tagged.
 
-## 0.99.0 -- unreleased
+## 0.100.0 -- unreleased
 - **Parts stay compressed until they are edited** (production round 46: a workbook with a
-  534 MB sheet in a 70 MB file took 1.25 GB open; 0.98.0 is round 45's, lane B). An
+  534 MB sheet in a 70 MB file took 1.25 GB open; 0.99.0 is round 45's, lane B). An
   `OpcPackage` keeps every part it read as its compressed ZIP entry (ooxml-common 0.44.0's
   `zipparts.PartStore` and `ZipPart`) until the part is replaced or its tree edited: `read`
   inflates it at each call (the same bytes as before), `open_part(path)` gives a binary
@@ -25,6 +25,15 @@ earlier ones were never tagged.
   its declared size or to another CRC-32), so a damaged part is refused when it is read,
   not at open; the package's limits are checked against the declared sizes before open, as
   before. Requires ooxml-common 0.44.0.
+## 0.98.0 -- unreleased
+- **`column_index` takes only a column's letters** (production round 46, R77): one to three
+  of `A` to `Z` (case aside) on the sheet's grid, `A` to `XFD`. Anything else -- `""`, a
+  cell (`"A1"`, which gave 11), a `$`, spaces, other letters, a column past `XFD` (which
+  gave numbers past `MAX_COLUMN`) -- is `ArgumentError` (a `ValueError`) quoting the text;
+  not text, `ArgumentTypeError`. `Cell.parse` (and so `Area.parse`) refuses a cell past
+  `XFD` the same way, quoting the cell, where it made a `Cell` off the grid. Every caller in
+  ooxml-edit, xlsx-agent, docx-agent and pptx-agent passes only letters it matched
+  (xlsx-agent counts a column past the grid itself to say why it refuses it).
 
 ## 0.97.0 -- unreleased
 - **Reads never wait for an edit in flight; an edit holds a document only while it changes

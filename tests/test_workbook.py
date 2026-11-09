@@ -114,3 +114,23 @@ def test_a_table_moves_and_renames_with_its_cells():
     X = "{%s}" % cs.X
     names = [c.get("name") for c in reread.tables[0].iter(X + "tableColumn")]
     assert names[1:] == ["One", "Renamed", "Three"]
+
+
+@pytest.mark.parametrize("text", ["", "A1", "1", "$A", " A", "A ", "AAAA", "XFE", "ZZZ", "Ä",
+                                  "A-B", "ß"])
+def test_column_index_refuses_what_is_no_column(text):
+    with pytest.raises(ValueError) as refused:
+        column_index(text)
+    assert repr(text) in str(refused.value)
+
+
+def test_column_index_takes_every_column_case_aside():
+    assert [column_index(t) for t in ("a", "Z", "aa", "xfd", "XFD")] == [1, 26, 27, 16384, 16384]
+    with pytest.raises(TypeError):
+        column_index(3)   # type: ignore[arg-type]
+
+
+def test_a_cell_past_the_last_column_is_refused_with_its_text():
+    with pytest.raises(ValueError, match="'XFE1' is past"):
+        Cell.parse("XFE1")
+    assert Cell.parse("XFD1048576") == Cell(1048576, 16384)
