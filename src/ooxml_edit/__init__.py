@@ -7,6 +7,7 @@ What every Office Open XML editor needs, whatever the document inside the packag
 * :mod:`.xml` -- lxml helpers, a namespace registry and schema-ordered insertion.
 * :mod:`.history` -- undo/redo/batch over package snapshots.
 * :mod:`.stamp` -- durable ids written into an ``extLst`` extension.
+* :mod:`.properties` -- a package's core and custom document properties, read and set.
 * :mod:`.markdown` -- a small Markdown subset (emphasis, strikethrough, code spans,
   escapes, lines and lists) read into runs with their marks and written back.
 
@@ -30,4 +31,4 @@ format codes, the measured date names, the locale).  ooxml-common never imports 
 package; this package may import it.
 """
 
-__version__ = "0.95.1"
+__version__ = "0.96.0"
