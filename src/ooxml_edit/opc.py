@@ -5,8 +5,9 @@ the document inside it means.  Format layers subclass :class:`OpcPackage` to add
 points.
 
 An OOXML file is a ZIP of XML "parts" wired together by relationship files.  This module owns
-the container: it keeps every part's original bytes, hands out lazily-parsed lxml trees for the
-parts a caller wants to change, and writes the archive back.
+the container: it keeps every part's original bytes (as the compressed ZIP entry they were read
+from, inflated when they are read), hands out lazily-parsed lxml trees for the parts a caller
+wants to change, and writes the archive back.
 
 The losslessness rule lives here and is worth stating plainly:
 
