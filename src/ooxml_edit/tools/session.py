@@ -656,19 +656,24 @@ class DocumentEntry:
                 self._drafts_ended.wait()
             return time.monotonic() - now
 
-    def note_change(self, parts: Iterable[str] | None, before: int | None, change: Any = None) -> None:
-        """Count a change the dispatcher made, under the document's lock: ``parts`` the
-        parts whose bytes it changed (``None``: not known -- every part), ``before`` the
-        version the document had when the call began, ``change`` the
-        :class:`~ooxml_edit.history.Change` (kept, :meth:`changes_between`).  A version then
-        that is not the one the last counted change left means a change the dispatcher did
-        not make came between (the application's, through the library): every part may
-        have changed."""
-        self.change_seq += 1
+    def keep_change(self, before: int | None, change: Any) -> None:
+        """Round 47: keep a change the dispatcher made (a :class:`~ooxml_edit.history.Change`,
+        ``None`` when not known), just before :meth:`note_change` counts it -- for what a read
+        learns changed since its version (:meth:`changes_between`).  A version when the call
+        began that is not the one the last counted change left: a change not known came
+        between."""
         with self._flight_lock:
             if before is not None and self.change_version is not None and before != self.change_version:
                 self.changes_kept.append((self.change_version, before, None))
-            self.changes_kept.append((before, self.version, change if parts is not None else None))
+            self.changes_kept.append((before, self.version, change))
+
+    def note_change(self, parts: Iterable[str] | None, before: int | None) -> None:
+        """Count a change the dispatcher made, under the document's lock: ``parts`` the
+        parts whose bytes it changed (``None``: not known -- every part), ``before`` the
+        version the document had when the call began.  A version then that is not the one
+        the last counted change left means a change the dispatcher did not make came
+        between (the application's, through the library): every part may have changed."""
+        self.change_seq += 1
         if parts is None or before != self.change_version:
             self._all_changed = self.change_seq
         for part in parts or ():

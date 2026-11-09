@@ -1786,7 +1786,8 @@ class Toolbox:
                         logger.exception("applying a draft's patch to %s failed", doc)
                         stats["lock"] = "the patch did not apply"
                         return None
-                    entry.note_change(change.parts if change is not None else None, version, change)
+                    entry.keep_change(version, change)
+                    entry.note_change(change.parts if change is not None else None, version)
                     try:
                         hook.settle(entry.document, plan, touched=context.touched.setdefault(doc, []),
                                     before=before)
@@ -2069,9 +2070,11 @@ class Toolbox:
                 # Round 45 (lane B): every change counted, by its parts, for the patches
                 # prepared on an earlier version (DocumentEntry.parts_changed_since).
                 if change is None and changing:
+                    primary.keep_change(before.get(primary.doc_id), None)
                     primary.note_change(None, before.get(primary.doc_id))
                 elif change is not None and change.changed:
-                    primary.note_change(change.parts, before.get(primary.doc_id), change)
+                    primary.keep_change(before.get(primary.doc_id), change)
+                    primary.note_change(change.parts, before.get(primary.doc_id))
             result = _as_result(returned, call.result)
             if drafting is not None and (call.deferred or context.datasets):
                 # Work on the whole document as the call left it, or datasets for the
@@ -2359,9 +2362,11 @@ class Toolbox:
         for doc in sorted(entries, key=doc_order):
             change = changes.get(doc)
             if change is None and doc in context.changed_at:
+                entries[doc].keep_change(before.get(doc), None)
                 entries[doc].note_change(None, before.get(doc))
             elif change is not None and change.changed:
-                entries[doc].note_change(change.parts, before.get(doc), change)
+                entries[doc].keep_change(before.get(doc), change)
+                entries[doc].note_change(change.parts, before.get(doc))
 
     @staticmethod
     def _keep_refs(entries: dict[str, DocumentEntry], context: CallContext,

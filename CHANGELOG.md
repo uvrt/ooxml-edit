@@ -11,9 +11,9 @@ earlier ones were never tagged.
   check's blocks); the warning then comes only when a change made meanwhile touched it, as
   the format's optional `BlockEdits.touches(change, scope)` tells. A read of the whole
   document (no scope), a format that cannot tell, and changes no longer kept still warn on
-  any change. Each document keeps its latest changes (`DocumentEntry.changes_kept`, 32;
-  `note_change` takes the `Change`; `changes_between(used, now)`, the way from one version
-  to the other). tests/test_tools_read_scope.py.
+  any change. Each document keeps its latest changes (`DocumentEntry.changes_kept`, 32,
+  `keep_change` just before `note_change`; `changes_between(used, now)`, the way from one
+  version to the other). tests/test_tools_read_scope.py.
 
 ## 0.101.0 -- unreleased
 - **A save copies untouched parts as their compressed entries** (round 46; the user's
