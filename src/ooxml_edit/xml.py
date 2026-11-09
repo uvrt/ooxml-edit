@@ -21,7 +21,8 @@ a format layer adds its own vocabulary with :func:`register_namespaces` and
 
 from __future__ import annotations
 
-from typing import Iterable, Iterator, Mapping, Sequence, TypeAlias, Union
+import io
+from typing import BinaryIO, Iterable, Iterator, Mapping, Sequence, TypeAlias, Union
 
 from lxml import etree
 from .errors import ArgumentError
@@ -89,11 +90,16 @@ def local_name(element: Element) -> str:
     return tag.rpartition("}")[2]
 
 
-def parse_xml(data: bytes) -> Element:
-    """Parse a part.  Whitespace is kept, because it is part of the bytes we must reproduce."""
+def parse_xml(data: "bytes | BinaryIO | io.RawIOBase") -> Element:
+    """Parse a part.  Whitespace is kept, because it is part of the bytes we must reproduce.
+
+    ``data`` may be a binary file of the part's bytes, read as the parser goes (the same
+    tree, without the part's bytes held whole beside it)."""
     # resolve_entities=False: parts are attacker-controlled, and entity expansion is a
     # denial-of-service vector.  huge_tree stays off for the same reason.
     parser = etree.XMLParser(remove_blank_text=False, resolve_entities=False)
+    if hasattr(data, "read"):
+        return etree.parse(data, parser).getroot()
     return etree.fromstring(data, parser)
 
 

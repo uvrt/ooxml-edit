@@ -4,6 +4,28 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet. Each vers
 reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
 earlier ones were never tagged.
 
+## 0.99.0 -- unreleased
+- **Parts stay compressed until they are edited** (production round 46: a workbook with a
+  534 MB sheet in a 70 MB file took 1.25 GB open; 0.98.0 is round 45's, lane B). An
+  `OpcPackage` keeps every part it read as its compressed ZIP entry (ooxml-common 0.44.0's
+  `zipparts.PartStore` and `ZipPart`) until the part is replaced or its tree edited: `read`
+  inflates it at each call (the same bytes as before), `open_part(path)` gives a binary
+  file over a part's current bytes inflated a piece at a time, `part_size(path)` its size
+  without inflating, and `part_entry(path)` its `ZipPart` while it is untouched (to read
+  more than once, or from an offset). `tree` parses a part over 1 MB
+  (`opc.PARSE_STREAMED`) as it is inflated -- the same tree, never the part's bytes held
+  whole beside it -- and `xml.parse_xml` takes a binary file for that. `write` copies an
+  untouched part through 64 KB at a time (the bytes written are those of before: the size
+  set first, as `writestr` sets it, and the compressor fed the same bytes in pieces; checked
+  against every part held inflated, `tests/test_opc_compressed.py`). Undo, redo, `opened`
+  and the scoped snapshots keep the entries (`PackageSnapshot.raw` may hold a `ZipPart`;
+  `changed_between` compares two of the same entry without inflating it); duplicates and
+  orphans are sized without inflating. A part's data is checked as it is inflated
+  (`zipparts.PartError`, a `zipfile.BadZipFile`, for a part that inflates past or short of
+  its declared size or to another CRC-32), so a damaged part is refused when it is read,
+  not at open; the package's limits are checked against the declared sizes before open, as
+  before. Requires ooxml-common 0.44.0.
+
 ## 0.97.0 -- unreleased
 - **Reads never wait for an edit in flight; an edit holds a document only while it changes
   it** (production round 45, R64 stages 1 and 2; twelve agents on one document waited for

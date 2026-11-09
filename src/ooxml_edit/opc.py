@@ -35,6 +35,7 @@ from lxml import etree
 # REL_IMAGE is re-exported: ooxml_edit.opc.REL_IMAGE is public (tests/test_public_api.py).
 from ooxml_common.opc import (CONTENT_TYPES_PART, REL_IMAGE as REL_IMAGE, REL_OFFICE_DOCUMENT,
                               normalize_part_path)
+from ooxml_common.zipparts import PartStore, ZipPart, read_parts
 
 from .xml import Element, parse_xml, serialize
 
@@ -43,6 +44,10 @@ CONTENT_TYPES_NS = "http://schemas.openxmlformats.org/package/2006/content-types
 CONTENT_TYPES_DECLARATION = b'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n'
 
 RELS_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
+
+#: A part kept compressed that is larger than this is parsed from its stream (the same
+#: tree), never inflated whole first.
+PARSE_STREAMED = 1 << 20
 
 
 @dataclass(frozen=True)
@@ -56,19 +61,26 @@ class Relationship:
 
 
 class OpcPackage:
-    """An open OOXML package: original bytes per part, plus lxml trees for the parts being edited."""
+    """An open OOXML package: original bytes per part, plus lxml trees for the parts being edited.
 
-    def __init__(self, entries: list[zipfile.ZipInfo], parts: dict[str, bytes]) -> None:
+    A part read from the ZIP stays its compressed entry until it is replaced
+    (:class:`~ooxml_common.zipparts.PartStore`): :meth:`read` inflates it at each call,
+    :meth:`open_part` a piece at a time, :meth:`tree` once to parse it, and :meth:`write`
+    copies it through a piece at a time -- the package never holds an untouched part
+    inflated."""
+
+    def __init__(self, entries: list[zipfile.ZipInfo],
+                 parts: "PartStore | dict[str, bytes]") -> None:
         #: Preserved so ``save`` reproduces the original entry order and compression.  Writing
         #: parts in a different order is legal but makes every diff of a saved file useless.
         self._entries = entries
-        self._parts = parts
+        self._parts = parts if isinstance(parts, PartStore) else PartStore(parts)
         self._trees: dict[str, Element] = {}
         self._dirty: set[str] = set()
         self._rels_cache: dict[str, dict[str, Relationship]] = {}
         #: What was read, so undo can put back a part that was replaced or remove one that was
-        #: added.  Shares the bytes objects with ``_parts``; nothing is copied.
-        self._original: dict[str, bytes] = dict(parts)
+        #: added.  Shares the parts (compressed or not) with ``_parts``; nothing is copied.
+        self._original = self._parts.copy()
         #: Parts written as raw bytes since opening (added, replaced or removed), not as
         #: trees -- in the order they were first changed, which is the order new zip entries
         #: were appended in, so redo can append them in that order again.
@@ -78,13 +90,7 @@ class OpcPackage:
 
     @classmethod
     def open(cls, source: str | os.PathLike[str] | bytes | BinaryIO):
-        if isinstance(source, bytes):
-            source = io.BytesIO(source)
-        elif isinstance(source, os.PathLike):
-            source = os.fspath(source)
-        with zipfile.ZipFile(source) as archive:
-            entries = [info for info in archive.infolist() if not info.is_dir()]
-            parts = {normalize_part_path(info.filename): archive.read(info) for info in entries}
+        entries, parts = read_parts(source, normalize_part_path)
         return cls(entries, parts)
 
     # -- part access -----------------------------------------------------------------------
@@ -103,16 +109,47 @@ class OpcPackage:
             return serialize(self._trees[path])
         return self._parts.get(path)
 
+    def open_part(self, path: str) -> BinaryIO | None:
+        """A binary file over a part's current bytes: an untouched part inflated a piece at
+        a time as it is read, so a parser fed from it never holds the part whole; an
+        edited one's tree written out.  ``None`` for no such part."""
+        path = normalize_part_path(path)
+        if path in self._dirty:
+            return io.BytesIO(serialize(self._trees[path]))
+        return self._parts.open(path)
+
+    def part_size(self, path: str) -> int | None:
+        """A part's current size in bytes -- an untouched one's without inflating it;
+        ``None`` for no such part."""
+        path = normalize_part_path(path)
+        if path in self._dirty:
+            return len(serialize(self._trees[path]))
+        return self._parts.size(path)
+
+    def part_entry(self, path: str) -> ZipPart | None:
+        """The part's compressed ZIP entry while it is untouched
+        (:class:`~ooxml_common.zipparts.ZipPart`: read it whole, or open it from any
+        offset); ``None`` once it is edited or replaced, or for no such part."""
+        path = normalize_part_path(path)
+        if path in self._dirty:
+            return None
+        stored = self._parts.stored(path)
+        return stored if isinstance(stored, ZipPart) else None
+
     def tree(self, path: str) -> Element | None:
         """Parsed root of a part, cached.  Parsing alone does not mark the part dirty."""
         path = normalize_part_path(path)
         cached = self._trees.get(path)
         if cached is not None:
             return cached
-        raw = self._parts.get(path)
-        if raw is None:
+        stored = self._parts.stored(path)
+        if stored is None:
             return None
-        root = parse_xml(raw)
+        if isinstance(stored, ZipPart):
+            # A large part is parsed as it is inflated, never held whole beside its tree.
+            root = parse_xml(stored.open() if stored.size > PARSE_STREAMED else stored.read())
+        else:
+            root = parse_xml(stored)
         self._trees[path] = root
         return root
 
@@ -141,7 +178,7 @@ class OpcPackage:
 
     def opened(self) -> "OpcPackage":
         """The package as it was read, before any change -- a separate, read-only copy."""
-        return type(self)(list(self._entries), dict(self._original))
+        return type(self)(list(self._entries), self._original.copy())
 
     def replace_part(self, path: str, data: bytes) -> None:
         """Overwrite (or add) a part with raw bytes, dropping any parsed tree for it.
@@ -286,8 +323,9 @@ class OpcPackage:
     def find_part_with_bytes(self, data: bytes, directory: str) -> str | None:
         """An existing part under ``directory`` holding exactly ``data`` -- for de-duplication."""
         prefix = normalize_part_path(directory).rstrip("/") + "/"
-        for path, existing in self._parts.items():
-            if path.startswith(prefix) and path not in self._dirty and existing == data:
+        for path in self._parts:
+            if path.startswith(prefix) and path not in self._dirty \
+                    and self._parts.size(path) == len(data) and self._parts[path] == data:
                 return path
         return None
 
@@ -677,7 +715,7 @@ class OpcPackage:
                 continue
             rels = rels_path_for(path)
             for gone in ([path, rels] if rels != path and rels in self._parts else [path]):
-                removed.append((gone, len(self.read(gone) or b"")))
+                removed.append((gone, self.part_size(gone) or 0))
             self.remove_part(path)
         self._prune_defaults({path.rsplit(".", 1)[-1] for path, _ in removed if "." in path})
         return sorted(removed)
@@ -731,7 +769,7 @@ class OpcPackage:
         """
         return PackageSnapshot(
             trees={path: serialize(self._trees[path]) for path in self._dirty},
-            raw={path: self._parts.get(path) for path in self._raw_changes},
+            raw={path: self._parts.stored(path) for path in self._raw_changes},
         )
 
     def restore(self, snapshot: "PackageSnapshot") -> None:
@@ -745,7 +783,7 @@ class OpcPackage:
             if path in snapshot.raw:
                 data = snapshot.raw[path]  # None: the part did not exist then
             else:
-                data = self._original.get(path)  # changed since: back to what was read
+                data = self._original.stored(path)  # changed since: back to what was read
             if data is not None:
                 self._set_raw(path, data)
             else:
@@ -776,7 +814,7 @@ class OpcPackage:
         if path in snapshot.trees:
             return snapshot.trees[path]
         if path in snapshot.raw:
-            return snapshot.raw[path]
+            return _bytes(snapshot.raw[path])
         return self._original.get(path)
 
     def changed_between(self, before: "PackageSnapshot",
@@ -787,8 +825,17 @@ class OpcPackage:
         back to bytes that serialize differently from the original counts as changed: the
         answer may be too wide, never too narrow."""
         paths = set(before.trees) | set(before.raw) | set(after.trees) | set(after.raw)
-        return frozenset(path for path in paths
-                         if self.snapshot_value(before, path) != self.snapshot_value(after, path))
+        return frozenset(path for path in paths if not self._same_in(before, after, path))
+
+    def _same_in(self, before: "PackageSnapshot", after: "PackageSnapshot", path: str) -> bool:
+        """Whether a part's bytes are the same in two snapshots -- the same compressed
+        entry in both without inflating it."""
+        if path not in before.trees and path not in after.trees:
+            first = before.raw[path] if path in before.raw else self._original.stored(path)
+            second = after.raw[path] if path in after.raw else self._original.stored(path)
+            if first is second:
+                return True
+        return self.snapshot_value(before, path) == self.snapshot_value(after, path)
 
     def snapshot_with(self, target: "PackageSnapshot", source: "PackageSnapshot",
                       paths: Iterable[str]) -> "PackageSnapshot":
@@ -828,7 +875,7 @@ class OpcPackage:
             parts += [path, rels_path_for(path)]
         return parts
 
-    def _set_raw(self, path: str, data: bytes) -> None:
+    def _set_raw(self, path: str, data: "bytes | ZipPart") -> None:
         self._ensure_entry(path)
         self._parts[path] = data
 
@@ -861,15 +908,32 @@ class OpcPackage:
             for info in self._entries:
                 path = normalize_part_path(info.filename)
                 data = replacements.get(path) if path in self._parts else None
-                if data is None:
+                untouched = None
+                if data is None and path not in self._dirty:
+                    stored = self._parts.stored(path)
+                    if isinstance(stored, ZipPart):
+                        untouched = stored
+                    else:
+                        data = stored
+                elif data is None:
                     data = self.read(path)
-                if data is None:
+                if data is None and untouched is None:
                     continue
                 entry = zipfile.ZipInfo(info.filename, date_time=info.date_time)
                 entry.compress_type = info.compress_type
                 entry.external_attr = info.external_attr
                 entry.create_system = info.create_system
-                archive.writestr(entry, data)
+                if untouched is None:
+                    assert data is not None
+                    archive.writestr(entry, data)
+                    continue
+                # An untouched part goes through a piece at a time, never inflated whole:
+                # the bytes written are writestr's (its size known before, as writestr
+                # sets it; the compressor fed the same bytes in pieces).
+                entry.file_size = untouched.size
+                with archive.open(entry, "w") as out:
+                    for piece in untouched.chunks():
+                        out.write(piece)
 
 
 @dataclass(frozen=True)
@@ -877,7 +941,13 @@ class PackageSnapshot:
     """What :meth:`OpcPackage.snapshot` captures: edited trees as bytes, raw parts by value."""
 
     trees: dict[str, bytes]
-    raw: dict[str, bytes | None]
+    #: A part's bytes, or its compressed entry (:class:`~ooxml_common.zipparts.ZipPart`)
+    #: when it is one read from the ZIP; ``None``: it did not exist.
+    raw: "dict[str, bytes | ZipPart | None]"
+
+
+def _bytes(value: "bytes | ZipPart | None") -> bytes | None:
+    return value.read() if isinstance(value, ZipPart) else value
 
 
 def _new_entry(path: str) -> zipfile.ZipInfo:
