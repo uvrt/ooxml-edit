@@ -225,6 +225,34 @@ call no warning can be given), and `$REC_NOW` for a ref `rec_now` is `not_found`
 whether `$rec_now` was meant. `fold_ref` is importable from `ooxml_edit.tools`. A view
 (`session.view(...)`) reads the same refs.
 
+*Refs at the committed version* (0.102.0, round 47). `session.refs` and
+`session.resolve_ref` take the document's lock, so they wait for an edit in flight;
+`session.read_refs("d1")` and `session.read_resolve_ref("d1", "$intro")` read the refs of
+the committed version instead, as `Session.read_lock` reads the document: without the
+lock, never waiting for an edit, whose refs are the document's once its call has ended. A
+document whose committed version is not the one now (a format that does not copy its
+documents, or a change the application made through the library) takes its lock, as a read
+does, and keeps the version now as committed. A call that only names something, changing
+nothing else, is committed too (`DocumentEntry.commit` keeps the same version with its new
+refs, sharing the copy already made of it), so refs read at the committed version are never
+behind.
+
+*Refs by caller* (0.102.0, round 47). A ref belongs to the caller that defined it: the
+context of its call (`Call.caller`, a view's `context`; `DocumentEntry.ref_owners`, kept
+by name and address, so undo and redo bring back each ref with its owner). A call with a
+context that would point another caller's ref elsewhere is refused (`invalid_arguments`,
+field `ref`) naming the ref, its address and a free name to give instead (`valid_options`,
+`table_2`; `details` holds the ref and its address) -- never the owner's context, which is the
+application's and never shown to the model -- before its handler runs
+when the name is in its `ref` argument, or in `ref` of the objects of a list argument
+(`items[].ref`): what a creating call makes is somewhere new, so nothing is made and no
+id is drawn; else when the handler names it (`Call.define_ref`). Using another caller's
+ref, or naming the address it has, is fine. A ref defined by a call with no context is
+shared, as before: a caller that points it elsewhere owns it from then on; and a call with
+no context (the application's own) may point any ref. A call on a draft that used or made a
+ref is prepared again when the document's refs changed before its change is applied (round
+45), so it never lands where a ref pointed before.
+
 **Aliases and refusals.** What a model naturally writes for an argument or a value is read
 as the tool's own before validation, never sent, so it costs no tokens: a string's
 `aliases` (`string(enum=[...], aliases={"shrink": "normal"})`, the validation schema's

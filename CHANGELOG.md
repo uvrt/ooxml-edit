@@ -4,6 +4,28 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet. Each vers
 reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
 earlier ones were never tagged.
 
+## 0.102.0 -- unreleased
+- **Refs at the committed version** (round 47, R79). `Session.read_refs` and
+  `Session.read_resolve_ref` read a document's refs as `Session.read_lock` reads the
+  document: at its committed version, without its lock, so an application resolving refs
+  beside its reads no longer waits for an edit in flight. `DocumentEntry.commit` keeps a
+  call that only defined refs (the version as it was) as committed, with the copy already
+  made of the version shared, so refs read at the committed version, and the reads after
+  the call, see them at once (`tests/test_tools_ref_owners.py`).
+- **A ref belongs to the caller that defined it** (round 47, R80). A call whose
+  context differs from the one that defined a ref, pointing it elsewhere, is refused
+  (`invalid_arguments`, field `ref`): the ref, its address and a free name to give
+  (`valid_options`); never the owner's context, which the model is not shown. A name in the call's `ref` (or `items[].ref`) is checked before its
+  handler runs, so a refused creating call makes nothing and draws no id; `Call.define_ref`
+  checks every other. Using another caller's ref works; a ref a call with no context
+  defined is shared, and such a call may point any ref, as before. Owners are kept by name
+  and address (`DocumentEntry.ref_owners`, `ref_owner`), so undo and redo bring them back
+  with the refs; drafts carry them, and a draft whose refs changed before its change is
+  applied is prepared again (round 45), never landing where a ref pointed before. No tool
+  definition changes: the refusal carries the rule and the way out.
+- **A batch on a draft quotes its failed ops with the ids as applied** (round 47). An op that
+  failed on ids an earlier op of the batch made (named by a ref) said them as drawn on the
+  draft in the batch's summary; its error is renamed as the other ops' results are.
 ## 0.101.0 -- unreleased
 - **A save copies untouched parts as their compressed entries** (round 46; the user's
   choice, 2026-11-09). `write`, `save` and `to_bytes` write a part that is still what was
