@@ -1211,7 +1211,9 @@ A task's deadline counts from when a worker takes it; the wait for a worker has 
 bound, `Limits.worker_queue_timeout` (300 s). In process (`workers=0`, an `InProcess` runner, the fallback)
 `fn` runs in the calling thread, unlocked, without a deadline, as the work did before. When
 the document changed before an unlocked read ended, the result warns, naming both versions
-(`moved_on`): it stands for the version it read. A change made by a later call of the same
+(`moved_on`): it stands for the version it read. A read that says what it covered
+(`call.read_scope`, round 47: a ranged check's blocks) is warned only when a change made
+meanwhile touched that, as the format's `BlockEdits.touches` tells. A change made by a later call of the same
 `dispatch_many` turn alone is not warned about, since the turn's order already says so. And `dispatch_many` no longer queues one
 turn's reads of a document behind each other: a call that only reads (a reading tool of no
 role of its own -- not `undo`, `close_document`, `save_document` -- taking no datasets,

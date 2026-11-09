@@ -69,6 +69,12 @@ class BlockEdits(Protocol):
         its document in flight (``block_edits="auto"``) -- one that may run long, so an edit
         that comes while it runs need not wait for it.  Without it: ``False``."""
 
+    def touches(self, change: Any, scope: Any) -> bool:
+        """Optional (round 47): whether ``change`` (a :class:`~ooxml_edit.history.Change`
+        another call made) touched ``scope`` (a call's :attr:`~.dispatch.Call.read_scope`):
+        whether a read of it, made before the change, may read differently after.  Without
+        it every change does."""
+
     def draft(self, document: Any, committed: Any) -> Any:
         """An editable copy of ``document`` at ``committed``'s version
         (:class:`~.session.Committed`), recording what a call does on it; its ``document``

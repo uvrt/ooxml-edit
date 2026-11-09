@@ -4,6 +4,17 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet. Each vers
 reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
 earlier ones were never tagged.
 
+## 0.102.0 -- unreleased
+- **"changed while this call read it" only when the change touched what the read covered**
+  (round 47, the Word team's question). A handler that lets the locks go may say what of
+  the document its result is of (`Call.read_scope`, in its format's addresses: a ranged
+  check's blocks); the warning then comes only when a change made meanwhile touched it, as
+  the format's optional `BlockEdits.touches(change, scope)` tells. A read of the whole
+  document (no scope), a format that cannot tell, and changes no longer kept still warn on
+  any change. Each document keeps its latest changes (`DocumentEntry.changes_kept`, 32;
+  `note_change` takes the `Change`; `changes_between(used, now)`, the way from one version
+  to the other). tests/test_tools_read_scope.py.
+
 ## 0.101.0 -- unreleased
 - **A save copies untouched parts as their compressed entries** (round 46; the user's
   choice, 2026-11-09). `write`, `save` and `to_bytes` write a part that is still what was

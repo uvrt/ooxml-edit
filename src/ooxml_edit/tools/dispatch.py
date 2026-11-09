@@ -240,6 +240,12 @@ class Call:
         #: The version of the primary document the result describes, when the handler
         #: worked on a snapshot (:meth:`unlocked`); ``None``: the version after the call.
         self.version_used: int | None = None
+        #: Round 47 (lane B): what of the primary document the result is of, where the
+        #: handler says (a format's addresses: the blocks a ranged check read); ``None``: the
+        #: whole document.  Another call's change made while the locks were let go warns
+        #: that the document changed while this call read it only when it touched this
+        #: (the format's ``BlockEdits.touches``).
+        self.read_scope: Any = None
         #: The values the dispatcher wrote for references in the text arguments
         #: (``Tool.facts``), in order: each a :class:`~.textfacts.Fact` -- the argument,
         #: the value's place in its text as the handler gets it, and its record.
@@ -1780,7 +1786,7 @@ class Toolbox:
                         logger.exception("applying a draft's patch to %s failed", doc)
                         stats["lock"] = "the patch did not apply"
                         return None
-                    entry.note_change(change.parts if change is not None else None, version)
+                    entry.note_change(change.parts if change is not None else None, version, change)
                     try:
                         hook.settle(entry.document, plan, touched=context.touched.setdefault(doc, []),
                                     before=before)
@@ -2065,7 +2071,7 @@ class Toolbox:
                 if change is None and changing:
                     primary.note_change(None, before.get(primary.doc_id))
                 elif change is not None and change.changed:
-                    primary.note_change(change.parts, before.get(primary.doc_id))
+                    primary.note_change(change.parts, before.get(primary.doc_id), change)
             result = _as_result(returned, call.result)
             if drafting is not None and (call.deferred or context.datasets):
                 # Work on the whole document as the call left it, or datasets for the
@@ -2086,7 +2092,9 @@ class Toolbox:
                 if (call.released and primary is not None
                         and now != call.version_used
                         and not (turn is not None and turn.explains(
-                            primary.doc_id, call.version_used, now, since))):
+                            primary.doc_id, call.version_used, now, since))
+                        and _changes_touch(session, primary.live or primary, call.version_used,
+                                           now, call.read_scope)):
                     result.warnings.append(moved_on(primary.doc_id, call.version_used, now))
             if changing and result.ok:
                 self._keep_refs(entries, context, [primary.doc_id] if primary else [])
@@ -2353,7 +2361,7 @@ class Toolbox:
             if change is None and doc in context.changed_at:
                 entries[doc].note_change(None, before.get(doc))
             elif change is not None and change.changed:
-                entries[doc].note_change(change.parts, before.get(doc))
+                entries[doc].note_change(change.parts, before.get(doc), change)
 
     @staticmethod
     def _keep_refs(entries: dict[str, DocumentEntry], context: CallContext,
@@ -3630,6 +3638,25 @@ class _Turn:
                         return False
                     version = end
             return version == now
+
+
+def _changes_touch(session: Session, entry: DocumentEntry, used: int, now: int, scope: Any) -> bool:
+    """Whether the changes that took ``entry`` from version ``used`` to ``now`` touched what a
+    read covered (``scope``, :attr:`Call.read_scope`; ``None``: the whole document) -- by its
+    format's ``BlockEdits.touches``; anything that cannot be told did."""
+    if scope is None:
+        return True
+    hook = getattr(getattr(session.formats.get(entry.kind), "blocks", None), "touches", None)
+    if hook is None:
+        return True
+    changes = entry.changes_between(used, now)
+    if changes is None:
+        return True
+    try:
+        return any(change is None or hook(change, scope) for change in changes)
+    except Exception:  # noqa: BLE001 -- it cannot be told: it did
+        logger.exception("the %s format's touches failed", entry.kind)
+        return True
 
 
 def moved_on(doc: str, used: int, now: int) -> str:
