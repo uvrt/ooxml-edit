@@ -69,6 +69,12 @@ class BlockEdits(Protocol):
         its document in flight (``block_edits="auto"``) -- one that may run long, so an edit
         that comes while it runs need not wait for it.  Without it: ``False``."""
 
+    def drew(self, draft: Any) -> bool:
+        """Optional (round 47): whether the call on ``draft`` drew values from the
+        document's sequences (ids).  One that failed, or changed nothing, after drawing
+        runs under the lock instead -- where, as before, what it drew is spent, so the
+        calls after it draw what they would have.  Without it: no."""
+
     def touches(self, change: Any, scope: Any) -> bool:
         """Optional (round 47): whether ``change`` (a :class:`~ooxml_edit.history.Change`
         another call made) touched ``scope`` (a call's :attr:`~.dispatch.Call.read_scope`):

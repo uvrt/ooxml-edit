@@ -1704,6 +1704,11 @@ class Toolbox:
                                            roles=roles, caller=caller, after=after,
                                            drafting=drafting)
                 except ToolError as refused:
+                    if _drew(hook, draft):
+                        # It drew ids before it failed: under the lock it would consume them,
+                        # so later calls draw others -- it runs there instead (round 47).
+                        stats["lock"] = "drew ids, then failed"
+                        return None
                     # Refused on the committed version: of that version, nothing changed.
                     return Result.failure(refused, version=committed.version), {doc: entry}, entry
                 except Exception as exc:  # noqa: BLE001
@@ -1711,6 +1716,9 @@ class Toolbox:
                     if mapped.code == "internal":
                         stats["lock"] = "failed on its draft"
                         return None     # not the call's own refusal: run it as before
+                    if _drew(hook, draft):
+                        stats["lock"] = "drew ids, then failed"
+                        return None
                     return Result.failure(mapped, version=committed.version), {doc: entry}, entry
                 # Its preparation's own CPU (the thread's: what it would cost again).
                 spent = time.thread_time() - spent
@@ -1732,6 +1740,9 @@ class Toolbox:
                     if context.refs or made_keys:
                         stats["lock"] = "named or keyed, changing nothing"
                         return None     # (what it named is the document's: as before)
+                    if _drew(hook, draft):
+                        stats["lock"] = "drew ids, then changed nothing"
+                        return None     # (under the lock the ids drawn are spent: as before)
                     result.version = committed.version
                     after.retarget(drafted, entry)
                     after.keep(entry, committed)
@@ -3643,6 +3654,16 @@ class _Turn:
                         return False
                     version = end
             return version == now
+
+
+def _drew(hook: Any, draft: Any) -> bool:
+    """Whether a call on ``draft`` drew values from the document's sequences (ids) -- the
+    format's optional ``BlockEdits.drew``; one that cannot tell: no."""
+    drew = getattr(hook, "drew", None)
+    try:
+        return bool(drew(draft)) if drew is not None else False
+    except Exception:  # noqa: BLE001 -- cannot be told: run it under the lock, as before
+        return True
 
 
 def _changes_touch(session: Session, entry: DocumentEntry, used: int, now: int, scope: Any) -> bool:

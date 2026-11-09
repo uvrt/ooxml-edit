@@ -4,7 +4,7 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet. Each vers
 reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
 earlier ones were never tagged.
 
-## 0.102.0 -- unreleased
+## 0.103.0 -- unreleased
 - **"changed while this call read it" only when the change touched what the read covered**
   (round 47, the Word team's question). A handler that lets the locks go may say what of
   the document its result is of (`Call.read_scope`, in its format's addresses: a ranged
@@ -14,6 +14,11 @@ earlier ones were never tagged.
   any change. Each document keeps its latest changes (`DocumentEntry.changes_kept`, 32,
   `keep_change` just before `note_change`; `changes_between(used, now)`, the way from one
   version to the other). tests/test_tools_read_scope.py.
+- **A call that drew ids on its draft, then failed or changed nothing, runs under the lock**
+  (round 47, lane F's find): there, as before, what it drew is spent, so the calls after it
+  draw what they would have -- on the draft it was not, and their ids differed from the
+  calls run one at a time. The format says whether a draft drew (`BlockEdits.drew`,
+  optional; without it, as before); `Result.block` says `lock: "drew ids, then failed"`.
 
 ## 0.101.0 -- unreleased
 - **A save copies untouched parts as their compressed entries** (round 46; the user's
