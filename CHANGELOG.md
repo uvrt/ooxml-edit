@@ -38,6 +38,16 @@ earlier ones were never tagged.
 - A source argument a strict decoder filled with `""` (a table cell's `from` beside its
   text) is no source: the dispatcher no longer refuses it as an address (round 45, lane D).
 
+## 0.98.0 -- unreleased
+- **`column_index` takes only a column's letters** (production round 46, R77): one to three
+  of `A` to `Z` (case aside) on the sheet's grid, `A` to `XFD`. Anything else -- `""`, a
+  cell (`"A1"`, which gave 11), a `$`, spaces, other letters, a column past `XFD` (which
+  gave numbers past `MAX_COLUMN`) -- is `ArgumentError` (a `ValueError`) quoting the text;
+  not text, `ArgumentTypeError`. `Cell.parse` (and so `Area.parse`) refuses a cell past
+  `XFD` the same way, quoting the cell, where it made a `Cell` off the grid. Every caller in
+  ooxml-edit, xlsx-agent, docx-agent and pptx-agent passes only letters it matched
+  (xlsx-agent counts a column past the grid itself to say why it refuses it).
+
 ## 0.97.0 -- unreleased
 - **Reads never wait for an edit in flight; an edit holds a document only while it changes
   it** (production round 45, R64 stages 1 and 2; twelve agents on one document waited for
