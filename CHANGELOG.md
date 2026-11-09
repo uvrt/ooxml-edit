@@ -13,7 +13,14 @@ earlier ones were never tagged.
   field (ZIP64's where a size or offset needs it), the flags that describe the data, the
   name's UTF-8 flag. An edited, added or replaced part is compressed as before. Saving a
   workbook with a 534 MB sheet (70 MB file) no longer inflates and deflates every part:
-  MEASURED. The archive differs from before where the file read was compressed otherwise
+  one small part edited, CPU seconds per save, before -> after: 22.6 -> 0.02 (the file
+  50.6 -> 70.3 MB: the input was compressed at a lower level than zlib's default and stays
+  so); a 31 MB workbook 5.7 -> 0.01 s (22.0 -> 31.0 MB); a 55 MB one 21.3 -> 0.02 s
+  (40.2 -> 55.1 MB); a 64-page report and a 25-slide deck 0.02 s either way (same sizes);
+  an Office-made 14 MB document 0.03 -> 0.02 s (14,165,909 -> 14,166,424 bytes) and
+  deck 0.01 -> 0.00 s (640,147 -> 645,371 bytes). Excel, Word and PowerPoint for Mac open
+  such saves of their own files, edited (and Excel one rewritten first with data
+  descriptors and extra fields). The archive differs from before where the file read was compressed otherwise
   than zlib compresses (Office's own deflate): every part reads back the same, and
   zipfile's `testzip` and Info-ZIP's `unzip -t` pass (`tests/test_opc_compressed.py`, with
   data descriptors, extra fields, a ZIP64 local header, stored and bzip2 entries and a
