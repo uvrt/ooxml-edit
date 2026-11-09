@@ -53,8 +53,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install --pre "lxml>=7.0.0b1"
-          # TEMPORARY (r46raw): ooxml-common 0.45.0 from its branch until it is merged; back to @main then.
-          python -m pip install "ooxml-common @ git+https://github.com/uvrt/ooxml-common@r46-raw-copy"
+          python -m pip install "ooxml-common @ git+https://github.com/uvrt/ooxml-common@main"
           python -m pip install -e .[dev]
 
       - name: Importing the package leaves the GIL off
