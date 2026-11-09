@@ -4,9 +4,9 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet. Each vers
 reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
 earlier ones were never tagged.
 
-## 0.100.0 -- unreleased
+## 0.99.0 -- unreleased
 - **Parts stay compressed until they are edited** (production round 46: a workbook with a
-  534 MB sheet in a 70 MB file took 1.25 GB open; 0.99.0 is round 45's, lane B). An
+  534 MB sheet in a 70 MB file took 1.25 GB open). An
   `OpcPackage` keeps every part it read as its compressed ZIP entry (ooxml-common 0.44.0's
   `zipparts.PartStore` and `ZipPart`) until the part is replaced or its tree edited: `read`
   inflates it at each call (the same bytes as before), `open_part(path)` gives a binary
