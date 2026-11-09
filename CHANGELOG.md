@@ -23,6 +23,9 @@ earlier ones were never tagged.
   with the refs; drafts carry them, and a draft whose refs changed before its change is
   applied is prepared again (round 45), never landing where a ref pointed before. No tool
   definition changes: the refusal carries the rule and the way out.
+- **A batch on a draft quotes its failed ops with the ids as applied** (round 47). An op that
+  failed on ids an earlier op of the batch made (named by a ref) said them as drawn on the
+  draft in the batch's summary; its error is renamed as the other ops' results are.
 ## 0.101.0 -- unreleased
 - **A save copies untouched parts as their compressed entries** (round 46; the user's
   choice, 2026-11-09). `write`, `save` and `to_bytes` write a part that is still what was

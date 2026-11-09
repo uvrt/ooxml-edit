@@ -66,14 +66,29 @@ def ref_after(call, doc, target, ref=None, stall=0):
     return Result(summary=f"added after {target}")
 
 
-TOOLS = [ref_make, ref_name, ref_after]
+@tool("toy_ref_refuse", "Test only: refuse the target it was given.",
+      {"doc": string("Document id."), "target": string("Where.")},
+      kind="docx", mutates=True, refs=("target",))
+def ref_refuse(call, doc, target):
+    raise ToolError("invalid_arguments", f"{target} is not for this", field="target",
+                    valid_options=[target], details={"target": target})
+
+
+TOOLS = [ref_make, ref_name, ref_after, ref_refuse]
 
 
 class RefBlocks(ToyBlocks):
-    """The toy block edits, admitting ``toy_ref_after`` on a draft too."""
+    """The toy block edits, admitting ``toy_ref_after`` and ``toy_ref_refuse`` on a draft too;
+    ``renames``: what applying a patch says it renamed (ids drawn meanwhile)."""
+
+    renames: dict = {}
 
     def admits(self, tool, arguments):
-        return tool == "toy_ref_after" or super().admits(tool, arguments)
+        return tool in ("toy_ref_after", "toy_ref_refuse") or super().admits(tool, arguments)
+
+    def apply(self, document, plan):
+        super().apply(document, plan)
+        return dict(self.renames)
 
 
 def _read_copy(document):
@@ -315,3 +330,17 @@ def test_a_refusal_for_another_callers_ref_is_said_of_the_refs_the_change_is_app
         assert result.block["conflicts"] == ["the document's refs changed"]
         assert result.data["failed"] == [0]
         assert result.data["ops"][0]["error"]["details"]["address"] == "item:9"
+
+
+def test_a_failed_ops_error_names_the_ids_its_batch_made_as_applied(monkeypatch):
+    monkeypatch.setattr(RefBlocks, "renames", {"item:1": "item:71"})
+    with _box(blocks="always") as box:
+        session, doc = _open(box)
+        one = session.view(context={"agent": "one"})
+        result = _ok(box.dispatch(one, "batch", {"ops": [
+            {"tool": "toy_ref_after", "arguments": {"doc": doc, "target": "item:0", "ref": "made"}},
+            {"tool": "toy_ref_refuse", "arguments": {"doc": doc, "target": "$made"}}]}))
+        assert result.block is not None and result.data["failed"] == [1]
+        assert result.refs == {"made": "item:71"}
+        assert "item:71 is not for this" in result.summary and "item:1 " not in result.summary
+        assert result.data["ops"][1]["error"]["message"] == "item:71 is not for this"

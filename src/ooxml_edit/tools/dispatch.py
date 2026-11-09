@@ -2794,6 +2794,12 @@ class Toolbox:
             if rename is not None:
                 outcomes[:] = rename(outcomes)
                 caught_first = rename(caught_first)
+                # Round 47: the failed ops' errors too, which the summary quotes (an op that
+                # failed on ids an earlier op of the batch made, named by a ref).
+                for error in errors.values():
+                    error.message = rename(error.message)
+                    error.valid_options = rename(error.valid_options)
+                    error.details = rename(error.details)
             with collect_warnings() as caught_late:
                 stopped = self._run_trailing(
                     session, [(index, ops[index], None) for index in range(split, len(ops))],
