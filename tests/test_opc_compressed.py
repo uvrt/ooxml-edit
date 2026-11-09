@@ -225,6 +225,8 @@ def test_saved_bytes_are_the_same_whichever_way_a_part_is_compressed(data, monke
     before; either way the bytes are those of every part held inflated."""
     from ooxml_edit import opc
 
+    if alike and not pieces_compress_alike():
+        pytest.skip("this deflate writes other bytes for pieces (zlib-ng)")
     data = _with_big_part(data)
     monkeypatch.setattr(opc, "_ALIKE", alike)
     assert OpcPackage.open(data).to_bytes() == _held(data).to_bytes()
