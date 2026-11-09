@@ -21,7 +21,12 @@ earlier ones were never tagged.
   preparation of more than `Limits.block_redo_cpu` (2 s) of its thread's CPU, so a long
   call costs at most one run more -- then runs under the lock
   for its whole run, as calls a format does not admit (whole-document calls, session tools,
-  reads of other documents) always do. Serializable: a committed call's result and change are
+  reads of other documents) always do. Such a call -- any that takes the document's lock
+  -- first waits for each draft in flight for longer than `block_redo_cpu` seconds to be
+  applied (or to take the lock, or fail), so a fields update does not make a long fill run
+  again (`DocumentEntry.wait_for_long_drafts`, `draft_began`, `draft_ended`; never for a
+  draft begun meanwhile, nor when its thread holds the lock already: bounded, no
+  deadlock); `Result.block` says `waited`. Serializable: a committed call's result and change are
   those of the same call run alone at the moment it committed. A batch's reads after its last
   change read the version it made; its checks run on it (`After`); what it changed
   (`touched`) and what each op changed (`touched_by_op`, `BlockEdits.replay_changes`) are

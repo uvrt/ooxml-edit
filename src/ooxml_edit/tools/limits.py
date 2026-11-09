@@ -75,6 +75,9 @@ class Limits:
     #: lock at once, so what it costs again is one run, not ``block_tries`` of them.  2 s is
     #: about ten times a usual edit's preparation (0.1-0.2 s of CPU on a 60-page report);
     #: a fill of hundreds of rows or a long Markdown passes it.
+    #: The same seconds make a draft in flight *long* for a call that takes the document's
+    #: lock: it waits for such a draft to be applied first, so a whole-document change does
+    #: not make it run again (``DocumentEntry.wait_for_long_drafts``).
     block_redo_cpu: float = 2.0
     #: Starting one worker process and warming it (its imports, the renderers' font
     #: index), apart from any call's deadline.

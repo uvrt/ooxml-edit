@@ -95,8 +95,11 @@ Each committed call's result and change are those of the same call run alone whe
 committed, so the commit order is a serial order. Whole-document calls, session tools and
 calls a format does not admit hold the lock for their whole run, as before; so does every
 other call made with no other edit of the document in flight (`Toolbox(block_edits="auto")`:
-reads and checks never wait for an edit, so a draft beside them alone would spare nothing). `Result.block` tells the
-application how a call ran on a draft.
+reads and checks never wait for an edit, so a draft beside them alone would spare nothing).
+A call that takes the lock first waits for any draft in flight for longer than
+`Limits.block_redo_cpu` seconds to be applied, so it does not make a long fill run again.
+`Result.block` tells the application how a call ran on a draft, and how long a call waited
+for one.
 
 **What a call changed (round 13, R2, 0.57.0).** Every result carries `result.touched`, for
 the application and never in what the model reads (`to_json`, `to_text`): what the call

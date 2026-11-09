@@ -91,6 +91,7 @@ import datetime as _dt
 import itertools
 import re
 import threading
+import time
 import uuid
 from collections import OrderedDict
 from contextlib import ExitStack, contextmanager
@@ -526,6 +527,14 @@ class DocumentEntry:
     #: applying their change, not yet at their checks (:meth:`begin_edit`): with
     #: ``block_edits="auto"``, a call is prepared on a draft only beside another one.
     editing: int = field(default=0, repr=False)
+    #: Round 45 (lane B): the calls preparing a draft of this document now, each since when
+    #: (``time.monotonic``), until their change is applied or they take the lock instead
+    #: (:meth:`draft_began`): a call that takes the document's lock first waits for those
+    #: in flight longer than ``Limits.block_redo_cpu`` (:meth:`wait_for_long_drafts`).
+    drafts_in_flight: dict[int, float] = field(default_factory=dict, repr=False)
+    _drafts_ended: threading.Condition = field(
+        default_factory=lambda: threading.Condition(threading.Lock()), repr=False)
+    _draft_tokens: Any = field(default_factory=lambda: itertools.count(1), repr=False)
     _flight_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     #: Round 45 (lane B): the changes the dispatcher made to the document, counted
     #: (:meth:`note_change`): the count, the version the last one left, and each part's
@@ -609,6 +618,37 @@ class DocumentEntry:
         """The edit :meth:`begin_edit` counted is done."""
         with self._flight_lock:
             self.editing -= 1
+
+    def draft_began(self) -> int:
+        """Count a call as preparing a draft of this document from now; its token, for
+        :meth:`draft_ended`."""
+        with self._drafts_ended:
+            token = next(self._draft_tokens)
+            self.drafts_in_flight[token] = time.monotonic()
+            return token
+
+    def draft_ended(self, token: int) -> None:
+        """The draft :meth:`draft_began` counted is done: applied, or the call takes the
+        lock instead, or it failed."""
+        with self._drafts_ended:
+            if self.drafts_in_flight.pop(token, None) is not None:
+                self._drafts_ended.notify_all()
+
+    def wait_for_long_drafts(self, longer_than: float) -> float:
+        """Before a call takes this document's lock for its whole run: wait until every
+        draft in flight now for longer than ``longer_than`` seconds has ended (a long
+        preparation that a whole-document change would only make run again), never for
+        one begun or turned long meanwhile, so the wait is bounded by those drafts alone.
+        Not when this thread holds the lock already (their changes wait for it).  The
+        seconds waited."""
+        if self.lock._is_owned():
+            return 0.0
+        with self._drafts_ended:
+            now = time.monotonic()
+            waiting = {token for token, since in self.drafts_in_flight.items() if now - since >= longer_than}
+            while waiting & self.drafts_in_flight.keys():
+                self._drafts_ended.wait()
+            return time.monotonic() - now
 
     def note_change(self, parts: Iterable[str] | None, before: int | None) -> None:
         """Count a change the dispatcher made, under the document's lock: ``parts`` the

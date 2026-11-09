@@ -1437,11 +1437,21 @@ class Toolbox:
                 if drafted is not None:
                     if holding is not None:
                         holding.set()
+                    editing.drafting(drafted)
                     outcome = self._run_block(session, tool, clean, drafted, roles, caller,
                                               turn, block, editing)
+                    editing.drafted()
                 if outcome is not None:
                     result, entries, primary = outcome
                 else:
+                    if not reads_only:
+                        # A long draft in flight would be made again were this call -- which
+                        # takes the documents' locks for its whole run -- to change them first:
+                        # it waits for those drafts to be applied (or to take the lock) first.
+                        waited = sum(entry.wait_for_long_drafts(session.limits.block_redo_cpu)
+                                     for entry, _n in counted.values())
+                        if waited >= 0.001:
+                            block["waited"] = round(waited, 3)
                     locking = session.read_lock if reads_only else session.lock
                     # Round 45 (stage 2): a changing call's checks run on the version it made
                     # once its locks are let go (After), where its format copies documents.
@@ -3529,6 +3539,18 @@ class _Editing:
 
     def __init__(self, entries: Sequence[DocumentEntry]) -> None:
         self._counts = {id(entry): (entry, entry.begin_edit()) for entry in entries}
+        self._draft: tuple[DocumentEntry, int] | None = None
+
+    def drafting(self, entry: DocumentEntry) -> None:
+        """The call prepares a draft of ``entry`` from now (:meth:`DocumentEntry.draft_began`)
+        until :meth:`drafted`."""
+        self._draft = (entry, entry.draft_began())
+
+    def drafted(self) -> None:
+        """Its draft is done: applied, or it takes the lock instead."""
+        draft, self._draft = self._draft, None
+        if draft is not None:
+            draft[0].draft_ended(draft[1])
 
     def beside(self, entry: DocumentEntry) -> int:
         """How many other calls edited ``entry`` when this one began."""
@@ -3536,6 +3558,7 @@ class _Editing:
         return found[1] - 1 if found is not None else 0
 
     def done(self) -> None:
+        self.drafted()
         counts, self._counts = self._counts, {}
         for entry, _count in counts.values():
             entry.end_edit()

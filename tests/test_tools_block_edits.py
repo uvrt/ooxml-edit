@@ -238,6 +238,56 @@ def test_a_call_the_format_says_is_worth_a_draft_alone_drafts_alone():
         assert long.ok and _shape(long.block) == {"tries": 1, "conflicts": []} and hook.drafts == 1
 
 
+def test_a_call_that_takes_the_lock_waits_for_a_long_draft_in_flight_to_apply():
+    """A draft prepared for longer than ``block_redo_cpu`` is not made to run again by a
+    call that takes the document's lock: that call waits until the draft is applied, then
+    runs on the version it made.  The draft runs once."""
+    box, _hook = _box("always", limits=Limits(block_redo_cpu=0.3))
+    with box:
+        session, doc = _open(box)
+        thread, slow = _thread(lambda: box.dispatch(session, "toy_block_first",
+                                                    {"doc": doc, "text": "first", "stall": STALL}))
+        time.sleep(0.8)
+        late = box.dispatch(session, "toy_word_insert", {"doc": doc, "text": "late", "at": "end"})
+        thread.join()
+        first = slow["result"]
+        assert first.ok and _shape(first.block) == {"tries": 1, "conflicts": []}
+        assert late.ok and late.block is not None and late.block["waited"] > 0.5
+        assert late.version == first.version + 1
+        items = session.entry(doc).document.items()
+        assert items[0] == "first" and items[-1] == "late"
+        assert session.entry(doc).drafts_in_flight == {}
+
+
+def test_a_draft_not_yet_long_is_not_waited_for():
+    box, _hook = _box("always", limits=Limits(block_redo_cpu=30))
+    with box:
+        session, doc = _open(box)
+        thread, slow = _thread(lambda: box.dispatch(session, "toy_block_first",
+                                                    {"doc": doc, "text": "first", "stall": STALL}))
+        time.sleep(0.5)
+        late = box.dispatch(session, "toy_word_insert", {"doc": doc, "text": "late", "at": "end"})
+        thread.join()
+        assert late.ok and late.block is None
+        assert slow["result"].ok and slow["result"].block["tries"] == 2   # prepared again
+
+
+def test_a_long_draft_that_cannot_apply_does_not_hold_up_a_call_that_takes_the_lock(monkeypatch):
+    """A long draft whose change cannot be a patch takes the lock: a call waiting for it
+    goes on then (each in turn under the lock), never waiting for its rerun."""
+    box, hook = _box("always", limits=Limits(block_redo_cpu=0.3))
+    monkeypatch.setattr(hook, "prepared", lambda draft, result, arguments: None)
+    with box:
+        session, doc = _open(box)
+        thread, slow = _thread(lambda: box.dispatch(session, "toy_block_add",
+                                                    {"doc": doc, "text": "first", "stall": STALL}))
+        time.sleep(0.8)
+        late = box.dispatch(session, "toy_word_insert", {"doc": doc, "text": "late", "at": "end"})
+        thread.join()
+        assert late.ok and slow["result"].ok and slow["result"].block["lock"] == "not a patch"
+        assert session.entry(doc).drafts_in_flight == {}
+
+
 def test_an_admitted_call_runs_on_a_draft_and_its_change_is_one_step_of_its_own():
     box, hook = _box("always")
     with box:
