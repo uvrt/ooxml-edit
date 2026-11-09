@@ -36,7 +36,7 @@ from lxml import etree
 # REL_IMAGE is re-exported: ooxml_edit.opc.REL_IMAGE is public (tests/test_public_api.py).
 from ooxml_common.opc import (CONTENT_TYPES_PART, REL_IMAGE as REL_IMAGE, REL_OFFICE_DOCUMENT,
                               normalize_part_path)
-from ooxml_common.zipparts import PartStore, ZipPart, read_parts
+from ooxml_common.zipparts import PartStore, RawEntry, ZipPart, read_parts
 
 from .xml import Element, parse_xml, serialize
 
@@ -927,22 +927,31 @@ class OpcPackage:
 
     # -- saving ----------------------------------------------------------------------------
 
-    def to_bytes(self, replacements: dict[str, bytes] | None = None) -> bytes:
+    def to_bytes(self, replacements: dict[str, bytes] | None = None, *,
+                 recompress: bool = False) -> bytes:
         buffer = io.BytesIO()
-        self.write(buffer, replacements)
+        self.write(buffer, replacements, recompress=recompress)
         return buffer.getvalue()
 
     def save(self, target: str | os.PathLike[str],
-             replacements: dict[str, bytes] | None = None) -> None:
+             replacements: dict[str, bytes] | None = None, *, recompress: bool = False) -> None:
         with open(os.fspath(target), "wb") as handle:
-            self.write(handle, replacements)
+            self.write(handle, replacements, recompress=recompress)
 
-    def write(self, target: BinaryIO, replacements: dict[str, bytes] | None = None) -> None:
+    def write(self, target: BinaryIO, replacements: dict[str, bytes] | None = None, *,
+              recompress: bool = False) -> None:
         """Write the package, reproducing entry order, timestamps and compression.
 
         ``replacements`` (part name -> bytes) are written instead of the parts' own bytes
         without changing the package: what a format layer derives at save time.  Only
         existing parts can be replaced.
+
+        A part still as it was read is copied as its compressed entry was -- its data as
+        it is, never inflated or compressed again; its header written anew (sizes and
+        CRC-32 in it, no data descriptor, no extra field but ZIP64's where a size needs
+        it).  An edited, added or replaced part is compressed as before, by its entry's
+        method.  ``recompress`` (a host's choice; no tool sets it) compresses every part
+        again instead, as before 0.101.0: the bytes zipfile writes for the parts' bytes.
         """
         replacements = {normalize_part_path(k): v for k, v in (replacements or {}).items()}
         with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as archive:
@@ -950,6 +959,11 @@ class OpcPackage:
                 path = normalize_part_path(info.filename)
                 data = replacements.get(path) if path in self._parts else None
                 untouched = None
+                if data is None and path not in self._dirty and not recompress:
+                    entry_read = self._parts.compressed(path)
+                    if entry_read is not None:
+                        _copy_entry(archive, info, entry_read)
+                        continue
                 if data is None and path not in self._dirty:
                     stored = self._parts.stored(path)
                     if isinstance(stored, ZipPart) and stored.size > SAVE_STREAMED \
@@ -978,6 +992,33 @@ class OpcPackage:
                 with archive.open(entry, "w") as out:
                     for piece in untouched.chunks():
                         out.write(piece)
+
+
+def _copy_entry(archive: zipfile.ZipFile, info: zipfile.ZipInfo, entry: "ZipPart | RawEntry") -> None:
+    """Append ``entry`` -- a part's compressed data as it was read -- to ``archive`` as it
+    is, under ``info``'s name, time and attributes.  The header is made anew, as zipfile
+    makes one for an entry whose sizes are known: the entry's method, size, compressed
+    size and CRC-32, its flags that describe the data (no data descriptor; the UTF-8 flag
+    from the name), no extra field (ZIP64's only where a size or offset needs it, which
+    zipfile adds, here and in the central directory)."""
+    out = zipfile.ZipInfo(info.filename, date_time=info.date_time)
+    out.compress_type = entry.method
+    out.external_attr = info.external_attr
+    out.create_system = info.create_system
+    out.flag_bits = entry.flags
+    out.file_size = entry.size
+    out.compress_size = entry.compressed_size
+    out.CRC = entry.crc
+    fp = archive.fp
+    assert fp is not None
+    if getattr(archive, "_seekable", True):
+        fp.seek(archive.start_dir)
+    out.header_offset = fp.tell()
+    fp.write(out.FileHeader(None))
+    fp.write(entry.compressed)
+    archive.start_dir = fp.tell()
+    archive.filelist.append(out)
+    archive.NameToInfo[out.filename] = out
 
 
 @dataclass(frozen=True)

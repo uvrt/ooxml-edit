@@ -64,41 +64,140 @@ def test_untouched_parts_stay_compressed(data, package):
     assert package.part_size("nothing") is None
 
 
+def _edit(package: OpcPackage, edit: str) -> None:
+    if edit == "tree":
+        root = package.tree(PAGE1)
+        root.set("changed", "1")
+        package.mark_dirty(PAGE1)
+    elif edit == "replace":
+        package.replace_part(IMAGE, b"\x89PNG other")
+    elif edit == "add":
+        package.add_part("doc/media/image9.png", b"\x89PNG new", "image/png")
+    elif edit == "remove":
+        package.remove_part(ORPHAN)
+
+
+def _parts_of(data: bytes) -> dict:
+    """Every entry of a ZIP as zipfile reads it -- name, time, attributes, bytes -- after
+    zipfile's own check of every entry's CRC-32 (testzip)."""
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        assert archive.testzip() is None
+        return {info.filename: (info.date_time, info.external_attr, info.compress_type,
+                                archive.read(info)) for info in archive.infolist()}
+
+
+def _unzip_checks(data: bytes, tmp_path, *leave_out: str) -> None:
+    """Info-ZIP's own reader finds every entry whole too, where it is installed (but
+    ``leave_out``: a method its build may not have)."""
+    import shutil
+    import subprocess
+
+    if shutil.which("unzip") is None:
+        return
+    path = tmp_path / "saved.zip"
+    path.write_bytes(data)
+    done = subprocess.run(["unzip", "-tqq", str(path), *(["-x", *leave_out] if leave_out else [])],
+                          capture_output=True, text=True)
+    assert done.returncode == 0, done.stdout + done.stderr
+
+
 @pytest.mark.parametrize("edit", ["none", "tree", "replace", "add", "remove"])
-def test_saved_bytes_are_those_of_every_part_held_inflated(data, edit):
-    data = _with_big_part(data)
-    packages = [OpcPackage.open(data), _held(data)]
-    for package in packages:
-        if edit == "tree":
-            root = package.tree(PAGE1)
-            root.set("changed", "1")
-            package.mark_dirty(PAGE1)
-        elif edit == "replace":
-            package.replace_part(IMAGE, b"\x89PNG other")
-        elif edit == "add":
-            package.add_part("doc/media/image9.png", b"\x89PNG new", "image/png")
-        elif edit == "remove":
-            package.remove_part(ORPHAN)
-    compressed, held = (package.to_bytes() for package in packages)
-    assert compressed == held
-    if edit == "none":
-        assert compressed == OpcPackage.open(data).to_bytes()
-
-
-@pytest.mark.skipif(not pieces_compress_alike(),
-                    reason="this deflate writes other bytes for pieces: parts are saved whole")
-def test_an_untouched_part_is_saved_without_being_inflated_whole(data, monkeypatch):
+def test_a_save_copies_untouched_entries_and_reads_back_the_same(data, edit, tmp_path):
+    """Untouched parts are copied as their compressed entries; every part reads back as
+    the package holds it, and the archive passes zipfile's and Info-ZIP's checks."""
     data = _with_big_part(data)
     package = OpcPackage.open(data)
-    expected = _held(data).to_bytes()
-    original = ZipPart.read
+    _edit(package, edit)
+    saved = package.to_bytes()
+    _unzip_checks(saved, tmp_path)
+    again = OpcPackage.open(saved)
+    assert again.part_names == package.part_names
+    for path in package.part_names:
+        assert again.read(path) == package.read(path)
+    held = _held(data)
+    _edit(held, edit)
+    assert _parts_of(saved) == _parts_of(held.to_bytes())   # names, times, methods, bytes
 
-    def small_only(self):
-        assert self.size <= 1 << 20, f"{self.name} read whole"
-        return original(self)
 
-    monkeypatch.setattr(ZipPart, "read", small_only)
-    assert package.to_bytes() == expected
+def test_an_untouched_part_is_never_inflated_on_save(data, monkeypatch):
+    data = _with_big_part(data)
+    package = OpcPackage.open(data)
+    big = package.part_entry("doc/big.xml")
+    monkeypatch.setattr(ZipPart, "read", lambda self: pytest.fail(f"{self.name} read whole"))
+    monkeypatch.setattr(ZipPart, "open", lambda self, offset=0: pytest.fail(f"{self.name} read"))
+    saved = package.to_bytes()
+    assert bytes(big.compressed) in saved     # its data, byte for byte
+
+
+@pytest.mark.parametrize("edit", ["none", "tree", "replace"])
+def test_recompress_writes_what_every_part_held_inflated_writes(data, edit):
+    """The host's way back: every part compressed again, the bytes of before."""
+    data = _with_big_part(data)
+    package, held = OpcPackage.open(data), _held(data)
+    _edit(package, edit)
+    _edit(held, edit)
+    assert package.to_bytes(recompress=True) == held.to_bytes()
+
+
+def _odd_zip() -> bytes:
+    """A package as other writers make one: a data descriptor after each entry (a writer
+    that cannot seek), an extra field in a local header, a stored entry, a bzip2 entry, a
+    ZIP64 local header on a small entry, and a UTF-8 name."""
+    import struct
+
+    buffer = io.BytesIO()
+
+    class Unseekable(io.RawIOBase):
+        def writable(self):
+            return True
+
+        def write(self, chunk):
+            return buffer.write(chunk)
+
+    entries = [
+        ("[Content_Types].xml", zipfile.ZIP_DEFLATED, synthetic.outer_package()[:0] or
+         b'<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/'
+         b'2006/content-types"><Default Extension="xml" ContentType="application/xml"/>'
+         b'</Types>'),
+        ("doc/a.xml", zipfile.ZIP_DEFLATED, _big_xml(200_000)),
+        ("doc/stored.bin", zipfile.ZIP_STORED, bytes(range(256)) * 50),
+        ("doc/bz.xml", zipfile.ZIP_BZIP2, _big_xml(30_000, 9)),
+        ("doc/z64.xml", zipfile.ZIP_DEFLATED, b"<z/>" * 100),
+        ("doc/caf\u00e9.xml", zipfile.ZIP_DEFLATED, b"<cafe/>"),
+    ]
+    with zipfile.ZipFile(Unseekable(), "w") as archive:
+        for name, method, payload in entries:
+            info = zipfile.ZipInfo(name, date_time=(2023, 1, 2, 3, 4, 6))
+            info.compress_type = method
+            if name == "doc/a.xml":
+                info.extra = struct.pack("<HH", 0xCAFE, 4) + b"abcd"
+            with archive.open(info, "w", force_zip64=name == "doc/z64.xml") as out:
+                out.write(payload)
+    return buffer.getvalue()
+
+
+def test_odd_entries_are_copied_into_a_valid_archive(tmp_path):
+    data = _odd_zip()
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        flags = {info.filename: info.flag_bits for info in archive.infolist()}
+    assert all(flag & 0x8 for flag in flags.values())       # each with a data descriptor
+    package = OpcPackage.open(data)
+    package.add_part("doc/new.xml", b"<new/>", "application/xml")
+    saved = package.to_bytes()
+    _unzip_checks(saved, tmp_path, "doc/bz.xml")
+    with zipfile.ZipFile(io.BytesIO(saved)) as archive:
+        assert archive.testzip() is None
+        infos = {info.filename: info for info in archive.infolist()}
+        for info in infos.values():
+            assert not info.flag_bits & 0x8 and info.extra == b""
+        assert infos["doc/bz.xml"].compress_type == zipfile.ZIP_BZIP2
+        assert infos["doc/stored.bin"].compress_type == zipfile.ZIP_STORED
+        assert infos["doc/caf\u00e9.xml"].flag_bits & 0x800
+    for path in OpcPackage.open(data).part_names:
+        assert OpcPackage.open(saved).read(path) == package.read(path)
+    # The bzip2 entry's data is copied as it was compressed.
+    original = OpcPackage.open(data)._parts.compressed("doc/bz.xml")
+    assert original is not None and bytes(original.compressed) in saved
 
 
 def test_an_edited_part_is_no_longer_its_entry(package):
@@ -220,7 +319,7 @@ def test_a_large_part_is_parsed_from_its_stream_to_the_same_tree(data, monkeypat
 
 
 @pytest.mark.parametrize("alike", [True, False])
-def test_saved_bytes_are_the_same_whichever_way_a_part_is_compressed(data, monkeypatch, alike):
+def test_recompress_is_the_same_whichever_way_a_part_is_compressed(data, monkeypatch, alike):
     """Where pieces compress otherwise (zlib-ng), a part is inflated whole and written as
     before; either way the bytes are those of every part held inflated."""
     from ooxml_edit import opc
@@ -229,4 +328,4 @@ def test_saved_bytes_are_the_same_whichever_way_a_part_is_compressed(data, monke
         pytest.skip("this deflate writes other bytes for pieces (zlib-ng)")
     data = _with_big_part(data)
     monkeypatch.setattr(opc, "_ALIKE", alike)
-    assert OpcPackage.open(data).to_bytes() == _held(data).to_bytes()
+    assert OpcPackage.open(data).to_bytes(recompress=True) == _held(data).to_bytes()

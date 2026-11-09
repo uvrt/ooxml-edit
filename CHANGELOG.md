@@ -4,6 +4,22 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet. Each vers
 reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
 earlier ones were never tagged.
 
+## 0.101.0 -- unreleased
+- **A save copies untouched parts as their compressed entries** (round 46; the user's
+  choice, 2026-11-09). `write`, `save` and `to_bytes` write a part that is still what was
+  read as its entry's compressed data, as it is -- never inflated or compressed again --
+  under a header made anew: the entry's method (stored, deflated, bzip2, LZMA: ooxml-common
+  0.45.0's `PartStore.compressed`), sizes and CRC-32 in it, no data descriptor, no extra
+  field (ZIP64's where a size or offset needs it), the flags that describe the data, the
+  name's UTF-8 flag. An edited, added or replaced part is compressed as before. Saving a
+  workbook with a 534 MB sheet (70 MB file) no longer inflates and deflates every part:
+  MEASURED. The archive differs from before where the file read was compressed otherwise
+  than zlib compresses (Office's own deflate): every part reads back the same, and
+  zipfile's `testzip` and Info-ZIP's `unzip -t` pass (`tests/test_opc_compressed.py`, with
+  data descriptors, extra fields, a ZIP64 local header, stored and bzip2 entries and a
+  UTF-8 name). `recompress=True` (a host's choice; no tool sets it) writes as before
+  0.101.0: every part compressed again, the bytes of before. Requires ooxml-common 0.45.0.
+
 ## 0.99.0 -- unreleased
 - **Parts stay compressed until they are edited** (production round 46: a workbook with a
   534 MB sheet in a 70 MB file took 1.25 GB open). An
