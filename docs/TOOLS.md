@@ -70,7 +70,7 @@ Calls on one document run one at a time in the order the model emitted them; cal
 different documents run concurrently. A mutating call is one undo step, and a failed one
 changes nothing.
 
-**Reads of the committed version (round 45, R64, 0.96.0).** Where a format copies its
+**Reads of the committed version (round 45, R64, 0.97.0).** Where a format copies its
 documents (`DocumentFormat.read_copy`; docx-agent's Word documents), a changing call keeps
 the version it leaves as committed before it lets the document's lock go
 (`DocumentEntry.commit`), and a reading call -- `check`, `render`, a read tool, a
