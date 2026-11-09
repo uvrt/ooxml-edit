@@ -126,6 +126,13 @@ class Result:
     #: that limit and which fitted them into ``Limits.max_read_batch_chars`` itself (round
     #: 32, R15).  ``None``: the sender's limit.  Never in :meth:`to_json`.
     budget: int | None = None
+    #: Set by the dispatcher, for the application (round 45, lane B) -- never in
+    #: :meth:`to_json`: how a changing call ran on a draft of its document
+    #: (:mod:`.blocks`): ``tries`` (drafts prepared), ``conflicts`` (why each draft that
+    #: did not apply did not: another call's change came first) and, when it ran on the
+    #: document under its lock after all, ``lock`` (why).  ``None``: it did not run on a
+    #: draft.  A result with ``data.timing`` also says ``redo`` there, from one up.
+    block: dict[str, Any] | None = None
 
     @classmethod
     def failure(cls, error: ToolError, **fields: Any) -> "Result":

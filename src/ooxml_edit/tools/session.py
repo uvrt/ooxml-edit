@@ -27,8 +27,15 @@ the document, never the copy -- nor an edit for a read.  A caller's own change i
 before its call returns, so its next read sees it.  The copy shares the document's caches
 (keyed by version: equal versions are equal content) and call log, and is never changed.
 A changing call's checks run on the copy of the version it made, after it let the lock go
-(:class:`~.dispatch.After`), so the next edit does not wait for them either.  Edits of one
-document still run one at a time, under its lock.
+(:class:`~.dispatch.After`), so the next edit does not wait for them either.
+
+Edits of different blocks (round 45, lane B).  Where a format says how
+(:attr:`DocumentFormat.blocks`, :mod:`.blocks`), a changing call it admits runs on a draft of
+the committed version without the document's lock, and its change is applied under the lock
+when what it read is as it was (else it is prepared again): edits of other blocks run beside
+it.  The dispatcher counts every change it makes by its parts (:meth:`DocumentEntry.
+note_change`), and the calls in flight on each document (:meth:`DocumentEntry.enter`).
+Other edits of one document run one at a time, under its lock.
 
 Fonts.  :attr:`Session.font_dirs` is the application's own font folders, for every render
 and every measurement of text the session's documents make: application configuration,
@@ -321,6 +328,14 @@ class DocumentFormat:
     #: (:meth:`Session.read_lock`) and never wait for an edit in flight; the copy is never
     #: changed.  ``None``: reads take the document's lock, as before.
     read_copy: Callable[[Any], Callable[[bytes], Any]] | None = None
+    #: Round 45 (lane B): edits of different blocks of one document at the same time -- a
+    #: :class:`~.blocks.BlockEdits`: which calls may be prepared on a draft (an editable
+    #: copy of the committed version, :attr:`read_copy`'s), what such a call changed (a
+    #: patch), whether the patch still applies to the document as it is now, and applying
+    #: it, under the document's lock, as the change the call would have made there
+    #: (:mod:`.blocks` says how, and what is checked).  ``None``: every changing call takes
+    #: the document's lock for its whole run, as before.
+    blocks: Any = None
 
 
 #: :attr:`DocumentEntry.render_keys` and :attr:`DocumentEntry.font_keys`, in entries.
@@ -504,6 +519,21 @@ class DocumentEntry:
     #: A reader's (:meth:`reader`): the version it is of, and the entry it reads for.
     pinned: int | None = field(default=None, repr=False)
     live: "DocumentEntry | None" = field(default=None, repr=False)
+    #: Round 45 (lane B): the calls naming this document that are running now, this one
+    #: included (``Toolbox`` counts them, :meth:`enter`): with another one running, a
+    #: changing call the format admits is prepared on a draft (:mod:`.blocks`).
+    in_flight: int = field(default=0, repr=False)
+    _flight_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    #: Round 45 (lane B): the changes the dispatcher made to the document, counted
+    #: (:meth:`note_change`): the count, the version the last one left, and each part's
+    #: count when it last changed -- what a patch prepared on an earlier version checks
+    #: (:meth:`parts_changed_since`).  ``_all_changed``: the count at which a change the
+    #: dispatcher did not see (the application's own, through the library) was found:
+    #: every part may have changed then.
+    change_seq: int = field(default=0, repr=False)
+    change_version: int | None = field(default=None, repr=False)
+    part_stamps: dict[str, int] = field(default_factory=dict, repr=False)
+    _all_changed: int = field(default=0, repr=False)
 
     @property
     def history(self) -> Any:
@@ -549,7 +579,58 @@ class DocumentEntry:
             return
         self.committed = Committed(version, data, make, dict(self.refs),
                                    dict(self.ref_states.get(version, self.refs)),
-                                   tracking=self.tracking, owners=dict(self.owners))
+                                   tracking=self.tracking, owners=dict(self.owners),
+                                   seq=self.change_seq)
+
+    # -- calls in flight, and the changes made (round 45, lane B) ---------------------------
+
+    def enter(self) -> int:
+        """Count a call naming this document as running; how many run now, it included."""
+        with self._flight_lock:
+            self.in_flight += 1
+            return self.in_flight
+
+    def leave(self) -> None:
+        """The call :meth:`enter` counted has ended."""
+        with self._flight_lock:
+            self.in_flight -= 1
+
+    def note_change(self, parts: Iterable[str] | None, before: int | None) -> None:
+        """Count a change the dispatcher made, under the document's lock: ``parts`` the
+        parts whose bytes it changed (``None``: not known -- every part), ``before`` the
+        version the document had when the call began.  A version then that is not the one
+        the last counted change left means a change the dispatcher did not make came
+        between (the application's, through the library): every part may have changed."""
+        self.change_seq += 1
+        if parts is None or before != self.change_version:
+            self._all_changed = self.change_seq
+        for part in parts or ():
+            self.part_stamps[part] = self.change_seq
+        self.change_version = self.version
+
+    def parts_changed_since(self, seq: int) -> frozenset[str] | None:
+        """The parts the counted changes after count ``seq`` changed, under the document's
+        lock; ``None`` when that cannot be said -- a change the dispatcher did not make came
+        after it, or since the last counted one (the version is not the one it left)."""
+        if self._all_changed > seq or self.version != self.change_version:
+            return None
+        return frozenset(part for part, stamp in self.part_stamps.items() if stamp > seq)
+
+    def drafted(self, committed: "Committed", document: Any) -> "DocumentEntry":
+        """An entry for a draft of this document (:mod:`.blocks`): ``document`` an editable
+        copy of the committed version, with the version's refs, owners and tracking, this
+        entry's retry keys, caches of its own (its versions are not the document's) and
+        its own lock.  Calls run on it as on the document; nothing in it is the session's
+        until the dispatcher applies its change to the document."""
+        entry = DocumentEntry(
+            doc_id=self.doc_id, kind=self.kind, name=self.name, source=self.source,
+            document=document, size=self.size, font_dirs=self.font_dirs, locale=self.locale,
+            baseline_problems=self.baseline_problems, tracking=committed.tracking,
+            render_cache=LRU(1), check_cache=LRU(1), render_keys=LRU(16), font_keys=LRU(16),
+            keys=dict(self.keys), refs=dict(committed.refs), owners=dict(committed.owners))
+        entry.ref_states[committed.version] = dict(committed.ref_state)
+        entry._snapshot = (committed.version, committed.data)
+        return entry
 
     def reader(self) -> "DocumentEntry | None":
         """The entry reads work on: a copy of the document at its committed version, when
@@ -694,10 +775,14 @@ class Committed:
     def __init__(self, version: int, data: bytes, make: Callable[[bytes], Any],
                  refs: dict[str, str], ref_state: dict[str, str], *,
                  tracking: dict[str, Any] | None = None,
-                 owners: dict[int, StepOwner] | None = None) -> None:
+                 owners: dict[int, StepOwner] | None = None, seq: int = 0) -> None:
         self.version = version
         self.tracking = tracking
         self.owners = owners or {}
+        #: The document's change count (:attr:`DocumentEntry.change_seq`) when this version
+        #: was committed: a patch prepared on it checks the parts changed since
+        #: (:meth:`DocumentEntry.parts_changed_since`).
+        self.seq = seq
         self.data = data
         self.make = make
         self.refs = refs
@@ -955,6 +1040,7 @@ class Session:
                 check_cache=LRU(self.limits.check_cache_size))
             entry = self.documents[doc_id]
             entry.ref_states[entry.version] = {}
+            entry.change_version = entry.version
         return doc_id
 
     def _counted_id(self) -> str:

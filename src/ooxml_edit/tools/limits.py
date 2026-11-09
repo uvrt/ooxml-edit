@@ -66,6 +66,10 @@ class Limits:
     soft_deadline: float = 10.0
     #: The whole of one ``batch`` call: its ops and the checks after them.
     batch_timeout: float = 120.0
+    #: Round 45 (lane B): how many times a changing call is prepared on a draft of its
+    #: document (:mod:`.blocks`) when another call's change comes first, before it runs on
+    #: the document under its lock for its whole run -- which then always ends.
+    block_tries: int = 3
     #: Starting one worker process and warming it (its imports, the renderers' font
     #: index), apart from any call's deadline.
     worker_start_timeout: float = 120.0

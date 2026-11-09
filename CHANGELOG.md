@@ -4,6 +4,36 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet. Each vers
 reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
 earlier ones were never tagged.
 
+## 0.98.0 -- unreleased
+- **Edits of different blocks of one document run at the same time** (production round 45,
+  R64 stage 3; `ooxml_edit.tools.blocks`). A format may say how
+  (`DocumentFormat.blocks`, a `BlockEdits`: docx-agent's Word documents): a changing call it
+  admits runs on a *draft* -- an editable copy of the last committed version -- with no lock
+  of the document held, so calls on other blocks run beside it; then, under the document's
+  lock and briefly, the format checks that what the call read and changed is as it was
+  (`BlockEdits.check`: its blocks and those around them, the facts of the whole document it
+  used, every other part unchanged since -- each change the dispatcher makes is counted by
+  its parts, `DocumentEntry.note_change`, `parts_changed_since`), the dispatcher checks what
+  it read of the session (refs, a retry key, its datasets, tracking), and the patch is
+  applied as the call's own undo step and version (`BlockEdits.apply`, `settle`), its ids
+  renamed where another call drew them first. Another call's change first is a conflict: the
+  call is prepared again, at most `Limits.block_tries` (3) times, then runs under the lock
+  for its whole run, as calls a format does not admit (whole-document calls, session tools,
+  reads of other documents) always do. Serializable: a committed call's result and change are
+  those of the same call run alone at the moment it committed. A batch's reads after its last
+  change read the version it made; its checks run on it (`After`); what each op changed
+  (`touched_by_op`) is read from the document (`BlockEdits.replay_changes`).
+  `Toolbox(block_edits="auto")` -- the default -- drafts a call only while another call names
+  the same document, so one caller's calls run exactly as before; `"always"` (tests),
+  `"off"`. `Result.block` (for the application, never the model) says how a call ran on a
+  draft: its tries, each conflict's reason, why it took the lock; a result with
+  `data.timing` says `redo` there. `OpcPackage.set_tree` installs a part's new tree.
+  tests/test_tools_block_edits.py (a toy format: commit order, conflicts and tries, the
+  lock past them, refusals of the committed version, retry keys, datasets made on a draft,
+  the change count, many callers).
+- A source argument a strict decoder filled with `""` (a table cell's `from` beside its
+  text) is no source: the dispatcher no longer refuses it as an address (round 45, lane D).
+
 ## 0.97.0 -- unreleased
 - **Reads never wait for an edit in flight; an edit holds a document only while it changes
   it** (production round 45, R64 stages 1 and 2; twelve agents on one document waited for
