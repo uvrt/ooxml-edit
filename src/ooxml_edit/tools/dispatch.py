@@ -1655,6 +1655,7 @@ class Toolbox:
                 keys = set(drafted.keys)
                 drafting = _Drafting()
                 after = After()
+                spent = time.thread_time()
                 try:
                     with drafted.lock:
                         result = self._run(session, tool, dict(clean), {doc: drafted}, drafted, (),
@@ -1669,6 +1670,9 @@ class Toolbox:
                         stats["lock"] = "failed on its draft"
                         return None     # not the call's own refusal: run it as before
                     return Result.failure(mapped, version=committed.version), {doc: entry}, entry
+                # Its preparation's own CPU (the thread's: what it would cost again).
+                spent = time.thread_time() - spent
+                stats["cpu"] = round(stats.get("cpu", 0.0) + spent, 3)
                 context = drafting.context
                 if not drafting.local or context is None:
                     stats["lock"] = "not a patch: datasets made, or work on the whole document"
@@ -1723,6 +1727,10 @@ class Toolbox:
                             return None
                     if plan is None:
                         stats["conflicts"].append(reason)
+                        if spent > session.limits.block_redo_cpu:
+                            # A long preparation is not made again: once more, under the lock.
+                            stats["lock"] = "a conflict after a long preparation"
+                            return None
                         continue        # its lock let go: prepared again, on what is committed now
                     version = entry.version
                     before = entry.snapshot()

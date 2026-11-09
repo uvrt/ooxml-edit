@@ -17,7 +17,9 @@ earlier ones were never tagged.
   it read of the session (refs, a retry key, its datasets, tracking), and the patch is
   applied as the call's own undo step and version (`BlockEdits.apply`, `settle`), its ids
   renamed where another call drew them first. Another call's change first is a conflict: the
-  call is prepared again, at most `Limits.block_tries` (3) times, then runs under the lock
+  call is prepared again, at most `Limits.block_tries` (3) times -- once only after a
+  preparation of more than `Limits.block_redo_cpu` (2 s) of its thread's CPU, so a long
+  call costs at most one run more -- then runs under the lock
   for its whole run, as calls a format does not admit (whole-document calls, session tools,
   reads of other documents) always do. Serializable: a committed call's result and change are
   those of the same call run alone at the moment it committed. A batch's reads after its last
@@ -26,7 +28,7 @@ earlier ones were never tagged.
   `Toolbox(block_edits="auto")` -- the default -- drafts a call only while another call names
   the same document, so one caller's calls run exactly as before; `"always"` (tests),
   `"off"`. `Result.block` (for the application, never the model) says how a call ran on a
-  draft: its tries, each conflict's reason, why it took the lock; a result with
+  draft: its tries, its drafts' CPU, each conflict's reason, why it took the lock; a result with
   `data.timing` says `redo` there. `OpcPackage.set_tree` installs a part's new tree.
   tests/test_tools_block_edits.py (a toy format: commit order, conflicts and tries, the
   lock past them, refusals of the committed version, retry keys, datasets made on a draft,

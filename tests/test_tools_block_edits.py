@@ -17,7 +17,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from ooxml_edit.tools import Dataset, Result, Toolbox, ToolError, array, integer, obj, shared, string, tool
+from ooxml_edit.tools import Dataset, Result, Toolbox, ToolError, array, integer, number, obj, shared, string, tool
 from ooxml_edit.tools.blocks import BlockConflict, token_renamer, renamed
 from ooxml_edit.tools.limits import Limits
 from ooxml_edit.xml import make
@@ -43,9 +43,13 @@ def block_add(call, doc, text, stall=0, key=None):
 
 @tool("toy_block_first", "Test only: put an item first; say how many there are.",
       {"doc": string("Document id."), "text": string("The item."),
-       "stall": integer("Seconds.", minimum=0, optional=True)},
+       "stall": integer("Seconds.", minimum=0, optional=True),
+       "burn": number("Seconds of CPU.", minimum=0, optional=True)},
       kind="docx", mutates=True)
-def block_first(call, doc, text, stall=0):
+def block_first(call, doc, text, stall=0, burn=0):
+    started = time.thread_time()
+    while time.thread_time() - started < burn:
+        sum(range(1000))
     if stall:
         time.sleep(stall)
     call.document.insert(text, "start")
@@ -146,6 +150,11 @@ def _open(box):
     return session, session.open(synthetic.outer_package(), "notes.docx")
 
 
+def _shape(block):
+    """``Result.block`` less ``cpu`` (the drafts' own preparation time)."""
+    return {key: value for key, value in (block or {}).items() if key != "cpu"}
+
+
 def _thread(fn):
     out: dict = {}
     thread = threading.Thread(target=lambda: out.setdefault("result", fn()))
@@ -169,7 +178,7 @@ def test_an_admitted_call_runs_on_a_draft_and_its_change_is_one_step_of_its_own(
         view = session.view(context={"agent": "a"})
         before = session.entry(doc).version
         result = box.dispatch(view, "toy_block_add", {"doc": doc, "text": "one"})
-        assert result.ok and result.block == {"tries": 1, "conflicts": []}
+        assert result.ok and _shape(result.block) == {"tries": 1, "conflicts": []}
         entry = session.entry(doc)
         assert entry.document.items()[-1] == "one" and result.version == entry.version == before + 1
         assert entry.owners[entry.version].tool == "toy_block_add"
@@ -195,7 +204,7 @@ def test_an_edit_on_a_draft_does_not_hold_up_another_edit():
         thread.join()
         assert fast.ok and took < STALL - 0.5, f"the edit waited {took:.1f} s"
         result = slow["result"]
-        assert result.ok and result.block == {"tries": 1, "conflicts": []}
+        assert result.ok and _shape(result.block) == {"tries": 1, "conflicts": []}
         items = session.entry(doc).document.items()
         assert items[-2:] == ["fast", "slow"]                     # the commit order
         assert result.version == fast.version + 1
@@ -228,8 +237,27 @@ def test_past_its_tries_a_call_runs_on_the_document_under_its_lock():
         assert box.dispatch(session, "toy_block_add", {"doc": doc, "text": "meanwhile"}).ok
         thread.join()
         result = slow["result"]
-        assert result.ok and result.block == {"tries": 1, "conflicts": ["the items changed"],
+        assert result.ok and _shape(result.block) == {"tries": 1, "conflicts": ["the items changed"],
                                               "lock": "conflicts"}
+        assert session.entry(doc).document.items()[0] == "first"
+
+
+def test_a_conflict_after_a_long_preparation_takes_the_lock_at_once():
+    """Its preparation past ``Limits.block_redo_cpu`` seconds of its thread's CPU, a conflict
+    sends the call to the document's lock instead of preparing it again: once more, not
+    ``block_tries`` times.  A short one is prepared again as before."""
+    box, _hook = _box("always", limits=Limits(block_redo_cpu=0.3))
+    with box:
+        session, doc = _open(box)
+        thread, slow = _thread(lambda: box.dispatch(session, "toy_block_first",
+                                                    {"doc": doc, "text": "first", "burn": 0.6, "stall": STALL}))
+        time.sleep(0.3 + 0.6)
+        assert box.dispatch(session, "toy_block_add", {"doc": doc, "text": "meanwhile"}).ok
+        thread.join()
+        result = slow["result"]
+        assert result.ok and _shape(result.block) == {"tries": 1, "conflicts": ["the items changed"],
+                                                      "lock": "a conflict after a long preparation"}
+        assert result.block["cpu"] >= 0.6
         assert session.entry(doc).document.items()[0] == "first"
 
 
@@ -268,7 +296,7 @@ def test_a_batchs_reads_after_its_last_change_read_the_version_it_made():
         result = box.dispatch(session, "batch", {"ops": [
             {"tool": "toy_block_add", "arguments": {"doc": doc, "text": "batched"}},
             {"tool": "toy_word_read", "arguments": {"doc": doc}}]})
-        assert result.ok and result.block == {"tries": 1, "conflicts": []}, result.to_json()
+        assert result.ok and _shape(result.block) == {"tries": 1, "conflicts": []}, result.to_json()
         read = result.data["ops"][1]
         assert "batched" in read["data"] and "version" not in read
         assert result.version == session.entry(doc).version

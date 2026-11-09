@@ -70,6 +70,12 @@ class Limits:
     #: document (:mod:`.blocks`) when another call's change comes first, before it runs on
     #: the document under its lock for its whole run -- which then always ends.
     block_tries: int = 3
+    #: Round 45 (lane B): a draft whose preparation took more than this many seconds of its
+    #: thread's CPU is not prepared again after a conflict: the call takes the document's
+    #: lock at once, so what it costs again is one run, not ``block_tries`` of them.  2 s is
+    #: about ten times a usual edit's preparation (0.1-0.2 s of CPU on a 60-page report);
+    #: a fill of hundreds of rows or a long Markdown passes it.
+    block_redo_cpu: float = 2.0
     #: Starting one worker process and warming it (its imports, the renderers' font
     #: index), apart from any call's deadline.
     worker_start_timeout: float = 120.0

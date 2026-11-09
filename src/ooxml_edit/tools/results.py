@@ -128,7 +128,7 @@ class Result:
     budget: int | None = None
     #: Set by the dispatcher, for the application (round 45, lane B) -- never in
     #: :meth:`to_json`: how a changing call ran on a draft of its document
-    #: (:mod:`.blocks`): ``tries`` (drafts prepared), ``conflicts`` (why each draft that
+    #: (:mod:`.blocks`): ``tries`` (drafts prepared), ``cpu`` (their preparation's CPU, s), ``conflicts`` (why each draft that
     #: did not apply did not: another call's change came first) and, when it ran on the
     #: document under its lock after all, ``lock`` (why).  ``None``: it did not run on a
     #: draft.  A result with ``data.timing`` also says ``redo`` there, from one up.
