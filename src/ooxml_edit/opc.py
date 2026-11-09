@@ -49,6 +49,37 @@ RELS_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
 #: A part kept compressed that is larger than this is parsed from its stream (the same
 #: tree), never inflated whole first.
 PARSE_STREAMED = 1 << 20
+#: An untouched part larger than this is saved a piece at a time -- where the compressor
+#: writes the same bytes for a part given in pieces as given whole
+#: (:func:`pieces_compress_alike`); else, and for a smaller part, it is inflated whole and
+#: written as before.
+SAVE_STREAMED = 1 << 20
+
+_ALIKE: "bool | None" = None
+
+
+def pieces_compress_alike() -> bool:
+    """Whether this Python's deflate writes the same bytes for data given in pieces as
+    given at once, as zlib does (its output does not depend on how its input is split
+    without a flush).  zlib-ng -- CPython's own on Windows from 3.14, and some systems'
+    zlib -- does not: there a part is compressed whole, so the bytes saved are always
+    those of before.  Tried once, on made-up XML."""
+    global _ALIKE
+    if _ALIKE is None:
+        import random
+        import zlib
+
+        rng = random.Random(46)
+        sample = b"".join(b'<row r="%d"><c r="A%d" s="%d"><v>%d</v></c></row>'
+                          % (n, n, rng.randrange(9), rng.randrange(10 ** 6))
+                          for n in range(4_000))
+        whole = zlib.compressobj(zlib.Z_DEFAULT_COMPRESSION, zlib.DEFLATED, -15)
+        expected = whole.compress(sample) + whole.flush()
+        pieces = zlib.compressobj(zlib.Z_DEFAULT_COMPRESSION, zlib.DEFLATED, -15)
+        got = b"".join(pieces.compress(sample[k:k + 65_536])
+                       for k in range(0, len(sample), 65_536)) + pieces.flush()
+        _ALIKE = got == expected
+    return _ALIKE
 
 
 @dataclass(frozen=True)
@@ -912,8 +943,11 @@ class OpcPackage:
                 untouched = None
                 if data is None and path not in self._dirty:
                     stored = self._parts.stored(path)
-                    if isinstance(stored, ZipPart):
+                    if isinstance(stored, ZipPart) and stored.size > SAVE_STREAMED \
+                            and pieces_compress_alike():
                         untouched = stored
+                    elif isinstance(stored, ZipPart):
+                        data = stored.read()
                     else:
                         data = stored
                 elif data is None:

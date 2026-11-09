@@ -12,7 +12,7 @@ import zipfile
 import pytest
 
 from ooxml_common.zipparts import ZipPart
-from ooxml_edit.opc import OpcPackage
+from ooxml_edit.opc import OpcPackage, pieces_compress_alike
 from ooxml_edit.history import History
 
 import synthetic
@@ -85,11 +85,19 @@ def test_saved_bytes_are_those_of_every_part_held_inflated(data, edit):
         assert compressed == OpcPackage.open(data).to_bytes()
 
 
+@pytest.mark.skipif(not pieces_compress_alike(),
+                    reason="this deflate writes other bytes for pieces: parts are saved whole")
 def test_an_untouched_part_is_saved_without_being_inflated_whole(data, monkeypatch):
     data = _with_big_part(data)
     package = OpcPackage.open(data)
     expected = _held(data).to_bytes()
-    monkeypatch.setattr(ZipPart, "read", lambda self: pytest.fail(f"{self.name} read whole"))
+    original = ZipPart.read
+
+    def small_only(self):
+        assert self.size <= 1 << 20, f"{self.name} read whole"
+        return original(self)
+
+    monkeypatch.setattr(ZipPart, "read", small_only)
     assert package.to_bytes() == expected
 
 
@@ -209,3 +217,14 @@ def test_a_large_part_is_parsed_from_its_stream_to_the_same_tree(data, monkeypat
     root.set("changed", "1")
     package.mark_dirty("doc/big.xml")
     assert b'changed="1"' in package.read("doc/big.xml")
+
+
+@pytest.mark.parametrize("alike", [True, False])
+def test_saved_bytes_are_the_same_whichever_way_a_part_is_compressed(data, monkeypatch, alike):
+    """Where pieces compress otherwise (zlib-ng), a part is inflated whole and written as
+    before; either way the bytes are those of every part held inflated."""
+    from ooxml_edit import opc
+
+    data = _with_big_part(data)
+    monkeypatch.setattr(opc, "_ALIKE", alike)
+    assert OpcPackage.open(data).to_bytes() == _held(data).to_bytes()

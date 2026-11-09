@@ -15,9 +15,12 @@ earlier ones were never tagged.
   more than once, or from an offset). `tree` parses a part over 1 MB
   (`opc.PARSE_STREAMED`) as it is inflated -- the same tree, never the part's bytes held
   whole beside it -- and `xml.parse_xml` takes a binary file for that. `write` copies an
-  untouched part through 64 KB at a time (the bytes written are those of before: the size
-  set first, as `writestr` sets it, and the compressor fed the same bytes in pieces; checked
-  against every part held inflated, `tests/test_opc_compressed.py`). Undo, redo, `opened`
+  untouched part over 1 MB (`opc.SAVE_STREAMED`) through 64 KB at a time -- the size set
+  first, as `writestr` sets it -- where this Python's deflate writes the same bytes for
+  pieces as for the whole (zlib; `opc.pieces_compress_alike`, tried once); with zlib-ng
+  (CPython's on Windows from 3.14), which does not, and for smaller parts, the part is
+  inflated whole and written as before. The bytes saved are those of before either way
+  (checked against every part held inflated, `tests/test_opc_compressed.py`). Undo, redo, `opened`
   and the scoped snapshots keep the entries (`PackageSnapshot.raw` may hold a `ZipPart`;
   `changed_between` compares two of the same entry without inflating it); duplicates and
   orphans are sized without inflating. A part's data is checked as it is inflated
