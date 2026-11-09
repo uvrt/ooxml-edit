@@ -4,7 +4,7 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet. Each vers
 reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
 earlier ones were never tagged.
 
-## 0.98.0 -- unreleased
+## 0.99.0 -- unreleased
 - **Edits of different blocks of one document run at the same time** (production round 45,
   R64 stage 3; `ooxml_edit.tools.blocks`). A format may say how
   (`DocumentFormat.blocks`, a `BlockEdits`: docx-agent's Word documents): a changing call it
@@ -23,8 +23,10 @@ earlier ones were never tagged.
   for its whole run, as calls a format does not admit (whole-document calls, session tools,
   reads of other documents) always do. Serializable: a committed call's result and change are
   those of the same call run alone at the moment it committed. A batch's reads after its last
-  change read the version it made; its checks run on it (`After`); what each op changed
-  (`touched_by_op`) is read from the document (`BlockEdits.replay_changes`).
+  change read the version it made; its checks run on it (`After`); what it changed
+  (`touched`) and what each op changed (`touched_by_op`, `BlockEdits.replay_changes`) are
+  read from the document once applied, never from the draft (the document keeps what it
+  read of its earlier states, so only the blocks changed are read again).
   `Toolbox(block_edits="auto")` -- the default -- drafts a call only while another call names
   the same document, so one caller's calls run exactly as before; `"always"` (tests),
   `"off"`. `Result.block` (for the application, never the model) says how a call ran on a

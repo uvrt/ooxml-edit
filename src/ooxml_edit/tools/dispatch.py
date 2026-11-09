@@ -1750,8 +1750,7 @@ class Toolbox:
                     except Exception:  # noqa: BLE001 -- applied: the call is done, said in the log
                         logger.exception("settling a draft's patch of %s failed", doc)
                     rename = self._block_result(session, entry, hook, result, context, renames,
-                                                change, made_keys, turn, version, op_changes,
-                                                moved=version != committed.version)
+                                                change, made_keys, turn, version, op_changes)
                     entry.commit(fmt)
                     after.retarget(drafted, entry)
                     after.committed([entry])
@@ -1788,12 +1787,12 @@ class Toolbox:
     def _block_result(self, session: Session, entry: DocumentEntry, hook: Any, result: Result,
                       context: CallContext, renames: Mapping[str, str], change: Any,
                       made_keys: Mapping[tuple[str, str], Any], turn: "_Turn | None",
-                      version: int, op_changes: Sequence[tuple[int, str, Any]] | None = None,
-                      moved: bool = True) -> Callable[[Any], Any] | None:
+                      version: int, op_changes: Sequence[tuple[int, str, Any]] | None = None
+                      ) -> Callable[[Any], Any] | None:
         """A draft's result as the document's, its patch applied (under the lock): the ids
         it made under the names the document gave them, its refs and retry keys kept, its
-        version, what it changed (``touched``) read from the document (``moved``: another
-        change came between).  The renaming, for what a batch says once its reads after its
+        version, what it changed (``touched``, ``touched_by_op``) read from the document.
+        The renaming, for what a batch says once its reads after its
         last change are done (``None``: none)."""
         renames = {old: new for old, new in renames.items() if old != new}
         rename: Callable[[Any], Any] | None = None
@@ -1816,15 +1815,18 @@ class Toolbox:
         for key in made_keys:
             entry.keys[key] = result
         result.version = entry.version
-        if moved or renames:
-            # (Nothing committed since the draft's version, nothing renamed: the draft's
-            # change is the document's, and so is what it touched.)
-            result.touched = self._touched(session, entry, change)
+        # What it changed, read from the document (not from the draft: the document keeps
+        # what it read of its earlier states, so only the blocks changed are read again).
+        result.touched = self._touched(session, entry, change)
+        if op_changes is None and not renames:
+            # Not replayed (the body as the draft's, nothing renamed): each op's change on
+            # the draft is the document's.
+            op_changes = context.op_changes
         if op_changes is not None:
             # A batch's ops' changes as the document's (BlockEdits.replay_changes), read as
             # _batch_touched reads a batch's on the document.
             result.touched_by_op = {}
-            for op, _doc, found in op_changes:
+            for op, _doc, found in sorted(op_changes, key=lambda item: item[0]):
                 said = self._touched(session, entry, found)
                 if said:
                     result.touched_by_op.setdefault(op, []).extend(said)
@@ -2033,9 +2035,10 @@ class Toolbox:
                 drafting.local = False
             if result.ok and call.deferred:
                 self._do_deferred(tool.name, call.deferred, result)
-            if result.ok and primary is not None and not call.released:
+            if result.ok and primary is not None and not call.released and drafting is None:
                 # (A call that let its lock go -- a reading one, working on a snapshot --
-                # changes nothing, and another call's change meanwhile is not its.)
+                # changes nothing, and another call's change meanwhile is not its.  One on
+                # a draft: read from the document once its change is applied.)
                 result.touched = self._touched(session, primary, change)
             _report_facts(call, result)
             if call.version_used is not None:
@@ -2502,7 +2505,9 @@ class Toolbox:
         combined.warnings.extend(caught)
         if changing:
             self._batch_checks(session, entries, context, combined, after)
-        self._batch_touched(session, entries, changes, context, combined)
+        if drafting is None:
+            # (On a draft: read from the document once the change is applied.)
+            self._batch_touched(session, entries, changes, context, combined)
         if primary is not None:
             combined.version = primary.version
 
@@ -2687,7 +2692,9 @@ class Toolbox:
             if primary is not None:
                 combined.version = primary.version
         # What each op changed is settled: the reads after the last change change nothing.
-        self._batch_touched(session, entries, changes, context, combined)
+        # (On a draft: read from the document once the change is applied.)
+        if drafting is None:
+            self._batch_touched(session, entries, changes, context, combined)
         caught_first = list(caught)
 
         def rest(readable: Mapping[str, DocumentEntry],

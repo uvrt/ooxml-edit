@@ -84,7 +84,7 @@ another; edits of one document still run one at a time. A format without `read_c
 under the lock, as before. Saving refuses new validation problems unless the application (never the
 model) passes `allow_new_problems=True`.
 
-**Edits of different blocks at the same time (round 45, R64, 0.98.0).** Where a format says
+**Edits of different blocks at the same time (round 45, R64, 0.99.0).** Where a format says
 how (`DocumentFormat.blocks`, `ooxml_edit.tools.blocks`; docx-agent's Word documents), a
 changing call it admits, made while another call names the same document, runs on a draft --
 an editable copy of the last committed version -- without the document's lock, and its
