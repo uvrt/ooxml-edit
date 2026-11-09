@@ -4,7 +4,7 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet. Each vers
 reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
 earlier ones were never tagged.
 
-## 0.99.0 -- unreleased
+## 0.98.0 -- unreleased
 - **`column_index` takes only a column's letters** (production round 46, R77): one to three
   of `A` to `Z` (case aside) on the sheet's grid, `A` to `XFD`. Anything else -- `""`, a
   cell (`"A1"`, which gave 11), a `$`, spaces, other letters, a column past `XFD` (which
