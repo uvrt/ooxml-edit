@@ -13,7 +13,11 @@ producing library says the value came from (address strings, say).  The tool lay
 and hands them on, and never reads them.  ``keys`` says how many leading columns name a
 row; ``types`` is a label per column (:data:`TYPE_LABELS`, the ones the format libraries
 read; ``None`` for none); ``detail`` is anything else the producer keeps for itself (its
-own result object), which no other library should read.
+own result object), which no other library should read.  ``markdown`` gives, for a text
+value whose source holds more than its characters (rich text's bold and italic runs,
+lines that are list items), its Markdown: what a tool writing that one value as blocks
+writes, so a list stays a list (:meth:`Dataset.markdown_at`); everything else reads the
+value itself.
 
 **Made in Python.**  :meth:`Dataset.from_records` makes one of a list of mappings (or of
 tuples, with ``columns``) and labels its columns: ``types={"when": "date"}``.  A Python
@@ -187,8 +191,13 @@ class Dataset:
     module's notes); not compared.  ``formats``: each column's number format as its source
     shows it (an Office number format code, ``0.0``, ``0.0%``; ``None`` for General or
     none), ``None`` when the producer knows none -- what a check of numbers reads a
-    value's shown rounding from (:mod:`.numbers`); not compared.  :meth:`from_records` makes one of records, as Python
-    code has them.
+    value's shown rounding from (:mod:`.numbers`); not compared.  ``markdown``: the
+    Markdown of the text values whose source holds more than their characters -- a
+    source's rich text (bold, italic), lines that are list items -- by ``(row,
+    column)``, both from 0; no entry for a value that is its text.  What a tool writing
+    one text field as blocks writes (:meth:`markdown_at`); a reference inside a sentence,
+    a table cell and a check of numbers read the value itself.  Not compared.
+    :meth:`from_records` makes one of records, as Python code has them.
     """
 
     columns: tuple[str, ...]
@@ -199,6 +208,8 @@ class Dataset:
     detail: Any = field(default=None, compare=False, repr=False)
     cache: Mapping[str, int] | None = field(default=None, compare=False)
     formats: tuple[str | None, ...] | None = field(default=None, compare=False)
+    markdown: Mapping[tuple[int, int], str] | None = field(default=None, compare=False,
+                                                           repr=False)
 
     def __post_init__(self) -> None:
         columns = tuple(self.columns)
@@ -230,6 +241,7 @@ class Dataset:
                 raise ArgumentError("a dataset has a number format (a string, or None) per "
                                     "column")
             object.__setattr__(self, "formats", formats)
+        object.__setattr__(self, "markdown", _markdown(self.markdown, len(rows), len(columns)))
 
     @property
     def invalidated(self) -> bool:
@@ -305,6 +317,13 @@ class Dataset:
         at = self.index(name)
         return tuple(row[at] for row in self.rows)
 
+    def markdown_at(self, row: int, column: int) -> str | None:
+        """The Markdown of the value at ``row`` and ``column`` (both from 0) when its source
+        holds more than its text (:attr:`markdown`), else ``None``: the value is its text."""
+        if not self.markdown:
+            return None
+        return self.markdown.get((row, column))
+
     def records(self) -> list[dict[str, Any]]:
         """The rows as mappings by column name."""
         return [dict(zip(self.columns, row)) for row in self.rows]
@@ -324,9 +343,14 @@ class Dataset:
         if end > count:
             raise ArgumentError(f"the dataset has {count} rows; there is no row {end}")
         sources = None if self.sources is None else self.sources[first - 1:end]
+        markdown = None
+        if self.markdown:
+            markdown = {(row - first + 1, column): text
+                        for (row, column), text in self.markdown.items()
+                        if first - 1 <= row < end} or None
         return Dataset(self.columns, self.rows[first - 1:end], sources=sources,
                        keys=self.keys, types=self.types, cache=self.cache,
-                       formats=self.formats)
+                       formats=self.formats, markdown=markdown)
 
 
 def _cache(counts: Any) -> dict[str, int] | None:
@@ -348,6 +372,28 @@ def _cache(counts: Any) -> dict[str, int] | None:
             raise ArgumentError(f"a dataset's cache count is a whole number from 0, not {count!r}")
         if count:
             out[key] = count
+    return out or None
+
+
+def _markdown(given: Any, rows: int, columns: int) -> dict[tuple[int, int], str] | None:
+    """:attr:`Dataset.markdown` checked: a mapping of ``(row, column)`` (from 0, inside the
+    dataset) to text; ``None`` for none."""
+    if given is None:
+        return None
+    if not isinstance(given, Mapping):
+        raise ArgumentError("a dataset's markdown is a mapping of (row, column) to text")
+    out: dict[tuple[int, int], str] = {}
+    for place, text in given.items():
+        if not (isinstance(place, tuple) and len(place) == 2
+                and all(isinstance(n, int) and not isinstance(n, bool) for n in place)):
+            raise ArgumentError(f"a dataset's markdown is keyed by (row, column), not {place!r}")
+        row, column = place
+        if not (0 <= row < rows and 0 <= column < columns):
+            raise ArgumentError(f"a dataset's markdown names ({row}, {column}), outside its "
+                                f"{rows} rows and {columns} columns (from 0)")
+        if not isinstance(text, str):
+            raise ArgumentError("a dataset's markdown is text")
+        out[(row, column)] = text
     return out or None
 
 

@@ -4,6 +4,16 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet. Each vers
 reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
 earlier ones were never tagged.
 
+## 0.104.0 -- unreleased
+- **A dataset's text value may carry its Markdown** (round 48, R86): `Dataset.markdown`, by
+  `(row, column)` from 0, for a value whose source holds more than its characters -- a
+  cell's bold and italic runs, lines that are list items -- and `Dataset.markdown_at(row,
+  column)` (`None` for a value that is its text). The value itself is unchanged: a
+  reference inside a sentence, a table cell and a check of numbers read it; a tool writing
+  one text field as blocks writes the Markdown, so its lists stay lists. Checked (inside
+  the dataset, text), not compared, kept by `row_slice` for its rows, pickled with the
+  dataset. tests/test_tools_datasets.py.
+
 ## 0.103.0 -- unreleased
 - **"changed while this call read it" only when the change touched what the read covered**
   (round 47, the Word team's question). A handler that lets the locks go may say what of

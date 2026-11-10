@@ -162,6 +162,25 @@ def test_a_dataset_counts_the_formula_caches_its_values_came_from():
             Dataset(["k"], [(1,)], cache=bad)
 
 
+def test_a_dataset_keeps_the_markdown_of_its_rich_text_values():
+    """Round 48: a text value whose source holds more than its characters (a cell's bold
+    runs, its list lines) carries its Markdown beside it, by (row, column) from 0; a slice
+    keeps its rows' own, renumbered; it is not compared and pickles (sent to workers)."""
+    rows = [("a", "Plain"), ("b", "• one\n    • two"), ("c", "Bold note")]
+    data = Dataset(["k", "body"], rows, keys=1,
+                   markdown={(1, 1): "- one\n  - two", (2, 1): "**Bold** note"})
+    assert data.markdown_at(1, 1) == "- one\n  - two" and data.markdown_at(0, 1) is None
+    assert data.rows[1][1] == "• one\n    • two"            # the value itself is unchanged
+    assert data == Dataset(["k", "body"], rows, keys=1)        # not compared
+    assert data.row_slice(2).markdown == {(0, 1): "- one\n  - two", (1, 1): "**Bold** note"}
+    assert data.row_slice(1, 1).markdown is None and data.row_slice(1, 1).markdown_at(0, 1) is None
+    assert pickle.loads(pickle.dumps(data)).markdown == data.markdown
+    assert Dataset(["k"], [(1,)], markdown={}).markdown is None
+    for bad in ([1], {(3, 0): "x"}, {(0, 2): "x"}, {(0,): "x"}, {(0, 0): 1}, {(True, 0): "x"}):
+        with pytest.raises(ValueError):
+            Dataset(["k", "v"], [(1, 2)], markdown=bad)
+
+
 def test_a_dataset_from_invalidated_caches_is_stale_from_the_start_and_stays_so(toolbox,
                                                                                session):
     """Its values are as last saved, after an edit asked for a recalculation: no version
