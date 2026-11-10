@@ -4,6 +4,19 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet. Each vers
 reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
 earlier ones were never tagged.
 
+## 0.104.0 -- unreleased
+- **The application's own edits are committed** (round 48, R84). Letting `Session.lock` go
+  counts a change the application made through the library while holding it
+  (`DocumentEntry.count_outside`: the history's version against the one the last counted
+  change left; its parts from a history watch held with the lock, every part when a change
+  came before the lock was taken) and commits the version it left, even when the
+  block raised; `Session.commit(doc)` does the same without letting go. The next edit on a
+  draft drafts at once (before: three conflicts, "the document changed outside the tools",
+  then the whole-document lock); reads see the change without the lock. A lock held with
+  nothing changed keeps the version. Undo is as before (steps with no caller). A change
+  made without the lock stays unsupported (counted at the next lock let go, commit or
+  committing read). `tests/test_tools_host_edits.py`.
+
 ## Unreleased
 - **The free-threaded CI job fails instead of hanging for 6 hours** (round 47, lane H). On
   CPython 3.15.2t threads creating classes at the same time, as first imports in threads
