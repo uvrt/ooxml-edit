@@ -85,9 +85,13 @@ jobs:
             extras: dev,png
             pytest-args: -n auto
           - agent: xlsx-agent
+            # Its test extra takes docx-agent too (since xlsx-agent 0.1.34), as its own CI
+            # installs it.
             siblings: >-
               "pptx2svg @ git+https://github.com/uvrt/pptx2svg@main"
               "pptx-agent @ git+https://github.com/uvrt/pptx-agent@main"
+              "docx2svg @ git+https://github.com/uvrt/docx2svg@main"
+              "docx-agent @ git+https://github.com/uvrt/docx-agent@main"
             extras: test
             pytest-args: ""
 

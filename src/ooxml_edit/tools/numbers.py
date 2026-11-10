@@ -43,7 +43,13 @@ provenance).  In that text these are no figures and are left aside, counted by r
 * ``list numbers``: a paragraph's leading ``1.``, ``2)``, ``2.3`` before a capital;
 * ``ids``: digits joined to letters (``Q3``, ``CO2``, ``v2``, ``3D``), after ``#`` or
   ``§``, numbers of several dots (``2.1.3``), and a number named by the word before it
-  (``section 4.2``, ``page 12``, ``version 2.1``, ``hoofdstuk 3``);
+  (``section 4.2``, ``page 12``, ``version 2.1``, ``hoofdstuk 3``); and (round 49) the
+  digits of an identifier: a number joined by a hyphen to a token with a letter in it,
+  the token's parts joined by ``-``, ``.`` or ``_`` (``K7-12.3``, ``DOC-004.2``,
+  ``ab-cd-3.4``, ``M.4-2.7``: the ``12.3``, ``004.2``, ``3.4``, ``2.7``).  A hyphen
+  between numbers alone stays a range (``2-3.5``, ``3.4-3.9``: two numbers), and a word
+  after a number's hyphen keeps it a number (``a 12.5-hour shift``).  ``v2``: digits
+  right after a letter are never read as a number (the first rule);
 * ``whole``: whole numbers without a percent sign -- counts, item numbers -- unless the
   application asks for them (:attr:`NumberRules.whole_numbers`); with them, ``scales``:
   a whole number that is a score's scale (the ``5`` of ``2,7/5``, ``out of 5``);
@@ -248,6 +254,29 @@ _NAMING = re.compile(r"(?:\b(?:sections?|chapters?|pages?|pp?\.|figures?|fig\.|t
                      r"annex|appendix|hoofdstuk|paragraaf|pagina|p\.|figuur|tabel|versie|"
                      r"bijlage|artikel|stap|punt|kapitel|seite|abschnitt|chapitre|annexe)"
                      + _SPACE + r"?)$", re.IGNORECASE)
+#: The hyphens that join an identifier's parts (round 49): ASCII, U+2010 and Word's
+#: non-breaking hyphen U+2011.
+_JOINS = "-\u2010\u2011"
+
+
+def _identifier_part(text: str, start: int) -> bool:
+    """Whether the digits at ``start`` are a part of an identifier (round 49, R93): a hyphen
+    right before them, and before it a token -- letters, digits, ``.``, ``_`` and hyphens,
+    up to a space or other mark -- with a letter in it (``K7-12.3``, ``DOC-004.2``).  A
+    token of digits alone makes a range (``2-3.5``)."""
+    if start < 2 or text[start - 1] not in _JOINS:
+        return False
+    at = start - 2
+    while at >= 0:
+        char = text[at]
+        if char.isalpha():
+            return True
+        if not (char.isdigit() or char in "._" or char in _JOINS):
+            return False
+        at -= 1
+    return False
+
+
 #: What makes a whole number after a figure its scale: ``2,7/5``, ``3.8 out of 5``.
 _SCALE_AFTER = re.compile(r"\d" + _SPACE + r"?(?:/|out\s+of|op|van|sur|von)" + _SPACE + r"?$",
                           re.IGNORECASE)
@@ -324,6 +353,9 @@ def find_numbers(text: str, locale: Any, rules: NumberRules = DEFAULT_RULES,
             sign = ""                                  # a range 2-3, a word's hyphen
         span = (start - len(sign), end)
         if _inside(span, written):
+            continue
+        if not sign and _identifier_part(text, start):
+            aside_for("ids")                           # K7-12.3, DOC-004.2 (round 49)
             continue
         after = text[end:end + 1]
         if (after.isalpha() or after == "_") and _SCALE.match(text, end) is None:

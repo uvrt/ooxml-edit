@@ -201,6 +201,44 @@ def test_a_number_named_by_the_word_before_it_is_an_id():
     assert aside == {"ids": 4}
 
 
+# Round 49 (R93): an identifier's digits are text.
+
+
+def test_an_identifiers_digits_are_text_not_a_number():
+    found, aside = _read("K7-12.3, DOC-004.2 and ab-cd-3.4 hold M.4-2.7, x-1.5 and Lv2-0.8 "
+                         "(NET\u201112.5, SEC\u20109.75)", whole_numbers=True)
+    assert found == [] and aside == {"ids": 8}
+    found, aside = _read("Tickets PR-77 and BX-40 closed", whole_numbers=True)
+    assert found == [] and aside == {"ids": 2}
+
+
+def test_numbers_beside_an_identifier_are_still_read():
+    found, aside = _read("K7-12.3 rose to 12.5 % from 9.8 %; RQ-3.5 is 3.4 against 3.9")
+    assert [f[0] for f in found] == ["12.5 %", "9.8 %", "3.4", "3.9"]
+    assert aside == {"ids": 2}
+
+
+def test_a_hyphen_between_numbers_is_still_a_range_and_a_word_after_keeps_a_number():
+    found, aside = _read("between 2-3.5 and 3.4-3.9, a 12.5-hour shift, a 1.5-fold rise, "
+                         "-2.5 % and v2 with 3 items", whole_numbers=True)
+    assert [f[0] for f in found] == ["2", "3.5", "3.4", "3.9", "12.5", "1.5", "-2.5 %", "3"]
+    assert aside == {}                                 # v2: a letter's digits, never read
+
+
+def test_an_identifiers_digits_are_text_with_a_decimal_comma_too():
+    found, aside = _read("Le point K7-12.3 obtient 2,7 sur 5 ; x-1.5 baisse de -2,5 %", NL_BE)
+    assert [f[0] for f in found] == ["2,7", "-2,5 %"]
+    assert aside == {"ids": 2, "whole": 1}
+
+
+def test_an_identifiers_digits_match_no_value(toolbox):
+    # 2.66 (t:Scores/door/mean) would match "2.7" -- here an identifier's part.
+    session = _session(toolbox, {"s:256": [("256.2", "Doors under DX-2.7 rated 2.7", [])]})
+    data = numbers_of(check(toolbox, session, include=["numbers"]))
+    assert [entry["text"] for entry in data["texts"][0]["typed"]] == ["2.7"]
+    assert data["left_aside"] == {"ids": 1}
+
+
 def test_a_scores_scale_is_left_aside_with_whole_numbers_on():
     found, aside = _read("rated 2,7/5 and 3,8 op 5, kost van 12.500", NL_BE, whole_numbers=True)
     assert [f[0] for f in found] == ["2,7", "3,8", "12.500"]
