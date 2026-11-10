@@ -244,6 +244,12 @@ class Call:
         #: The version of the primary document the result describes, when the handler
         #: worked on a snapshot (:meth:`unlocked`); ``None``: the version after the call.
         self.version_used: int | None = None
+        #: Round 47 (lane B): what of the primary document the result is of, where the
+        #: handler says (a format's addresses: the blocks a ranged check read); ``None``: the
+        #: whole document.  Another call's change made while the locks were let go warns
+        #: that the document changed while this call read it only when it touched this
+        #: (the format's ``BlockEdits.touches``).
+        self.read_scope: Any = None
         #: The values the dispatcher wrote for references in the text arguments
         #: (``Tool.facts``), in order: each a :class:`~.textfacts.Fact` -- the argument,
         #: the value's place in its text as the handler gets it, and its record.
@@ -1748,6 +1754,11 @@ class Toolbox:
                                            roles=roles, caller=caller, after=after,
                                            drafting=drafting)
                 except ToolError as refused:
+                    if _drew(hook, draft):
+                        # It drew ids before it failed: under the lock it would consume them,
+                        # so later calls draw others -- it runs there instead (round 47).
+                        stats["lock"] = "drew ids, then failed"
+                        return None
                     # Refused on the committed version: of that version, nothing changed.
                     return Result.failure(refused, version=committed.version), {doc: entry}, entry
                 except Exception as exc:  # noqa: BLE001
@@ -1755,6 +1766,9 @@ class Toolbox:
                     if mapped.code == "internal":
                         stats["lock"] = "failed on its draft"
                         return None     # not the call's own refusal: run it as before
+                    if _drew(hook, draft):
+                        stats["lock"] = "drew ids, then failed"
+                        return None
                     return Result.failure(mapped, version=committed.version), {doc: entry}, entry
                 # Its preparation's own CPU (the thread's: what it would cost again).
                 spent = time.thread_time() - spent
@@ -1776,6 +1790,9 @@ class Toolbox:
                     if context.refs or made_keys:
                         stats["lock"] = "named or keyed, changing nothing"
                         return None     # (what it named is the document's: as before)
+                    if _drew(hook, draft):
+                        stats["lock"] = "drew ids, then changed nothing"
+                        return None     # (under the lock the ids drawn are spent: as before)
                     result.version = committed.version
                     after.retarget(drafted, entry)
                     after.keep(entry, committed)
@@ -1830,6 +1847,7 @@ class Toolbox:
                         logger.exception("applying a draft's patch to %s failed", doc)
                         stats["lock"] = "the patch did not apply"
                         return None
+                    entry.keep_change(version, change)
                     entry.note_change(change.parts if change is not None else None, version)
                     try:
                         hook.settle(entry.document, plan, touched=context.touched.setdefault(doc, []),
@@ -2115,8 +2133,10 @@ class Toolbox:
                 # Round 45 (lane B): every change counted, by its parts, for the patches
                 # prepared on an earlier version (DocumentEntry.parts_changed_since).
                 if change is None and changing:
+                    primary.keep_change(before.get(primary.doc_id), None)
                     primary.note_change(None, before.get(primary.doc_id))
                 elif change is not None and change.changed:
+                    primary.keep_change(before.get(primary.doc_id), change)
                     primary.note_change(change.parts, before.get(primary.doc_id))
             result = _as_result(returned, call.result)
             if drafting is not None and (call.deferred or context.datasets):
@@ -2138,7 +2158,9 @@ class Toolbox:
                 if (call.released and primary is not None
                         and now != call.version_used
                         and not (turn is not None and turn.explains(
-                            primary.doc_id, call.version_used, now, since))):
+                            primary.doc_id, call.version_used, now, since))
+                        and _changes_touch(session, primary.live or primary, call.version_used,
+                                           now, call.read_scope)):
                     result.warnings.append(moved_on(primary.doc_id, call.version_used, now))
             if changing and result.ok:
                 self._keep_refs(entries, context, [primary.doc_id] if primary else [])
@@ -2403,8 +2425,10 @@ class Toolbox:
         for doc in sorted(entries, key=doc_order):
             change = changes.get(doc)
             if change is None and doc in context.changed_at:
+                entries[doc].keep_change(before.get(doc), None)
                 entries[doc].note_change(None, before.get(doc))
             elif change is not None and change.changed:
+                entries[doc].keep_change(before.get(doc), change)
                 entries[doc].note_change(change.parts, before.get(doc))
 
     @staticmethod
@@ -3690,6 +3714,35 @@ class _Turn:
                         return False
                     version = end
             return version == now
+
+
+def _drew(hook: Any, draft: Any) -> bool:
+    """Whether a call on ``draft`` drew values from the document's sequences (ids) -- the
+    format's optional ``BlockEdits.drew``; one that cannot tell: no."""
+    drew = getattr(hook, "drew", None)
+    try:
+        return bool(drew(draft)) if drew is not None else False
+    except Exception:  # noqa: BLE001 -- cannot be told: run it under the lock, as before
+        return True
+
+
+def _changes_touch(session: Session, entry: DocumentEntry, used: int, now: int, scope: Any) -> bool:
+    """Whether the changes that took ``entry`` from version ``used`` to ``now`` touched what a
+    read covered (``scope``, :attr:`Call.read_scope`; ``None``: the whole document) -- by its
+    format's ``BlockEdits.touches``; anything that cannot be told did."""
+    if scope is None:
+        return True
+    hook = getattr(getattr(session.formats.get(entry.kind), "blocks", None), "touches", None)
+    if hook is None:
+        return True
+    changes = entry.changes_between(used, now)
+    if changes is None:
+        return True
+    try:
+        return any(change is None or hook(change, scope) for change in changes)
+    except Exception:  # noqa: BLE001 -- it cannot be told: it did
+        logger.exception("the %s format's touches failed", entry.kind)
+        return True
 
 
 def moved_on(doc: str, used: int, now: int) -> str:

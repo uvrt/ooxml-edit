@@ -105,7 +105,7 @@ import re
 import threading
 import time
 import uuid
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
 from os import PathLike, fspath
@@ -563,6 +563,11 @@ class DocumentEntry:
     change_version: int | None = field(default=None, repr=False)
     part_stamps: dict[str, int] = field(default_factory=dict, repr=False)
     _all_changed: int = field(default=0, repr=False)
+    #: Round 47 (lane B): the latest changes counted (:meth:`note_change`), each ``(version
+    #: before, version after, Change)`` -- ``None`` for one not known (the application's own,
+    #: through the library) -- for what a read learns changed since its version
+    #: (:meth:`changes_between`).  The history keeps the states they read.
+    changes_kept: deque = field(default_factory=lambda: deque(maxlen=CHANGES_KEPT), repr=False)
 
     @property
     def history(self) -> Any:
@@ -671,9 +676,22 @@ class DocumentEntry:
         with self._drafts_ended:
             now = time.monotonic()
             waiting = {token for token, since in self.drafts_in_flight.items() if now - since >= longer_than}
+            if not waiting:
+                return 0.0              # (none to wait for: no time said to be waited)
             while waiting & self.drafts_in_flight.keys():
                 self._drafts_ended.wait()
             return time.monotonic() - now
+
+    def keep_change(self, before: int | None, change: Any) -> None:
+        """Round 47: keep a change the dispatcher made (a :class:`~ooxml_edit.history.Change`,
+        ``None`` when not known), just before :meth:`note_change` counts it -- for what a read
+        learns changed since its version (:meth:`changes_between`).  A version when the call
+        began that is not the one the last counted change left: a change not known came
+        between."""
+        with self._flight_lock:
+            if before is not None and self.change_version is not None and before != self.change_version:
+                self.changes_kept.append((self.change_version, before, None))
+            self.changes_kept.append((before, self.version, change))
 
     def note_change(self, parts: Iterable[str] | None, before: int | None) -> None:
         """Count a change the dispatcher made, under the document's lock: ``parts`` the
@@ -687,6 +705,30 @@ class DocumentEntry:
         for part in parts or ():
             self.part_stamps[part] = self.change_seq
         self.change_version = self.version
+
+    def changes_between(self, used: int, now: int) -> list[Any] | None:
+        """The changes that took this document from version ``used`` to ``now`` (the
+        latest way there: equal versions are equal content), each a
+        :class:`~ooxml_edit.history.Change`, ``None`` for one not known; ``None`` when they
+        are not all kept (:attr:`changes_kept`), or ``now`` is not this document's version
+        then reached."""
+        if used == now:
+            return []
+        with self._flight_lock:
+            kept = list(self.changes_kept)
+        found: list[Any] = []
+        current = now
+        for before, after, change in reversed(kept):
+            if after != current:
+                continue
+            found.append(change)
+            if before is None:
+                return None
+            current = before
+            if current == used:
+                found.reverse()
+                return found
+        return None
 
     def parts_changed_since(self, seq: int) -> frozenset[str] | None:
         """The parts the counted changes after count ``seq`` changed, under the document's
@@ -934,6 +976,10 @@ class Committed:
                     ref_owners=dict(ref_owners))
         return again
 
+
+#: Changes kept per document for what a read learns changed since its version
+#: (:meth:`DocumentEntry.changes_between`, round 47).
+CHANGES_KEPT = 32
 
 _DOC_ID = re.compile(r"^d(\d+)$")
 #: The ids an application may give a document itself: ``d`` and a whole number from 1,

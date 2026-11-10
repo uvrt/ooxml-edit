@@ -4,6 +4,24 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet. Each vers
 reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
 earlier ones were never tagged.
 
+## 0.103.0 -- unreleased
+- **"changed while this call read it" only when the change touched what the read covered**
+  (round 47, the Word team's question). A handler that lets the locks go may say what of
+  the document its result is of (`Call.read_scope`, in its format's addresses: a ranged
+  check's blocks); the warning then comes only when a change made meanwhile touched it, as
+  the format's optional `BlockEdits.touches(change, scope)` tells. A read of the whole
+  document (no scope), a format that cannot tell, and changes no longer kept still warn on
+  any change. Each document keeps its latest changes (`DocumentEntry.changes_kept`, 32,
+  `keep_change` just before `note_change`; `changes_between(used, now)`, the way from one
+  version to the other). tests/test_tools_read_scope.py.
+- **A call that drew ids on its draft, then failed or changed nothing, runs under the lock**
+  (round 47, lane F's find): there, as before, what it drew is spent, so the calls after it
+  draw what they would have -- on the draft it was not, and their ids differed from the
+  calls run one at a time. The format says whether a draft drew (`BlockEdits.drew`,
+  optional; without it, as before); `Result.block` says `lock: "drew ids, then failed"`.
+- A call that takes the lock with no long draft in flight no longer reports a few
+  milliseconds as `waited` (the time to look, on a busy machine).
+
 ## 0.102.0 -- unreleased
 - **Refs at the committed version** (round 47, R79). `Session.read_refs` and
   `Session.read_resolve_ref` read a document's refs as `Session.read_lock` reads the

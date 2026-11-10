@@ -494,3 +494,23 @@ def test_renamed_replaces_whole_tokens_only():
 def test_block_edits_takes_auto_always_or_off():
     with pytest.raises(Exception):
         Toolbox(tools_toys.TOOLS, formats=tools_toys.FORMATS, block_edits="sometimes")
+
+
+def test_a_call_that_drew_ids_and_failed_runs_under_the_lock():
+    """Round 47: a call that drew from the document's sequences on its draft, then failed or
+    changed nothing, runs under the lock -- where, as before, what it drew is spent."""
+    class Drawing(ToyBlocks):
+        def drew(self, draft):
+            return True
+
+    box, hook = _box("always", Drawing())
+    with box:
+        session, doc = _open(box)
+        refused = box.dispatch(session, "toy_block_refuse", {"doc": doc})
+        assert not refused.ok and refused.error.code == "refused"
+        assert refused.block["lock"] == "drew ids, then failed" and hook.drafts == 1
+    box, hook = _box("always")                                  # one that cannot tell: as before
+    with box:
+        session, doc = _open(box)
+        refused = box.dispatch(session, "toy_block_refuse", {"doc": doc})
+        assert not refused.ok and "lock" not in (refused.block or {})
