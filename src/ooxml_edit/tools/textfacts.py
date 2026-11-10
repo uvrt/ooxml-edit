@@ -310,6 +310,7 @@ def expand(text: str, where: str, known: Sequence[str],
             out.append(literal)
             length += len(literal)
             continue
+        assert address is not None                # (only an escaped one may have none)
         count += 1
         if count > MAX_FACTS:
             raise ToolError("limit", f"more than {MAX_FACTS} references in one text",

@@ -20,6 +20,11 @@ from test_tools_textfacts import CLOCK, GRID, SAID, TOOLS, _session, failed, ok,
 KNOWN = ["d:", "t:"]
 
 
+@pytest.fixture(autouse=True)
+def _clear():
+    SAID.clear()
+
+
 @pytest.fixture
 def toolbox():
     with Toolbox(TOOLS, formats=[*tools_toys.FORMATS, GRID], groups=shared.GROUPS, workers=0) as box:
