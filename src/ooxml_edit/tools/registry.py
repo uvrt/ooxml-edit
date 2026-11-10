@@ -246,6 +246,11 @@ class Tool:
     #: (a function gets that object).
     aliases: Mapping[str, str | Callable[[Mapping[str, Any]], str | None]] = field(
         default_factory=dict)
+    #: Round 50 (R102): a required argument a call leaves out, read as this value -- the
+    #: safe one -- with a note, in a call and in a batch's op alike (a batch's ``arguments``
+    #: are free-form, so a model writing ops sees no field as required): ``replace_text``'s
+    #: ``expect`` is ``one``.  Still required in the definition, so a strict decoder sends it.
+    defaults: Mapping[str, Any] = field(default_factory=dict)
     #: The role a call needs (:data:`ROLES`), or :data:`ANY_ROLE`.  ``None``: ``edit`` for a
     #: changing tool (``mutates``), ``review`` for a reading one.
     role: str | None = None
@@ -510,7 +515,8 @@ class Tool:
             == {k: tuple(v) for k, v in other.kind_neutral.items()} \
             and tuple(self.sources) == tuple(other.sources) \
             and tuple(self.facts) == tuple(other.facts) \
-            and dict(self.aliases) == dict(other.aliases)
+            and dict(self.aliases) == dict(other.aliases) \
+            and dict(self.defaults) == dict(other.defaults)
 
     def merged(self, other: "Tool") -> "Tool":
         """One definition serving both tools' kinds: a shared tool two libraries implement."""
@@ -582,6 +588,9 @@ def definition_problems(tool: Tool) -> list[str]:
                 problems.append(f"exactly_one names {name!r}, which is not a parameter")
             elif name in required:
                 problems.append(f"exactly_one names {name!r}, which is required")
+    for name in tool.defaults:
+        if name not in required:
+            problems.append(f"defaults names {name!r}, which is not a required parameter")
     for alias, target in tool.aliases.items():
         *where, key = alias.split(".")
         container = _object_at(tool.schema, where)
@@ -700,7 +709,8 @@ def tool(name: str, description: str, params: Mapping[str, Param] | None = None,
          call_role: Callable[[Mapping[str, Any]], str | None] | None = None,
          review_core: bool = False,
          action_fields: Mapping[str, Sequence[str]] | None = None,
-         ahead: Handler | None = None) -> Callable[[Handler], Tool]:
+         ahead: Handler | None = None,
+         defaults: Mapping[str, Any] | None = None) -> Callable[[Handler], Tool]:
     """Make a :class:`Tool` of a handler.  ``kind`` restricts it to one document kind;
     ``reads`` marks the calls of a changing tool that only read (:attr:`Tool.reads`);
     ``aliases`` the argument names read as its own (:attr:`Tool.aliases`);
@@ -713,7 +723,8 @@ def tool(name: str, description: str, params: Mapping[str, Param] | None = None,
     take, left out for a role set offered none of them (:attr:`Tool.action_fields`);
     ``ahead`` the work a changing call does before its change, which may let the locks go
     (:attr:`Tool.aheads`); ``read_batchable`` lets ``read_batch`` run a tool ``batch``
-    refuses (:attr:`Tool.read_batchable`)."""
+    refuses (:attr:`Tool.read_batchable`); ``defaults`` the value a required argument left
+    out is read as (:attr:`Tool.defaults`)."""
 
     def make(handler: Handler) -> Tool:
         return Tool(name=name, description=description, schema=build_schema(params or {}),
@@ -725,7 +736,8 @@ def tool(name: str, description: str, params: Mapping[str, Param] | None = None,
                     action_roles=dict(action_roles or {}), call_role=call_role,
                     review_core=review_core,
                     action_fields={k: tuple(v) for k, v in (action_fields or {}).items()},
-                    aheads={kind: ahead} if ahead is not None else {})
+                    aheads={kind: ahead} if ahead is not None else {},
+                    defaults=dict(defaults or {}))
 
     return make
 

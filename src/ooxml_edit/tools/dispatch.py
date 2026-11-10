@@ -1495,7 +1495,7 @@ class Toolbox:
                         holding.set()
                     editing.drafting(drafted)
                     outcome = self._run_block(session, tool, clean, drafted, roles, caller,
-                                              turn, block, editing)
+                                              turn, block, editing, reading)
                     editing.drafted()
                 if outcome is not None:
                     result, entries, primary = outcome
@@ -1641,13 +1641,16 @@ class Toolbox:
                      counted: Mapping[str, tuple[DocumentEntry, int]],
                      editing: "_Editing") -> DocumentEntry | None:
         """The document a changing call runs on a draft of (:mod:`.blocks`), or ``None``: it
-        names one document and reads no other, its format drafts and admits it, and -- with
+        names one document (round 50: and may read rows of others, ``reading`` -- a table
+        of another open document, read at its committed version: :meth:`_run_block`), its format
+        drafts and admits it, and -- with
         ``block_edits="auto"`` -- another call edits that document now (its change not yet
         made: :meth:`DocumentEntry.begin_edit`), or the format says the call is worth a
         draft alone (``BlockEdits.alone``: one that may run long).  A draft costs a copy
         of the blocks changed and a check of them; beside reads and checks alone, which
         never wait for an edit, nothing waits that it would spare."""
-        if self.block_edits == "off" or len(doc_ids) != 1 or reading:
+        if self.block_edits == "off" or len(doc_ids) != 1 or any(
+                doc not in session.documents for doc in reading):
             return None
         found = counted.get(doc_ids[0])
         if found is None:
@@ -1710,14 +1713,24 @@ class Toolbox:
 
     def _run_block(self, session: Session, tool: Tool, clean: dict[str, Any],
                    entry: DocumentEntry, roles: Sequence[str], caller: Mapping[str, Any],
-                   turn: "_Turn | None", stats: dict[str, Any], editing: "_Editing"
+                   turn: "_Turn | None", stats: dict[str, Any], editing: "_Editing",
+                   reading: Sequence[str] = ()
                    ) -> tuple[Result, dict[str, DocumentEntry], DocumentEntry] | None:
         """The call on a draft of ``entry``'s committed version, its change applied under
         the document's lock (:mod:`.blocks`): ``(result, entries, primary)``; ``None`` when
         it is to run on the document under its lock instead -- the format cannot draft it,
         the draft did what a patch cannot carry, or another call's change came first
         :attr:`~.limits.Limits.block_tries` times.  ``stats`` gets how it went, for
-        :attr:`Result.block`: ``tries``, each conflict's reason, why it ran under the lock."""
+        :attr:`Result.block`: ``tries``, each conflict's reason, why it ran under the lock.
+
+        Round 50: ``reading``, the other documents the call takes rows from (a ``t:``
+        table), are read as a call that only reads them reads them
+        (:meth:`Session.read_lock`: at their committed version, or under their lock where
+        their format makes no copy), each one's version kept; under the document's lock
+        the change applies only when every one is at that version still -- else, as when
+        a dataset it read changed, it is prepared again on what is committed now.  Their
+        locks are held with the document's for that check and the change (briefly), so the
+        values written are the source's when the change is made, as under both locks."""
         fmt = session.formats[entry.kind]
         hook = fmt.blocks
         doc = entry.doc_id
@@ -1742,6 +1755,7 @@ class Toolbox:
                 stats["lock"] = "no draft"
                 return None
             current: Any = None
+            read: dict[str, tuple[DocumentEntry, int]] = {}
             try:
                 drafted = entry.drafted(committed, draft.document)
                 keys = set(drafted.keys)
@@ -1749,10 +1763,13 @@ class Toolbox:
                 after = After()
                 spent = time.thread_time()
                 try:
-                    with drafted.lock:
-                        result = self._run(session, tool, dict(clean), {doc: drafted}, drafted, (),
-                                           roles=roles, caller=caller, after=after,
-                                           drafting=drafting)
+                    with session.read_lock(reading) as readers, drafted.lock:
+                        read = {reader.doc_id: (reader.live or reader, reader.version)
+                                for reader in readers}
+                        result = self._run(session, tool, dict(clean),
+                                           {doc: drafted, **{r.doc_id: r for r in readers}},
+                                           drafted, tuple(reading), roles=roles, caller=caller,
+                                           after=after, drafting=drafting)
                 except ToolError as refused:
                     if _drew(hook, draft):
                         # It drew ids before it failed: under the lock it would consume them,
@@ -1807,12 +1824,14 @@ class Toolbox:
                 if patch is None:
                     stats["lock"] = getattr(draft, "why", None) or "not a patch"
                     return None
-                with session.lock([doc]):
+                # Round 50: and the documents it read rows of, so none changes between the
+                # check that each is at the version read and the change applied.
+                with session.lock([doc, *(other for other in read if other in session.documents)]):
                     if session.documents.get(doc) is not entry:
                         stats["lock"] = "closed"
                         return None     # closed meanwhile: the call says so, as before
                     reason = self._block_reads_changed(session, entry, committed, context,
-                                                       clean, made_keys)
+                                                       clean, made_keys, read)
                     plan = None
                     op_changes = None
                     if reason is None:
@@ -1873,11 +1892,14 @@ class Toolbox:
 
     def _block_reads_changed(self, session: Session, entry: DocumentEntry, committed: Any,
                              context: CallContext, clean: Mapping[str, Any],
-                             made_keys: Mapping[tuple[str, str], Any]) -> str | None:
+                             made_keys: Mapping[tuple[str, str], Any],
+                             read: Mapping[str, tuple[DocumentEntry, int]] | None = None
+                             ) -> str | None:
         """What a call on a draft read of the session that is not as it was then, under the
         document's lock (:meth:`_run_block`); ``None``: nothing.  The refs, when it used or
-        made one; its retry keys; the datasets it named (the same, and as stale); whether
-        the document is tracked."""
+        made one; its retry keys; the datasets it named (the same, and as stale); the other
+        documents it read rows of (round 50: open still, at the version read); whether the
+        document is tracked."""
         if (context.refs or context.refs_read or _uses_refs(clean)) and entry.refs != committed.refs:
             return "the document's refs changed"
         for key in made_keys:
@@ -1886,6 +1908,9 @@ class Toolbox:
         for id_, (found, stale) in context.datasets_seen.items():
             if session.datasets.get(id_) is not found or found.stale != stale:
                 return f"dataset d:{id_} changed"
+        for other, (live, version) in (read or {}).items():
+            if session.documents.get(other) is not live or live.version != version:
+                return f"{other} changed"
         if (entry.tracking or None) != (committed.tracking or None):
             return "tracking was switched"
         return None
@@ -2014,6 +2039,7 @@ class Toolbox:
         if tool.composite:
             arguments = _op_comments(arguments, comments if comments is not None else [])
         arguments = _aliased(tool, arguments, notes)
+        arguments = _defaulted(tool, arguments, notes)
         arguments = _json_strings(tool.schema, arguments)
         try:
             clean = validate_call(tool.schema, arguments, notes)
@@ -2296,12 +2322,19 @@ class Toolbox:
         if not tool.facts:
             return arguments
         known = textfacts.known_prefixes(call.session.formats)
+        ids: dict[str, list[str]] = {}
 
         def expand(text: str, where: str) -> str:
             if "{{" not in text:
                 return text
+            if "datasets" not in ids:
+                # Round 50: braces shaped like a reference that names no source are refused
+                # with the nearest one (textfacts.misread), which reads the dataset ids.
+                ids["datasets"] = list(dict.fromkeys(
+                    [*call.context.datasets, *(entry.id for entry in call.session.dataset_entries())]))
             written, found = textfacts.expand(
-                text, where, known, lambda address, at: call.fact(address, field=at))
+                text, where, known, lambda address, at: call.fact(address, field=at),
+                datasets=ids["datasets"])
             call.facts.extend(found)
             return written
 
@@ -3238,6 +3271,20 @@ def _aliased(tool: Tool, arguments: Any, notes: list[str]) -> Any:
         else:
             renamed = _renamed(renamed, key, name, "", notes)
     return renamed
+
+
+def _defaulted(tool: Tool, arguments: Any, notes: list[str]) -> Any:
+    """``arguments`` with each required argument of ``tool.defaults`` it leaves out (or
+    gives as null) set to its default, a note for each (``expect not given: read as
+    'one'``; round 50, R102)."""
+    if not tool.defaults or not isinstance(arguments, Mapping):
+        return arguments
+    missing = {name: value for name, value in tool.defaults.items() if arguments.get(name) is None}
+    if not missing:
+        return arguments
+    for name, value in missing.items():
+        notes.append(f"{name} not given: read as {value!r}")
+    return {**arguments, **missing}
 
 
 def _renamed(node: Any, alias: str, name: Any, where: str, notes: list[str]) -> Any:

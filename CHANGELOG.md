@@ -17,6 +17,33 @@ earlier ones were never tagged.
   running after 300 s (`-o faulthandler_timeout=300`, `-v`) and stops the job at 45
   minutes. No library code changed.
 
+## 0.107.0 -- unreleased
+- **A call on a draft may read another document's table** (round 50, R100). A changing call
+  a format admits on a draft that takes rows from another open document -- a `t:` source
+  (`from`) or `{{t:...}}` in its text -- drafts as one reading only datasets does; before,
+  any such read kept the document's lock for the whole call. The other document is read as
+  a read reads it (`Session.read_lock`: its committed version, or under its lock where its
+  format makes no copy, as a workbook), its version kept; the change is applied under both
+  documents' locks, and only while the other is at the version read -- else the call is
+  prepared again (`Result.block` `conflicts: ["d2 changed"]`); a document closed meanwhile is
+  refused when prepared again. tests/test_tools_block_sources.py (5 tests; a threaded one:
+  quotes and table changes from 20 threads, each quote the value of the version it read,
+  applied only at that version, the document the quotes in the order applied).
+- **Braces shaped like a reference that names no source are refused** (R101). `{{x/#1/name}}`
+  (no `d:`), `{{d2/#1/name}}`, `{{D:x}}`, `{{ds:x}}` were written as text; now the call is
+  refused naming the reference meant ("did you mean {{d:x/#1/name}}?"; for a document's
+  handle `{{d2/t:<table>/...}}` or `{{d:<dataset>/...}}`), the prefixes there are, the
+  dataset ids as `valid_options`, and the escape (`\{{x/#1/name}}` writes the braces).
+  `textfacts.misread`: a path with a row by position or `*`, a document's handle, or a
+  dataset's id first; a known prefix in other capitals or spacing; a word for a dataset or
+  table, or another word right before such a path. `{{name}}`, `{{ client.name }}`,
+  `{{TODO: see a/b}}` and `{{slide:}}` stay text as before. tests/test_tools_textfacts_shape.py.
+- **`replace_text` without `expect` is `expect: "one"`** (R102), in a call and in a batch's op
+  alike, with a warning (`expect not given: read as 'one'`): a batch's op arguments are
+  free-form, so a model writing ops sees nothing required. `Tool.defaults` (a required
+  argument's value when left out; `Spec`/`tool(defaults=)`); the definition still requires
+  `expect` (no new optional parameter; definitions byte-identical, 0 tokens).
+
 ## 0.106.0 -- unreleased
 - **An identifier's digits are text to a check of numbers** (round 49, R93). A number
   joined by a hyphen (`-`, U+2010, Word's non-breaking U+2011) to a token with a letter in
