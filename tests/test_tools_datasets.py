@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import datetime as dt
 import pickle
+from collections.abc import Mapping
 
 import pytest
 
@@ -160,6 +161,72 @@ def test_a_dataset_counts_the_formula_caches_its_values_came_from():
     for bad in ({"fresh": 1}, {"absent": -1}, {"absent": True}, {"absent": 1.5}, [1]):
         with pytest.raises(ValueError):
             Dataset(["k"], [(1,)], cache=bad)
+
+
+def test_a_dataset_keeps_the_markdown_of_its_rich_text_values():
+    """Round 48: a text value whose source holds more than its characters (a cell's bold
+    runs, its list lines) carries its Markdown beside it, by (row, column) from 0; a slice
+    keeps its rows' own, renumbered; it is not compared and pickles (sent to workers)."""
+    rows = [("a", "Plain"), ("b", "• one\n    • two"), ("c", "Bold note")]
+    data = Dataset(["k", "body"], rows, keys=1,
+                   markdown={(1, 1): "- one\n  - two", (2, 1): "**Bold** note"})
+    assert data.markdown_at(1, 1) == "- one\n  - two" and data.markdown_at(0, 1) is None
+    assert data.rows[1][1] == "• one\n    • two"            # the value itself is unchanged
+    assert data == Dataset(["k", "body"], rows, keys=1)        # not compared
+    assert data.row_slice(2).markdown == {(0, 1): "- one\n  - two", (1, 1): "**Bold** note"}
+    assert data.row_slice(1, 1).markdown is None and data.row_slice(1, 1).markdown_at(0, 1) is None
+    assert pickle.loads(pickle.dumps(data)).markdown == data.markdown
+    assert Dataset(["k"], [(1,)], markdown={}).markdown is None
+    for bad in ([1], {(3, 0): "x"}, {(0, 2): "x"}, {(0,): "x"}, {(0, 0): 1}, {(True, 0): "x"}):
+        with pytest.raises(ValueError):
+            Dataset(["k", "v"], [(1, 2)], markdown=bad)
+
+
+class _Lazy(Mapping):
+    """A producer's markdown worked out when asked for: counts what it worked out."""
+
+    def __init__(self, places):
+        self.places, self.asked = places, []
+
+    def __getitem__(self, place):
+        if place not in self.places:
+            raise KeyError(place)
+        self.asked.append(place)
+        return self.places[place]
+
+    def __iter__(self):
+        return iter(self.places)
+
+    def __len__(self):
+        return len(self.places)
+
+    def __contains__(self, place):
+        return place in self.places
+
+    def __reduce__(self):            # pickled as what it works out to
+        return dict, ({k: v for k, v in self.places.items() if v is not None},)
+
+
+def test_a_dataset_keeps_a_lazy_markdown_and_asks_it_only_for_what_is_read():
+    """Round 48: a producer may give a mapping that works each value out when asked; the
+    dataset keeps it as given, asks only for what is read (a value that turns out to be
+    its text is ``None``), and a slice is a view of it."""
+    rows = [("a", "x"), ("b", "• one"), ("c", "y"), ("d", "• two")]
+    lazy = _Lazy({(1, 1): "- one", (2, 1): None, (3, 1): "- two"})
+    data = Dataset(["k", "body"], rows, markdown=lazy)
+    assert data.markdown is lazy and lazy.asked == []
+    assert data.markdown_at(1, 1) == "- one" and data.markdown_at(2, 1) is None
+    assert data.markdown_at(0, 1) is None and lazy.asked == [(1, 1), (2, 1)]
+    part = data.row_slice(3, 4)
+    assert sorted(part.markdown) == [(0, 1), (1, 1)] and lazy.asked == [(1, 1), (2, 1)]
+    assert (1, 1) in part.markdown and (1, 0) not in part.markdown and (2, 1) not in part.markdown
+    assert lazy.asked == [(1, 1), (2, 1)]                   # 'in' worked nothing out
+    assert part.markdown_at(1, 1) == "- two" and part.markdown_at(0, 1) is None
+    assert data.row_slice(1, 1).markdown is None
+    again = pickle.loads(pickle.dumps(data))
+    assert again.markdown == {(1, 1): "- one", (3, 1): "- two"}
+    with pytest.raises(ValueError):
+        Dataset(["k"], [(1,)], markdown=_Lazy({(1, 0): "x"}))
 
 
 def test_a_dataset_from_invalidated_caches_is_stale_from_the_start_and_stays_so(toolbox,

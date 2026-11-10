@@ -13,7 +13,11 @@ producing library says the value came from (address strings, say).  The tool lay
 and hands them on, and never reads them.  ``keys`` says how many leading columns name a
 row; ``types`` is a label per column (:data:`TYPE_LABELS`, the ones the format libraries
 read; ``None`` for none); ``detail`` is anything else the producer keeps for itself (its
-own result object), which no other library should read.
+own result object), which no other library should read.  ``markdown`` gives, for a text
+value whose source holds more than its characters (rich text's bold and italic runs,
+lines that are list items), its Markdown: what a tool writing that one value as blocks
+writes, so a list stays a list (:meth:`Dataset.markdown_at`); everything else reads the
+value itself.
 
 **Made in Python.**  :meth:`Dataset.from_records` makes one of a list of mappings (or of
 tuples, with ``columns``) and labels its columns: ``types={"when": "date"}``.  A Python
@@ -187,8 +191,17 @@ class Dataset:
     module's notes); not compared.  ``formats``: each column's number format as its source
     shows it (an Office number format code, ``0.0``, ``0.0%``; ``None`` for General or
     none), ``None`` when the producer knows none -- what a check of numbers reads a
-    value's shown rounding from (:mod:`.numbers`); not compared.  :meth:`from_records` makes one of records, as Python
-    code has them.
+    value's shown rounding from (:mod:`.numbers`); not compared.  ``markdown``: the
+    Markdown of the text values whose source holds more than their characters -- a
+    source's rich text (bold, italic), lines that are list items -- by ``(row,
+    column)``, both from 0; no entry for a value that is its text.  What a tool writing
+    one text field as blocks writes (:meth:`markdown_at`); a reference inside a sentence,
+    a table cell and a check of numbers read the value itself.  A producer may give a
+    mapping that works each value out when first asked for (a ``Mapping`` other than a
+    ``dict``; ``None`` for a value that turns out to be its text): it is kept as given, a
+    row slice a view of it, and it must pickle (working its values out then, say).  Not
+    compared.
+    :meth:`from_records` makes one of records, as Python code has them.
     """
 
     columns: tuple[str, ...]
@@ -199,6 +212,8 @@ class Dataset:
     detail: Any = field(default=None, compare=False, repr=False)
     cache: Mapping[str, int] | None = field(default=None, compare=False)
     formats: tuple[str | None, ...] | None = field(default=None, compare=False)
+    markdown: Mapping[tuple[int, int], str] | None = field(default=None, compare=False,
+                                                           repr=False)
 
     def __post_init__(self) -> None:
         columns = tuple(self.columns)
@@ -230,6 +245,7 @@ class Dataset:
                 raise ArgumentError("a dataset has a number format (a string, or None) per "
                                     "column")
             object.__setattr__(self, "formats", formats)
+        object.__setattr__(self, "markdown", _markdown(self.markdown, len(rows), len(columns)))
 
     @property
     def invalidated(self) -> bool:
@@ -305,6 +321,14 @@ class Dataset:
         at = self.index(name)
         return tuple(row[at] for row in self.rows)
 
+    def markdown_at(self, row: int, column: int) -> str | None:
+        """The Markdown of the value at ``row`` and ``column`` (both from 0) when its source
+        holds more than its text (:attr:`markdown`), else ``None``: the value is its text."""
+        if not self.markdown:
+            return None
+        found = self.markdown.get((row, column))
+        return found if isinstance(found, str) else None
+
     def records(self) -> list[dict[str, Any]]:
         """The rows as mappings by column name."""
         return [dict(zip(self.columns, row)) for row in self.rows]
@@ -324,9 +348,16 @@ class Dataset:
         if end > count:
             raise ArgumentError(f"the dataset has {count} rows; there is no row {end}")
         sources = None if self.sources is None else self.sources[first - 1:end]
+        markdown: Mapping[tuple[int, int], str] | None = None
+        if self.markdown and isinstance(self.markdown, dict):
+            markdown = {(row - first + 1, column): text
+                        for (row, column), text in self.markdown.items()
+                        if first - 1 <= row < end} or None
+        elif self.markdown:
+            markdown = _Rows(self.markdown, first - 1, end) or None
         return Dataset(self.columns, self.rows[first - 1:end], sources=sources,
                        keys=self.keys, types=self.types, cache=self.cache,
-                       formats=self.formats)
+                       formats=self.formats, markdown=markdown)
 
 
 def _cache(counts: Any) -> dict[str, int] | None:
@@ -349,6 +380,69 @@ def _cache(counts: Any) -> dict[str, int] | None:
         if count:
             out[key] = count
     return out or None
+
+
+class _Rows(Mapping):
+    """A row slice's view of a lazily computed :attr:`Dataset.markdown`: the rows from
+    ``first`` (from 0) to before ``end``, renumbered from 0; nothing is computed until
+    asked for."""
+
+    def __init__(self, whole: Mapping[tuple[int, int], Any], first: int, end: int) -> None:
+        self.whole, self.first, self.end = whole, first, end
+        self.places = [(row - first, column) for row, column in whole if first <= row < end]
+
+    def __getitem__(self, place: tuple[int, int]) -> Any:
+        row, column = place
+        if not 0 <= row < self.end - self.first:
+            raise KeyError(place)
+        return self.whole[(row + self.first, column)]
+
+    def __iter__(self) -> Any:
+        return iter(self.places)
+
+    def __contains__(self, place: object) -> bool:      # without working it out
+        if not (isinstance(place, tuple) and len(place) == 2):
+            return False
+        row, column = place
+        return (isinstance(row, int) and 0 <= row < self.end - self.first
+                and (row + self.first, column) in self.whole)
+
+    def __len__(self) -> int:
+        return len(self.places)
+
+
+def _markdown(given: Any, rows: int,
+              columns: int) -> Mapping[tuple[int, int], str] | None:
+    """:attr:`Dataset.markdown` checked: a mapping of ``(row, column)`` (from 0, inside the
+    dataset) to text; ``None`` for none.  A mapping other than a ``dict`` -- one that works
+    its values out when first asked for -- is kept as it is, its places checked (its values
+    are read as text or ``None`` by :meth:`Dataset.markdown_at`)."""
+    if given is None:
+        return None
+    if not isinstance(given, Mapping):
+        raise ArgumentError("a dataset's markdown is a mapping of (row, column) to text")
+    if not isinstance(given, dict):
+        for place in given:
+            _place(place, rows, columns)
+        return given if len(given) else None
+    out: dict[tuple[int, int], str] = {}
+    for place, text in given.items():
+        _place(place, rows, columns)
+        if not isinstance(text, str):
+            raise ArgumentError("a dataset's markdown is text")
+        out[place] = text
+    return out or None
+
+
+def _place(place: Any, rows: int, columns: int) -> None:
+    """Refuse a :attr:`Dataset.markdown` key that is no ``(row, column)`` inside the dataset."""
+    if not (isinstance(place, tuple) and len(place) == 2
+            and all(isinstance(n, int) and not isinstance(n, bool) for n in place)):
+        raise ArgumentError(f"a dataset's markdown is keyed by (row, column), not {place!r}")
+    row, column = place
+    if not (0 <= row < rows and 0 <= column < columns):
+        raise ArgumentError(f"a dataset's markdown names ({row}, {column}), outside its "
+                            f"{rows} rows and {columns} columns (from 0)")
 
 
 def _labels(types: Any, columns: tuple[str, ...]) -> tuple[str | None, ...] | None:
