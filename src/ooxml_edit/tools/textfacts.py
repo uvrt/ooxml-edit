@@ -33,6 +33,15 @@ reference: ``{{name}}``, a template's placeholder, and any other braces stay as 
 to a missing dataset, table, row or column, to a blank, or to more than one value is
 refused, naming what there is: never written half.
 
+**Braces shaped like a reference** (round 50) are refused too, rather than written as text
+nobody meant (:func:`misread`): a path with a row by position (``{{x/#1/name}}``, ``/*/``) or
+a document's handle (``{{d2/#1/name}}``), or one whose first part names a dataset; a prefix
+that is a known one in other capitals or spacing (``{{D:x}}``, ``{{d :x}}``); a word for a
+dataset or a table and a colon (``{{ds:x}}``, ``{{table:x}}``), or another word and a colon
+right before such a path (``{{src:x/#1/name}}``).  The refusal names the nearest reference
+(:func:`misread_error`) and says how braces are written as text (``\\{{``).  Braces around
+anything else -- ``{{name}}``, ``{{ client.name }}``, ``{{TODO: see a/b}}`` -- stay text.
+
 **Numbers** are written as a table cell gets them (:func:`.sources.label`): ``2.5`` is
 ``2,5`` in a locale with a decimal comma, ``2024`` stays ``2024``, at most 15 significant
 digits; a value of a ``percent`` column as a percent (``0.25`` is ``25%``).  A number
@@ -154,6 +163,89 @@ def _inside(text: str, known: Sequence[str]) -> str | None:
         else None
 
 
+#: A word and a colon at a reference's start: a prefix, known or not (``ds:``, ``D:``), after
+#: a document's handle (``d2/``) if it has one.
+_PREFIXED = re.compile(r"(?:(d[0-9]+)/)?([A-Za-z][A-Za-z_]{0,15})\s*:\s*(.*)$", re.S)
+#: A row by position or every row: a path segment no template text holds.
+_ROW_SEGMENT = re.compile(r"#[0-9]+|\*")
+#: Prefixes as a model may write them meaning a known one: a dataset's, a table's.
+_MEANT = {"data": "d:", "dataset": "d:", "datasets": "d:", "ds": "d:", "set": "d:",
+          "table": "t:", "tables": "t:", "tbl": "t:", "tab": "t:"}
+
+
+def _path(text: str) -> list[tuple[str, bool]] | None:
+    """``text``'s segments when it is a path (two or more, the first one word: no spaces,
+    not blank), else ``None``."""
+    parts = _segments(text.strip())
+    first = parts[0][0] if parts else ""
+    if len(parts) < 2 or not first or (not parts[0][1] and re.search(r"\s", first)):
+        return None
+    return parts
+
+
+def misread(inside: str, known: Sequence[str], datasets: Iterable[str] = ()) -> list[str]:
+    """The references ``{{inside}}`` most likely meant, nearest first, when it has a
+    reference's shape but no source prefix a loaded format resolves (see the module doc);
+    ``[]``: the braces stay text.  ``datasets``: the ids there are.  A reference returned
+    may hold a placeholder (``<table>``) where what is meant is not known."""
+    body = inside.strip()
+    if not body or _inside(body, known) is not None:
+        return []
+    datasets = set(datasets)
+    prefixed = _PREFIXED.match(body)
+    if prefixed is not None:
+        handle, word, rest = prefixed.groups()
+        lead = f"{handle}/" if handle else ""
+        own = next((p for p in known if p.lower() == word.lower() + ":"), None)
+        if own is not None:                               # D:x, d :x, T : x
+            return [lead + own + rest.strip()] if rest.strip() else []
+        # Another word: a reference's only when the path follows the colon at once and has
+        # a row by position or a dataset's id first (``src:x/#1/y``), or the word is one
+        # for a dataset or a table (``ds:x``); ``{{Note: x/y}}`` and ``{{TODO:a/b}}`` stay.
+        meant = _MEANT.get(word.lower())
+        path = _path(rest) if not re.match(r"\s", body[prefixed.start(3) - 1:]) else None
+        rowish = path is not None and (path[0][0] in datasets or any(
+            _ROW_SEGMENT.fullmatch(part) and not quoted for part, quoted in path[1:]))
+        if (meant is not None and rest.strip() and not re.search(r"\s", rest.strip())) or rowish:
+            if meant is not None and meant in known:
+                return [lead + meant + rest.strip()]
+            return [lead + p + rest.strip() for p in (DATASET_PREFIX, "t:") if p in known]
+        return []
+    parts = _path(body)
+    if parts is None:
+        return []
+    handle = re.fullmatch(r"d[0-9]+", parts[0][0]) is not None and not parts[0][1]
+    rest = body.split("/", 1)[1] if handle else body
+    first = parts[1][0] if handle else parts[0][0]
+    rows = any(_ROW_SEGMENT.fullmatch(part) and not quoted for part, quoted in parts[1:])
+    if not (handle or rows or first in datasets):
+        return []
+    if handle and parts[0][0] in datasets:                # d2 the dataset, not a document
+        return [DATASET_PREFIX + body]
+    if first in datasets or not handle:                   # x/#1/name: x the dataset
+        return [DATASET_PREFIX + rest]
+    tables = [f"{parts[0][0]}/{p}<table>/{rest}" for p in sorted(known, key=len) if p == "t:"]
+    return tables + [DATASET_PREFIX + "<dataset>/" + rest]
+
+
+#: What a source prefix names, as a refusal says it.
+_NAMES = {"d:": "a dataset", "t:": "a table of an open document"}
+
+
+def misread_error(inside: str, meant: Sequence[str], known: Sequence[str], field: str | None,
+                  datasets: Iterable[str] = ()) -> ToolError:
+    """The refusal of braces :func:`misread` read as a reference: the nearest references,
+    the prefixes there are, and how braces are written as text."""
+    forms = [f"{p} ({_NAMES[p]})" if p in _NAMES else p for p in sorted(known, key=len)]
+    options = [found for found in meant if "<" not in found]
+    options += [DATASET_PREFIX + key for key in sorted(datasets)[:10] if DATASET_PREFIX + key not in options]
+    near = " or ".join(f"{{{{{found}}}}}" for found in meant)
+    return ToolError("invalid_arguments", f"{{{{{inside.strip()}}}}} looks like a reference but "
+                     f"names no source: a reference starts with {', '.join(forms)}; did you mean "
+                     f"{near}? To keep the braces as text, put a backslash before them: "
+                     f"\\{{{{{inside.strip()}}}}}", field=field, valid_options=options)
+
+
 def references(text: str, known: Sequence[str]) -> list[tuple[re.Match, str]]:
     """The references in ``text`` that are not escaped: each match and its address."""
     out = []
@@ -185,9 +277,20 @@ def qualify_text(text: str, known: Sequence[str],
 
 
 def expand(text: str, where: str, known: Sequence[str],
-           resolve: Callable[[str, str], tuple[str, dict[str, Any]]]) -> tuple[str, list[Fact]]:
+           resolve: Callable[[str, str], tuple[str, dict[str, Any]]],
+           datasets: Iterable[str] | None = None) -> tuple[str, list[Fact]]:
     """``text`` with every reference replaced by ``resolve(address, where)``'s text, and
-    escaped ones unescaped; the :class:`Fact` of each, its place in the new text."""
+    escaped ones unescaped; the :class:`Fact` of each, its place in the new text.  With
+    ``datasets`` (the ids there are), braces shaped like a reference that is none are
+    refused (:func:`misread`), before anything is resolved."""
+    if datasets is not None:
+        datasets = list(datasets)
+        for match in REFERENCE.finditer(text):
+            if match.group(1):
+                continue
+            meant = misread(match.group(2), known, datasets)
+            if meant:
+                raise misread_error(match.group(2), meant, known, where, datasets)
     out: list[str] = []
     facts: list[Fact] = []
     at = 0
@@ -195,8 +298,9 @@ def expand(text: str, where: str, known: Sequence[str],
     count = 0
     for match in REFERENCE.finditer(text):
         address = _inside(match.group(2), known)
-        if address is None:
-            continue
+        if address is None and not (match.group(1) and datasets is not None
+                                    and misread(match.group(2), known, datasets)):
+            continue                 # (an escaped brace a misread would refuse: unescaped)
         before = text[at:match.start()]
         out.append(before)
         length += len(before)

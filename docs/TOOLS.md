@@ -117,7 +117,11 @@ reads and checks never wait for an edit, so a draft beside them alone would spar
 A call that takes the lock first waits for any draft in flight for longer than
 `Limits.block_redo_cpu` seconds to be applied, so it does not make a long fill run again.
 `Result.block` tells the application how a call ran on a draft, and how long a call waited
-for one.
+for one. Round 50 (0.107.0): a call that takes rows from another open document (a `t:`
+table, as `from` or as `{{t:...}}` in its text) drafts too: that document is read as a read
+reads it (`Session.read_lock`: its committed version, or under its lock where its format
+makes no copy), and the change is applied under both documents' locks only while it is at
+the version read -- else the call is prepared again (`conflicts: ["d2 changed"]`).
 
 **What a call changed (round 13, R2, 0.57.0).** Every result carries `result.touched`, for
 the application and never in what the model reads (`to_json`, `to_text`): what the call
@@ -280,7 +284,11 @@ name only in some calls; inside an object argument a path, `{"items[].top":
 "space_before"}`). Each one read adds a line to the result's `warnings`
 (`frame.autofit 'shrink' read as 'normal'`, `slide read as target`; in a batch,
 `ops[i]: ...`); an alias given together with its name is refused. Only where the meaning is
-the same. A refusal says what would do: an enum value or an argument name close to an
+the same. A tool's `defaults` (round 50, 0.107.0) give a required argument left out its safe
+value, with the same kind of line: `replace_text` without `expect` is `expect: "one"`
+(`expect not given: read as 'one'`), in a call and in a batch's op alike (a batch's
+`arguments` are free-form, so a model writing ops sees nothing required); the definition
+still requires it, so a strict decoder sends it. A refusal says what would do: an enum value or an argument name close to an
 allowed one adds "did you mean ...?" (`valid_options` still lists them all), a `key` on a
 changing tool without one says that keys are for creating tools and this one is safe to
 repeat, and a ref name that is not one says the rule in words with a name that would do
@@ -717,7 +725,15 @@ declares (`Tool.facts`: `ppt_set_text`'s texts and runs, a table's cells, `repla
   the date tokens too. Without a pattern a date is written as before, in the locale's day
   order.
 - Only `{{d:` and a loaded format's prefix (`{{t:`) start a reference; `{{name}}` stays as
-  it is, and `\{{d:x}}` writes `{{d:x}}`. On by default, no flag. A reference that names
+  it is, and `\{{d:x}}` writes `{{d:x}}`. On by default, no flag. Round 50 (0.107.0):
+  braces shaped like a reference that names no source (`textfacts.misread`) refuse the
+  call, naming the reference meant and the escape: a path with a row by position
+  (`{{x/#1/name}}`: "did you mean {{d:x/#1/name}}?"), a document's handle without a prefix
+  (`{{d2/#1/name}}`: `{{d2/t:<table>/#1/name}}` or `{{d:<dataset>/#1/name}}`), a path whose
+  first part is a dataset's id, a known prefix in other capitals or spacing (`{{D:x}}`), a
+  word for a dataset or table (`{{ds:x}}`, `{{table:x}}`). `\{{x/#1/name}}` writes the braces
+  as text. Anything else in braces (`{{name}}`, `{{ client.name }}`, `{{TODO: see a/b}}`)
+  stays text, as before. A reference that names
   no dataset, table, row or column, a blank, or more than one value refuses the call with
   the argument as `field` and what there is as `valid_options`: nothing is written half.
 - The result: `data.facts`, each `{"from", "text", "sources"}` (and `stale`). The handler

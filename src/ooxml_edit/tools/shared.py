@@ -146,7 +146,8 @@ class Spec:
                  kind_values: Mapping[str, Mapping[str, tuple[str, ...]]] | None = None,
                  kind_descriptions: Mapping[str, Mapping[str, str]] | None = None,
                  kind_neutral: Mapping[str, tuple[Any, ...]] | None = None,
-                 value_reads: Callable[[Mapping[str, Any]], bool] | None = None) -> None:
+                 value_reads: Callable[[Mapping[str, Any]], bool] | None = None,
+                 defaults: Mapping[str, Any] | None = None) -> None:
         self.name = name
         self.description = description
         self.params = dict(params)
@@ -194,6 +195,8 @@ class Spec:
         self.wrap = wrap
         #: :attr:`~.registry.Tool.value_reads`.
         self.value_reads = value_reads
+        #: :attr:`~.registry.Tool.defaults` (round 50).
+        self.defaults = dict(defaults or {})
 
     def make(self, handlers: Mapping[str | None, Callable[..., Any]]) -> Tool:
         if self.wrap is not None:
@@ -209,7 +212,7 @@ class Spec:
                     aliases=self.aliases, role=self.role, action_roles=self.action_roles,
                     kind_fields=self.kind_fields, kind_values=self.kind_values,
                     kind_descriptions=self.kind_descriptions, kind_neutral=self.kind_neutral,
-                    value_reads=self.value_reads)
+                    value_reads=self.value_reads, defaults=self.defaults)
 
     @property
     def schema(self) -> dict[str, Any]:
@@ -423,6 +426,10 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
           # (feedback-round23 probe).  Strict decoding keeps the order given.
           "regex": boolean("find is a Python regex. Default false.", optional=True)},
          mutates=True, facts=("replace",), refs=("slides[]",),
+         # Round 50 (R102): an op of a batch that leaves expect out (the op's arguments are
+         # free-form there) is read as expect one, as a call is: exactly one match or the
+         # matches listed, never more replaced than meant.
+         defaults={"expect": "one"},
          kind_fields={"slides": _SLIDES, "range": ("docx",), "stories": ("pptx", "docx")},
          kind_values={"stories": _STORY_VALUES},
          kind_descriptions={"stories": _STORY_TEXTS}),
