@@ -216,6 +216,7 @@ def test_a_dataset_keeps_a_lazy_markdown_and_asks_it_only_for_what_is_read():
     assert data.markdown_at(0, 1) is None and lazy.asked == [(1, 1), (2, 1)]
     part = data.row_slice(3, 4)
     assert sorted(part.markdown) == [(0, 1), (1, 1)] and lazy.asked == [(1, 1), (2, 1)]
+    assert (1, 1) in part.markdown and (2, 1) not in part.markdown and lazy.asked == [(1, 1), (2, 1)]
     assert part.markdown_at(1, 1) == "- two" and part.markdown_at(0, 1) is None
     assert data.row_slice(1, 1).markdown is None
     again = pickle.loads(pickle.dumps(data))
