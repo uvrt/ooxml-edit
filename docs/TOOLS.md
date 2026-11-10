@@ -793,7 +793,9 @@ application derives it into one), it matches.
   `2026-03-12`, `14:05`, `14.30 uur`, a day by a month name), years (1800-2199), list
   numbers (a paragraph's leading `1.`, `2)`, `2.3 Results`), ids (digits joined to letters,
   after `#` or `§`, several dots, or named by the word before: section, page, version,
-  hoofdstuk...), whole numbers without a percent sign (`whole`; with them on, `scales`: the
+  hoofdstuk...; and an identifier's digits: a number joined by a hyphen to a token with a
+  letter, `K7-12.3`, `DOC-004.2`, `ab-cd-3.4` -- `2-3.5` stays a range, `12.5-hour` a
+  number), whole numbers without a percent sign (`whole`; with them on, `scales`: the
   `5` of `2,7/5`), and the application's ignore list (`ignored`). Text written by
   reference and tables and charts placed with `from` are not read: they carry provenance.
 - **The application's rules**, never a tool argument: `Toolbox(numbers=NumberRules(...))`

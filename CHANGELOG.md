@@ -17,6 +17,17 @@ earlier ones were never tagged.
   running after 300 s (`-o faulthandler_timeout=300`, `-v`) and stops the job at 45
   minutes. No library code changed.
 
+## 0.106.0 -- unreleased
+- **An identifier's digits are text to a check of numbers** (round 49, R93). A number
+  joined by a hyphen (`-`, U+2010, Word's non-breaking U+2011) to a token with a letter in
+  it -- the token's parts joined by `-`, `.` or `_` -- is part of an identifier, left aside
+  as `ids`: `K7-12.3`, `DOC-004.2`, `ab-cd-3.4`, `M.4-2.7`, `PR-77`. A hyphen between
+  numbers alone stays a range (`2-3.5`: two numbers) and a word after a number's hyphen
+  keeps the number (`a 12.5-hour shift`); `v2` was and is never read (digits right after a
+  letter). On a made-up corpus of 36 identifier fragments of 16 shapes and 26 figures beside
+  them, in en-US and a decimal-comma locale: 28 fragments listed as numbers before (32 with
+  whole numbers on), none after; every figure still listed. tests/test_tools_numbers.py.
+
 ## 0.105.0 -- unreleased
 - **A dataset's text value may carry its Markdown** (round 48, R86): `Dataset.markdown`, by
   `(row, column)` from 0, for a value whose source holds more than its characters -- a
