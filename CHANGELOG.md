@@ -17,7 +17,7 @@ earlier ones were never tagged.
   running after 300 s (`-o faulthandler_timeout=300`, `-v`) and stops the job at 45
   minutes. No library code changed.
 
-## 0.106.0 -- unreleased
+## 0.105.0 -- unreleased
 - **A dataset's text value may carry its Markdown** (round 48, R86): `Dataset.markdown`, by
   `(row, column)` from 0, for a value whose source holds more than its characters -- a
   cell's bold and italic runs, lines that are list items -- and `Dataset.markdown_at(row,
@@ -25,7 +25,10 @@ earlier ones were never tagged.
   reference inside a sentence, a table cell and a check of numbers read it; a tool writing
   one text field as blocks writes the Markdown, so its lists stay lists. Checked (inside
   the dataset, text), not compared, kept by `row_slice` for its rows, pickled with the
-  dataset. tests/test_tools_datasets.py.
+  dataset. A producer may give a mapping that works each value out when first asked for
+  (any `Mapping` but a `dict`): it is kept as given, its places checked, a row slice a view
+  of it, and nothing is worked out until a value is read; it pickles as it chooses.
+  tests/test_tools_datasets.py.
 
 ## 0.104.0 -- unreleased
 - **The application's own edits are committed** (round 48, R84). Letting `Session.lock` go

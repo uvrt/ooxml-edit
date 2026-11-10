@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import datetime as dt
 import pickle
+from collections.abc import Mapping
 
 import pytest
 
@@ -179,6 +180,48 @@ def test_a_dataset_keeps_the_markdown_of_its_rich_text_values():
     for bad in ([1], {(3, 0): "x"}, {(0, 2): "x"}, {(0,): "x"}, {(0, 0): 1}, {(True, 0): "x"}):
         with pytest.raises(ValueError):
             Dataset(["k", "v"], [(1, 2)], markdown=bad)
+
+
+class _Lazy(Mapping):
+    """A producer's markdown worked out when asked for: counts what it worked out."""
+
+    def __init__(self, places):
+        self.places, self.asked = places, []
+
+    def __getitem__(self, place):
+        if place not in self.places:
+            raise KeyError(place)
+        self.asked.append(place)
+        return self.places[place]
+
+    def __iter__(self):
+        return iter(self.places)
+
+    def __len__(self):
+        return len(self.places)
+
+    def __reduce__(self):            # pickled as what it works out to
+        return dict, ({k: v for k, v in self.places.items() if v is not None},)
+
+
+def test_a_dataset_keeps_a_lazy_markdown_and_asks_it_only_for_what_is_read():
+    """Round 48: a producer may give a mapping that works each value out when asked; the
+    dataset keeps it as given, asks only for what is read (a value that turns out to be
+    its text is ``None``), and a slice is a view of it."""
+    rows = [("a", "x"), ("b", "• one"), ("c", "y"), ("d", "• two")]
+    lazy = _Lazy({(1, 1): "- one", (2, 1): None, (3, 1): "- two"})
+    data = Dataset(["k", "body"], rows, markdown=lazy)
+    assert data.markdown is lazy and lazy.asked == []
+    assert data.markdown_at(1, 1) == "- one" and data.markdown_at(2, 1) is None
+    assert data.markdown_at(0, 1) is None and lazy.asked == [(1, 1), (2, 1)]
+    part = data.row_slice(3, 4)
+    assert sorted(part.markdown) == [(0, 1), (1, 1)] and lazy.asked == [(1, 1), (2, 1)]
+    assert part.markdown_at(1, 1) == "- two" and part.markdown_at(0, 1) is None
+    assert data.row_slice(1, 1).markdown is None
+    again = pickle.loads(pickle.dumps(data))
+    assert again.markdown == {(1, 1): "- one", (3, 1): "- two"}
+    with pytest.raises(ValueError):
+        Dataset(["k"], [(1,)], markdown=_Lazy({(1, 0): "x"}))
 
 
 def test_a_dataset_from_invalidated_caches_is_stale_from_the_start_and_stays_so(toolbox,
