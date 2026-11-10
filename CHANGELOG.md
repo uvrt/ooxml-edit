@@ -4,6 +4,18 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet. Each vers
 reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
 earlier ones were never tagged.
 
+## 0.104.0 -- unreleased
+- **The application's own edits are committed** (round 48, R84). Letting `Session.lock` go
+  counts a change the application made through the library while holding it
+  (`DocumentEntry.count_outside`: the history's version against the one the last counted
+  change left; every part may have changed) and commits the version it left, even when the
+  block raised; `Session.commit(doc)` does the same without letting go. The next edit on a
+  draft drafts at once (before: three conflicts, "the document changed outside the tools",
+  then the whole-document lock); reads see the change without the lock. A lock held with
+  nothing changed keeps the version. Undo is as before (steps with no caller). A change
+  made without the lock stays unsupported (counted at the next lock let go, commit or
+  committing read). `tests/test_tools_host_edits.py`.
+
 ## 0.103.0 -- unreleased
 - **"changed while this call read it" only when the change touched what the read covered**
   (round 47, the Word team's question). A handler that lets the locks go may say what of
