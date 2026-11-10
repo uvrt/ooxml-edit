@@ -400,6 +400,13 @@ class _Rows(Mapping):
     def __iter__(self) -> Any:
         return iter(self.places)
 
+    def __contains__(self, place: object) -> bool:      # without working it out
+        if not (isinstance(place, tuple) and len(place) == 2):
+            return False
+        row, column = place
+        return (isinstance(row, int) and 0 <= row < self.end - self.first
+                and (row + self.first, column) in self.whole)
+
     def __len__(self) -> int:
         return len(self.places)
 
