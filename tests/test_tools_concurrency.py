@@ -144,10 +144,25 @@ def test_locks_are_taken_in_numeric_order():
     assert sorted(["d10", "d2", "d1"], key=doc_order) == ["d1", "d2", "d10"]
 
 
+# CPython 3.15's free-threaded build can hang for good when threads create classes at the
+# same time, as first imports in threads do: one thread stops the world from
+# type_set_abstractmethods or type_setattro while the others spin for the type lock or a
+# type's critical section (round 47, lane H: 13 of 30 runs of a few standard library
+# modules imported in threads hung on 3.15.2t, none on 3.15.2; the "Free threading" job on
+# macOS hung for 6 hours on this test; python/cpython#156910 and #158195 look like it).  The
+# hang is the interpreter's, not ooxml-edit's, so the free-threaded leg leaves this test
+# out; every other leg still compares the imports in threads with the imports in order.
+FREE_THREADED = not getattr(sys, "_is_gil_enabled", lambda: True)()
+
+
+@pytest.mark.skipif(FREE_THREADED, reason="CPython's free-threaded build can hang when threads "
+                                          "create classes at once")
 def test_the_registries_are_the_same_imported_in_threads_or_in_order():
     """Module-level registries are written at import and only read afterwards."""
     code = (
-        "import json, sys, threading\n"
+        "import faulthandler, json, sys, threading\n"
+        # A child that hangs prints its threads and exits rather than hold up the suite.
+        "faulthandler.dump_traceback_later(90, exit=True)\n"
         "mods = ['ooxml_edit.charts', 'ooxml_edit.tools', 'ooxml_edit.opc', 'ooxml_edit.stamp']\n"
         "if sys.argv[1] == 'threads':\n"
         "    import importlib\n"
@@ -156,10 +171,15 @@ def test_the_registries_are_the_same_imported_in_threads_or_in_order():
         "else:\n"
         "    import importlib\n"
         "    [importlib.import_module(m) for m in mods]\n"
+        "faulthandler.cancel_dump_traceback_later()\n"
         "from ooxml_edit.xml import NAMESPACES, CHILD_ORDER\n"
         "print(json.dumps([sorted(NAMESPACES.items()), sorted(map(str, CHILD_ORDER.items()))]))\n"
     )
     source = str(Path(__file__).parents[1] / "src")
-    outputs = [subprocess.run([sys.executable, "-c", code, mode], capture_output=True, text=True,
-                              cwd=source, check=True).stdout for mode in ("threads", "order")]
+    outputs = []
+    for mode in ("threads", "order"):
+        done = subprocess.run([sys.executable, "-c", code, mode], capture_output=True, text=True,
+                              cwd=source, timeout=120)
+        assert done.returncode == 0, f"{mode}: exit {done.returncode}\n{done.stderr}"
+        outputs.append(done.stdout)
     assert json.loads(outputs[0]) == json.loads(outputs[1])

@@ -84,6 +84,24 @@ another; edits of one document still run one at a time. A format without `read_c
 under the lock, as before. Saving refuses new validation problems unless the application (never the
 model) passes `allow_new_problems=True`.
 
+**The application's own edits (round 48, R84, 0.104.0).** An application that changes a
+document through the library itself (a paragraph added, a style set, between the model's
+calls) holds `session.lock([doc])` while it does. Letting the lock go counts that change --
+as one change of every part, since which parts is not known -- and keeps the version it left
+as committed, as a changing call does; `session.commit(doc)` does the same while the lock is
+still held (and returns the version). Detection is the history's version against the one
+the last counted change left: two integers, nothing serialized. The change shows as the
+history's own versions (a step per library edit, one for a `document.batch()`); a lock held
+with nothing changed keeps the version and the committed copy. Reads after it
+(`read_lock`, `read_refs`) see it without taking the lock; the next edit on a draft drafts
+on it at once (a draft in flight then is prepared again once); the refs as they are are kept
+as the new version's, so an undo back to it keeps them. In undo it is what it was: steps
+with no caller, which the session's undo takes back one per step and a caller's own undo
+does not take (an earlier change of its own under it is refused, naming a change made
+outside the tools). A change made without the lock stays unsupported: it is counted at the
+next lock let go, `session.commit`, or read that commits, and a call running meanwhile may
+see it half made.
+
 **Edits of different blocks at the same time (round 45, R64, 0.100.0).** Where a format says
 how (`DocumentFormat.blocks`, `ooxml_edit.tools.blocks`; docx-agent's Word documents), a
 changing call it admits, made while another call edits the same document (or one the format

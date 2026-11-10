@@ -29,6 +29,17 @@ before its call returns, so its next read sees it.  The copy shares the document
 A changing call's checks run on the copy of the version it made, after it let the lock go
 (:class:`~.dispatch.After`), so the next edit does not wait for them either.
 
+The application's own edits (round 48).  An application that changes a document through
+the library itself holds its lock while it does (:meth:`Session.lock`); letting the lock go
+counts what it did as a change (every part may have changed: :meth:`DocumentEntry.
+count_outside`) and keeps the version it left as committed, as a changing call does --
+:meth:`Session.commit` does the same without letting go.  The change shows as the
+history's own versions (one per step it recorded: a step per library edit, or one for a
+``batch()``); a lock held with nothing changed keeps the version.  The next read sees it,
+and the next edit on a draft drafts on it at once.  A change made without the lock is not
+supported: it is counted at the next lock let go, commit or read that commits, and a call
+running meanwhile may see it half made.
+
 Edits of different blocks (round 45, lane B).  Where a format says how
 (:attr:`DocumentFormat.blocks`, :mod:`.blocks`), a changing call it admits runs on a draft of
 the committed version without the document's lock, and its change is applied under the lock
@@ -597,9 +608,14 @@ class DocumentEntry:
         after it (:meth:`reader`): its bytes (:meth:`snapshot`), its refs and what the
         format's copy needs (:attr:`DocumentFormat.read_copy`).  Under the document's lock,
         at a version no edit is changing; once per version.  A format without
-        ``read_copy``, or one that cannot copy this document, keeps nothing."""
+        ``read_copy``, or one that cannot copy this document, keeps nothing.  A change the
+        dispatcher did not count (the application's own) is counted first
+        (:meth:`count_outside`)."""
+        if self.pinned is not None:
+            return
+        self.count_outside()
         read_copy = getattr(fmt, "read_copy", None)
-        if read_copy is None or self.pinned is not None:
+        if read_copy is None:
             return
         version = self.version
         committed = self.committed
@@ -705,6 +721,22 @@ class DocumentEntry:
         for part in parts or ():
             self.part_stamps[part] = self.change_seq
         self.change_version = self.version
+
+    def count_outside(self, change: Any = None) -> bool:
+        """Round 48: count a change the dispatcher did not make -- the application's own,
+        through the library, under the document's lock -- when the version is not the one
+        the last counted change left: one change from that version to this one, of the
+        parts ``change`` says (a :meth:`watch`'s over exactly that change), else of every
+        part; the refs as they are kept as this version's (so an undo back to it keeps
+        them).  Whether there was one.  Cheap: the history's version is the change counter,
+        and nothing is serialized (a watch compares the parts' snapshots when asked)."""
+        if self.pinned is not None or self.change_version is None or self.version == self.change_version:
+            return False
+        before = self.change_version
+        self.keep_change(before, change)
+        self.note_change(change.parts if change is not None else None, before)
+        self.ref_states.setdefault(self.version, dict(self.refs))
+        return True
 
     def changes_between(self, used: int, now: int) -> list[Any] | None:
         """The changes that took this document from version ``used`` to ``now`` (the
@@ -1279,13 +1311,40 @@ class Session:
 
     @contextmanager
     def lock(self, doc_ids: Iterable[str]) -> Iterator[list[DocumentEntry]]:
-        """Hold the locks of several documents, taken in :func:`doc_order`."""
+        """Hold the locks of several documents, taken in :func:`doc_order`.
+
+        Round 48: what the application changed through the library meanwhile is counted
+        -- by the parts it changed (a watch of the document's history while the locks are
+        held, compared only when there was a change) -- and committed before the locks go
+        (:meth:`commit`), even when the block raised; a lock held with nothing changed costs
+        a comparison of two numbers per document."""
         ordered = sorted(set(doc_ids), key=doc_order)
         entries = [self.entry(doc_id) for doc_id in ordered]
         with ExitStack() as stack:
+            held = []
             for entry in entries:
                 stack.enter_context(entry.lock)
-            yield entries
+                held.append((entry, entry.version, stack.enter_context(entry.watch())))
+            try:
+                yield entries
+            finally:
+                for entry, start, change in held:
+                    # The watch covers the change exactly when every change before the
+                    # lock was taken had been counted; else every part may have changed.
+                    exact = change if start == entry.change_version else None
+                    if entry.count_outside(exact):
+                        entry.commit(self.formats.get(entry.kind))
+
+    def commit(self, doc_id: str) -> int:
+        """Round 48: count and commit what the application changed in ``doc_id`` through
+        the library, as letting :meth:`lock` go does, without letting it go (under the
+        document's lock, taken here when not held): the next read sees it, the next edit on
+        a draft drafts on it.  Changed nothing: the version stays, kept as committed if it
+        was not yet (once per version, as a read keeps it).  The version now."""
+        entry = self.entry(doc_id)
+        with entry.lock:
+            entry.commit(self.formats.get(entry.kind))
+            return entry.version
 
     @contextmanager
     def read_lock(self, doc_ids: Iterable[str]) -> Iterator[list[DocumentEntry]]:

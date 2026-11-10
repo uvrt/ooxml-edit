@@ -4,7 +4,20 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet. Each vers
 reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
 earlier ones were never tagged.
 
-## 0.104.0 -- unreleased
+## Unreleased
+- **The free-threaded CI job fails instead of hanging for 6 hours** (round 47, lane H). On
+  CPython 3.15.2t threads creating classes at the same time, as first imports in threads
+  do, can hang the interpreter for good: one thread stops the world from
+  `type_set_abstractmethods` or `type_setattro` while the others spin for the type lock
+  or a type's critical section. Without ooxml-edit: 4 standard library modules imported in
+  4 threads hung in 12 of 15 runs on 3.15.2t, none on 3.15.2. The suite's one test that
+  imports in threads (`test_the_registries_are_the_same_imported_in_threads_or_in_order`,
+  where the macOS 3.15t job hung) is left out on a free-threaded build, and has a timeout
+  everywhere else. The "Free threading" workflow prints every thread of a test still
+  running after 300 s (`-o faulthandler_timeout=300`, `-v`) and stops the job at 45
+  minutes. No library code changed.
+
+## 0.106.0 -- unreleased
 - **A dataset's text value may carry its Markdown** (round 48, R86): `Dataset.markdown`, by
   `(row, column)` from 0, for a value whose source holds more than its characters -- a
   cell's bold and italic runs, lines that are list items -- and `Dataset.markdown_at(row,
@@ -13,6 +26,19 @@ earlier ones were never tagged.
   one text field as blocks writes the Markdown, so its lists stay lists. Checked (inside
   the dataset, text), not compared, kept by `row_slice` for its rows, pickled with the
   dataset. tests/test_tools_datasets.py.
+
+## 0.104.0 -- unreleased
+- **The application's own edits are committed** (round 48, R84). Letting `Session.lock` go
+  counts a change the application made through the library while holding it
+  (`DocumentEntry.count_outside`: the history's version against the one the last counted
+  change left; its parts from a history watch held with the lock, every part when a change
+  came before the lock was taken) and commits the version it left, even when the
+  block raised; `Session.commit(doc)` does the same without letting go. The next edit on a
+  draft drafts at once (before: three conflicts, "the document changed outside the tools",
+  then the whole-document lock); reads see the change without the lock. A lock held with
+  nothing changed keeps the version. Undo is as before (steps with no caller). A change
+  made without the lock stays unsupported (counted at the next lock let go, commit or
+  committing read). `tests/test_tools_host_edits.py`.
 
 ## 0.103.0 -- unreleased
 - **"changed while this call read it" only when the change touched what the read covered**
