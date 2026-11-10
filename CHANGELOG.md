@@ -4,6 +4,19 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet. Each vers
 reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
 earlier ones were never tagged.
 
+## Unreleased
+- **The free-threaded CI job fails instead of hanging for 6 hours** (round 47, lane H). On
+  CPython 3.15.2t threads creating classes at the same time, as first imports in threads
+  do, can hang the interpreter for good: one thread stops the world from
+  `type_set_abstractmethods` or `type_setattro` while the others spin for the type lock
+  or a type's critical section. Without ooxml-edit: 4 standard library modules imported in
+  4 threads hung in 12 of 15 runs on 3.15.2t, none on 3.15.2. The suite's one test that
+  imports in threads (`test_the_registries_are_the_same_imported_in_threads_or_in_order`,
+  where the macOS 3.15t job hung) is left out on a free-threaded build, and has a timeout
+  everywhere else. The "Free threading" workflow prints every thread of a test still
+  running after 300 s (`-o faulthandler_timeout=300`, `-v`) and stops the job at 45
+  minutes. No library code changed.
+
 ## 0.103.0 -- unreleased
 - **"changed while this call read it" only when the change touched what the read covered**
   (round 47, the Word team's question). A handler that lets the locks go may say what of
