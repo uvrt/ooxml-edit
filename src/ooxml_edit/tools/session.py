@@ -722,18 +722,19 @@ class DocumentEntry:
             self.part_stamps[part] = self.change_seq
         self.change_version = self.version
 
-    def count_outside(self) -> bool:
+    def count_outside(self, change: Any = None) -> bool:
         """Round 48: count a change the dispatcher did not make -- the application's own,
         through the library, under the document's lock -- when the version is not the one
-        the last counted change left: as one change of every part (which parts is not
-        known), from that version to this one, with the refs as they are kept as this
-        version's (so an undo back to it keeps them).  Whether there was one.  Cheap: the
-        history's version is the change counter; nothing is serialized."""
+        the last counted change left: one change from that version to this one, of the
+        parts ``change`` says (a :meth:`watch`'s over exactly that change), else of every
+        part; the refs as they are kept as this version's (so an undo back to it keeps
+        them).  Whether there was one.  Cheap: the history's version is the change counter,
+        and nothing is serialized (a watch compares the parts' snapshots when asked)."""
         if self.pinned is not None or self.change_version is None or self.version == self.change_version:
             return False
         before = self.change_version
-        self.keep_change(before, None)
-        self.note_change(None, before)
+        self.keep_change(before, change)
+        self.note_change(change.parts if change is not None else None, before)
         self.ref_states.setdefault(self.version, dict(self.refs))
         return True
 
@@ -1313,18 +1314,25 @@ class Session:
         """Hold the locks of several documents, taken in :func:`doc_order`.
 
         Round 48: what the application changed through the library meanwhile is counted
-        and committed before the locks go (:meth:`commit`), even when the block raised; a
-        lock held with nothing changed costs a comparison of two numbers per document."""
+        -- by the parts it changed (a watch of the document's history while the locks are
+        held, compared only when there was a change) -- and committed before the locks go
+        (:meth:`commit`), even when the block raised; a lock held with nothing changed costs
+        a comparison of two numbers per document."""
         ordered = sorted(set(doc_ids), key=doc_order)
         entries = [self.entry(doc_id) for doc_id in ordered]
         with ExitStack() as stack:
+            held = []
             for entry in entries:
                 stack.enter_context(entry.lock)
+                held.append((entry, entry.version, stack.enter_context(entry.watch())))
             try:
                 yield entries
             finally:
-                for entry in entries:
-                    if entry.count_outside():
+                for entry, start, change in held:
+                    # The watch covers the change exactly when every change before the
+                    # lock was taken had been counted; else every part may have changed.
+                    exact = change if start == entry.change_version else None
+                    if entry.count_outside(exact):
                         entry.commit(self.formats.get(entry.kind))
 
     def commit(self, doc_id: str) -> int:

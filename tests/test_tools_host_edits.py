@@ -113,19 +113,41 @@ def test_a_change_is_counted_even_when_the_block_raised():
         assert result.ok and result.block["tries"] == 1
 
 
-def test_a_draft_in_flight_when_the_application_edits_is_prepared_again():
+def test_a_draft_in_flight_is_checked_against_the_parts_the_application_changed():
     box, _hook = _box("always")
     with box:
         session, doc = _open(box)
+        # An append commutes with the application's append: applied on the first try.
         thread, slow = _thread(lambda: box.dispatch(
             session, "toy_block_add", {"doc": doc, "text": "slow", "stall": STALL}))
         time.sleep(0.3)
         _host_insert(session, doc, "host")
         thread.join()
         result = slow["result"]
-        assert result.ok and result.block["tries"] == 2
-        assert result.block["conflicts"] == ["parts changed"]     # every part may have changed
+        assert result.ok and _shape(result.block) == {"tries": 1, "conflicts": []}
         assert session.entry(doc).document.items() == ["host", "slow"]
+        # One that read every item conflicts with it, and is prepared again.
+        thread, slow = _thread(lambda: box.dispatch(
+            session, "toy_block_first", {"doc": doc, "text": "first", "stall": STALL}))
+        time.sleep(0.3)
+        _host_insert(session, doc, "host two")
+        thread.join()
+        result = slow["result"]
+        assert result.ok and _shape(result.block) == {"tries": 2, "conflicts": ["the items changed"]}
+        assert result.summary == "4 items"
+
+
+def test_a_change_before_the_lock_was_taken_counts_as_every_part():
+    box, _hook = _box("always")
+    with box:
+        session, doc = _open(box)
+        entry = session.entry(doc)
+        entry.document.insert("unlocked", "end")                  # not supported: no lock held
+        with session.lock([doc]):
+            entry.document.insert("locked", "end")
+        assert entry._all_changed == entry.change_seq                # every part may have changed
+        result = box.dispatch(session, "toy_block_add", {"doc": doc, "text": "after"})
+        assert result.ok and result.block["tries"] == 1
 
 
 def test_refs_are_kept_as_the_applications_versions_own():
