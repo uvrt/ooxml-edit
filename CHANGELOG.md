@@ -17,6 +17,15 @@ earlier ones were never tagged.
   running after 300 s (`-o faulthandler_timeout=300`, `-v`) and stops the job at 45
   minutes. No library code changed.
 
+## 0.108.0 -- unreleased
+
+- **Tracking switched is the committed version's** (round 51). Switching tracking makes no
+  new version, so `DocumentEntry.commit` kept the committed version as it was, with the
+  old tracking: every draft made from it then found "tracking was switched" until a call
+  under the lock made a version (the first tracked call after drafts conflicted three
+  times and took the lock). The committed version now takes the tracking with it, as it
+  takes refs a call only defined (round 47); `Committed.with_refs` takes `tracking`.
+
 ## 0.107.0 -- unreleased
 - **A call on a draft may read another document's table** (round 50, R100). A changing call
   a format admits on a draft that takes rows from another open document -- a `t:` source
