@@ -72,8 +72,13 @@ SUBSET_KEYWORDS = frozenset({
 #: ``orSingle`` (``true``, on an array) lets the dispatcher take one item in the array's
 #: place, read as a one-item array: ``range: "A..B"`` for ``range: ["A..B"]`` (round 35).
 #: Never sent, so it costs no tokens.
+#: ``orMap`` (``true``, on an array of objects of two string properties, both required) lets
+#: the dispatcher take an object ``{a: b, ...}`` in the array's place, read as
+#: ``[{first: a, second: b}, ...]`` in its order (round 52): pairs a strict decoder writes as
+#: an array -- the subset has no object of free keys -- and a model naturally writes as one
+#: object.  Never sent; the result's warnings say what was read.
 BOUND_KEYWORDS = frozenset({"minimum", "maximum", "minLength", "maxLength", "maxItems",
-                            "orInteger", "valueAliases", "orNull", "orSingle"})
+                            "orInteger", "valueAliases", "orNull", "orSingle", "orMap"})
 
 #: Words that make a property name a file-system path.  The tool layer has no paths: inputs
 #: are blob handles, outputs go to the application.
@@ -184,6 +189,10 @@ def _check_node(node: Any, where: str, depth: int, problems: list[str], enum_tot
         problems.append(f"{where}: orNull must be true")
     if "orSingle" in node and (node["orSingle"] is not True or kind != "array"):
         problems.append(f"{where}: orSingle must be true, on an array")
+    if "orMap" in node and (node["orMap"] is not True or kind != "array"
+                            or _pair_names(node.get("items")) is None):
+        problems.append(f"{where}: orMap must be true, on an array of objects of two required "
+                        "string properties")
     if "valueAliases" in node:
         aliases = node["valueAliases"]
         if kind != "string" or not isinstance(aliases, Mapping) or not aliases or not all(
@@ -479,6 +488,19 @@ def _misplaced(key: str, node: Mapping[str, Any], where: str,
     return ""
 
 
+def _pair_names(items: Any) -> tuple[str, str] | None:
+    """An ``orMap`` array's two item properties, in order; ``None`` when its items are not
+    an object of two required string properties."""
+    if not isinstance(items, Mapping) or items.get("type") != "object":
+        return None
+    properties = items.get("properties") or {}
+    names = list(properties)
+    if (len(names) != 2 or set(items.get("required") or ()) != set(names)
+            or any((properties[name] or {}).get("type") != "string" for name in names)):
+        return None
+    return names[0], names[1]
+
+
 def _validate(node: Mapping[str, Any], value: Any, where: str, notes: list[str],
               outer: tuple[Mapping[str, Any], str] | None = None) -> Any:
     """``value`` checked against ``node`` at ``where``; ``outer``: the enclosing object's
@@ -510,6 +532,11 @@ def _validate(node: Mapping[str, Any], value: Any, where: str, notes: list[str],
             result[name] = _validate(child, value[name], path, notes, (node, where))
         return result
     if kind == "array":
+        if node.get("orMap") and isinstance(value, Mapping):
+            first, second = _pair_names(node.get("items")) or ("", "")
+            value = [{first: a, second: b} for a, b in value.items()]
+            notes.append(f"{label} given as an object: read as {len(value)} pair(s) "
+                         f"{{{first}, {second}}}")
         if node.get("orSingle") and not isinstance(value, list):
             try:            # one item in the array's place (round 35): a one-item array
                 _validate(node.get("items") or {}, value, f"{where}[0]", [], outer)

@@ -130,16 +130,19 @@ def boolean(description: str | None = None, *, optional: bool = False) -> Param:
 
 
 def array(items: Param, description: str | None = None, *, min_items: int | None = None,
-          max_items: int | None = None, or_single: bool = False,
+          max_items: int | None = None, or_single: bool = False, or_map: bool = False,
           optional: bool = False) -> Param:
     """An array; with ``or_single``, the dispatcher also takes one item in its place, read as
-    a one-item array (``orSingle``, :data:`~.schema.BOUND_KEYWORDS`, never sent)."""
+    a one-item array (``orSingle``, :data:`~.schema.BOUND_KEYWORDS`, never sent); with
+    ``or_map`` (items an object of two required strings), an object ``{a: b}`` read as the
+    pairs ``[{first: a, second: b}]`` (``orMap``, never sent)."""
     item_schema = dict(items.schema)
     schema = _described("array", description)
     schema["items"] = item_schema
     if min_items is not None:
         schema["minItems"] = min_items
-    return _param(schema, optional, maxItems=max_items, orSingle=True if or_single else None)
+    return _param(schema, optional, maxItems=max_items, orSingle=True if or_single else None,
+                  orMap=True if or_map else None)
 
 
 def free_object(description: str, *, optional: bool = False) -> Param:

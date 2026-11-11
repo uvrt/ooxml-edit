@@ -17,6 +17,27 @@ earlier ones were never tagged.
   running after 300 s (`-o faulthandler_timeout=300`, `-v`) and stops the job at 45
   minutes. No library code changed.
 
+## 0.110.0 -- unreleased
+
+- **`loose_key`: one rule for keys spelled differently** (round 52, R106;
+  `ooxml_edit.tools.loose_key`, module `ooxml_edit.tools.keys`). Two sources spell one key
+  two ways -- `K7-12.3` and `k7-12.03`, `DOC-4.2` and `DOC-004.2` -- and every library that
+  matches keys loosely now does it by one documented rule: runs of letters (case folded,
+  accents counting), runs of the digits 0-9 (compared as numbers: `05` is `5`, however many
+  digits) and single other characters; white space, invisible characters and the separators
+  `. - _ /` between two runs are one boundary whatever they are (`K7-12` = `k7 12` =
+  `K7_12`), a boundary all the same (`03-1` is not `031`, `AB` not `A B`); at either end
+  white space is ignored and a separator counts. Nothing else is guessed (no regular
+  expressions). The tuple it returns also sorts keys naturally. docs/TOOLS.md, "Keys compared
+  loosely"; tests/test_tools_keys.py holds it to a table of pairs that must and must not
+  match. docx-agent's `sync` uses it first; xlsx-agent's filter `loose` (text, white space
+  and case only) is a different rule and stays.
+- **`orMap`: pairs written as one object** (round 52). `array(obj({"table": ..., "data":
+  ...}), or_map=True)` -- an array of objects of two required strings -- also takes one
+  object `{"K7-1": "K7.01"}`, read as the pairs in its order with a line in the warnings: a
+  strict decoder writes the array (the subset has no object of free keys), a model naturally
+  writes the object. A validation keyword, never sent.
+
 ## 0.109.0 -- unreleased
 
 - **Tracking switched is the committed version's** (round 51). Switching tracking makes no
