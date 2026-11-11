@@ -273,6 +273,7 @@ USED_BY: dict[str, dict[str, str]] = {
         "collect_warnings": "pptx-agent",
         "content_key": "docx-agent",
         "integer": "docx-agent, pptx-agent, xlsx-agent",
+        "loose_key": "docx-agent",
         "names_as": "docx-agent, pptx-agent",
         "number": "docx-agent, pptx-agent, xlsx-agent",
         "obj": "docx-agent, pptx-agent, xlsx-agent",

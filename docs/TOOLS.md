@@ -597,6 +597,33 @@ placed value came from, the column, the rows placed (from 1, in the order placed
 
 The sources are also kept in the saved document: see the next paragraphs.
 
+**Keys compared loosely** (round 52, 0.110.0; `ooxml_edit.tools.loose_key`). Two sources
+often spell one key two ways -- `K7-12.3` in a document, `k7-12-03` in a workbook,
+`DOC-004.2` and `DOC-4.2`. `loose_key(text)` is the one rule every tool that matches keys
+loosely uses, so a key matches the same way in every library: the key is read as runs of
+letters (case folded; accents count), runs of the digits 0-9 (compared as numbers: `05` is
+`5`) and single other characters; white space, invisible characters (zero-width spaces and
+joiners, the word joiner, the byte order mark, the soft hyphen) and the separators `.` `-`
+`_` `/` between two runs are one boundary whatever they are -- `K7-12` = `k7 12` = `K7_12`
+-- but a boundary all the same, so `03-1` is not `031` and `AB` is not `A B`. At either
+end white space is ignored and a separator counts (`K7-` is not `K7`), as does every other
+character (`#`, `(`, `,`, digits other than 0-9). Nothing beyond this is guessed: no regular
+expressions, no spelling corrections, no prefixes dropped. Two keys match loosely when
+their `loose_key` values are equal. A tool matches exactly first and loosely only what is
+left, and refuses a key that loosely matches more than one key on the other side, naming
+them. The rule grows when real key shapes need it, here, for every tool at once.
+The tuple is also a natural sort order (numbers by value, however many digits).
+
+This is *key* matching. A filter's `loose` in a library (xlsx-agent's, round 40: white space
+and case ignored in a cell's text) matches *text*, and is a smaller rule on purpose.
+
+*Pairs written as one object* (round 52, 0.110.0). An array of pairs -- items an object of
+two required strings, `array(obj({"table": ..., "data": ...}), or_map=True)` -- also takes
+one object `{"K7-1": "K7.01"}`, read as `[{"table": "K7-1", "data": "K7.01"}]` in its order
+(`orMap`, a validation keyword, never sent): a strict decoder writes the array (the subset
+has no object of free keys) and a model naturally writes the object; a line in the
+result's warnings says it was read.
+
 **Blank points** (round 29). Values given by position take `null` for a blank point too
 (`values`, and `data`'s `values` for `add`; the validation schema's `orNull`, which the
 canonical schema leaves out -- the descriptions say `null` -- and the OpenAI strict form

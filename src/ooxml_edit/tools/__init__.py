@@ -75,6 +75,7 @@ from .adapters import StrictProblem, strict_problems
 from .datasets import (CACHE_EXTERNAL, CACHE_STATUSES, DATASET_ID, DATASET_PREFIX,
                        TYPE_LABELS, Dataset, DatasetEntry, dataset_id, row_range)
 from .dispatch import REF, Call, CallContext, Toolbox, collect_warnings
+from .keys import loose_key
 from .limits import LimitError, Limits
 from .logs import CallRecord
 from .numbers import NumberRules, NumberText
@@ -106,6 +107,7 @@ __all__ = [
     "render", "rendercache", "run_all",
     "anthropic_image_tokens", "array", "boolean", "build_schema", "canonical", "check_subset",
     "collect_warnings", "dataset_id", "doc_order", "fold_ref", "free_object", "gil_enabled", "integer", "locale_of",
+    "loose_key",
     "row_range",
     "names_as", "number", "obj", "openai_image_tokens",
     "page_list", "page_text", "part_entries", "hints", "numbers", "scales", "shared", "textfacts", "tiles", "strict_problems", "string", "system_prompt", "tool", "truncate", "validate_call",
