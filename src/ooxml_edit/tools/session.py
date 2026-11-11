@@ -620,13 +620,15 @@ class DocumentEntry:
         version = self.version
         committed = self.committed
         if committed is not None and committed.version == version:
-            if committed.refs != self.refs:
+            if committed.refs != self.refs or (committed.tracking or None) != (self.tracking or None):
                 # Round 47: a call that only defined refs (the version as it was): the
                 # same version with its refs now, so refs read at the committed version
-                # are never behind.
+                # are never behind.  Round 51: likewise tracking switched (no new
+                # version) -- else every draft made from it found "tracking was switched"
+                # until a call under the lock made a version.
                 self.committed = committed.with_refs(
                     dict(self.refs), dict(self.ref_states.get(version, self.refs)),
-                    dict(self.ref_owners))
+                    dict(self.ref_owners), tracking=self.tracking)
             return
         try:
             make = read_copy(self.document)
@@ -992,20 +994,22 @@ class Committed:
             return self._entry
 
     def with_refs(self, refs: dict[str, str], ref_state: dict[str, str],
-                  ref_owners: dict[tuple[str, str], Mapping[str, Any]]) -> "Committed":
-        """This version with other refs (round 47: a call that only defined refs): its
-        bytes and copy shared -- a reader made already is kept, its document and lock
-        shared, with the refs now -- for the calls that read it next; the readers holding
-        this one keep the refs they began with."""
+                  ref_owners: dict[tuple[str, str], Mapping[str, Any]], *,
+                  tracking: dict[str, Any] | None = None) -> "Committed":
+        """This version with other refs (round 47: a call that only defined refs) and
+        tracking (round 51: switched, no new version): its bytes and copy shared -- a
+        reader made already is kept, its document and lock shared, with the refs and
+        tracking now -- for the calls that read it next; the readers holding this one keep
+        the refs they began with."""
         again = Committed(self.version, self.data, self.make, refs, ref_state,
-                          tracking=self.tracking, owners=self.owners, seq=self.seq,
+                          tracking=tracking, owners=self.owners, seq=self.seq,
                           ref_owners=ref_owners)
         with self._lock:
             again._failed = self._failed
             if self._entry is not None:
                 again._entry = dataclasses.replace(
                     self._entry, refs=dict(refs), ref_states={self.version: dict(ref_state)},
-                    ref_owners=dict(ref_owners))
+                    ref_owners=dict(ref_owners), tracking=tracking)
         return again
 
 

@@ -80,6 +80,13 @@ def block_cells(call, doc, cells):
     return Result(summary=f"{len(cells)} cell(s): " + ", ".join(repr(c.get('from')) for c in cells))
 
 
+@tool("toy_block_track", "Test only: switch tracking (no change to the document).",
+      {"doc": string("Document id."), "on": integer("1 on, 0 off.", minimum=0)}, kind="docx", mutates=True)
+def block_track(call, doc, on):
+    call.entry.tracking = {"on": True, "author": "Writer"} if on else None
+    return Result(summary="tracking switched")
+
+
 class ToyBlocks:
     """The toy format's :class:`~ooxml_edit.tools.blocks.BlockEdits`: items in the main part."""
 
@@ -140,7 +147,7 @@ def _box(mode: str = "always", hook=None, limits=None) -> tuple[Toolbox, ToyBloc
     hook = hook or ToyBlocks()
     fmt = dataclasses.replace(tools_toys.TEXT, read_copy=_read_copy, blocks=hook)
     box = Toolbox(tools_toys.TOOLS + [block_add, block_first, block_refuse, block_dataset, block_cells,
-                                      *shared.SESSION_TOOLS],
+                                      block_track, *shared.SESSION_TOOLS],
                   formats=[tools_toys.DECK, fmt], groups=tools_toys.GROUPS, workers=0, block_edits=mode,
                   limits=limits)
     return box, hook
@@ -514,3 +521,18 @@ def test_a_call_that_drew_ids_and_failed_runs_under_the_lock():
         session, doc = _open(box)
         refused = box.dispatch(session, "toy_block_refuse", {"doc": doc})
         assert not refused.ok and "lock" not in (refused.block or {})
+
+
+def test_tracking_switched_without_a_new_version_is_the_committed_versions():
+    """Round 51: switching tracking makes no new version; the committed version a draft is
+    made from carries the tracking now, so the next call drafts on its first try (before:
+    every try found "tracking was switched", and the call took the lock)."""
+    box, hook = _box("always")
+    with box:
+        session, doc = _open(box)
+        assert box.dispatch(session, "toy_block_add", {"doc": doc, "text": "one"}).ok
+        for on in (1, 0, 1):
+            assert box.dispatch(session, "toy_block_track", {"doc": doc, "on": on}).ok
+            result = box.dispatch(session, "toy_block_add", {"doc": doc, "text": f"after {on}"})
+            assert result.ok and _shape(result.block) == {"tries": 1, "conflicts": []}, result.block
+            assert session.entry(doc).committed.tracking == session.entry(doc).tracking

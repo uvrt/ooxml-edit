@@ -17,6 +17,15 @@ earlier ones were never tagged.
   running after 300 s (`-o faulthandler_timeout=300`, `-v`) and stops the job at 45
   minutes. No library code changed.
 
+## 0.109.0 -- unreleased
+
+- **Tracking switched is the committed version's** (round 51). Switching tracking makes no
+  new version, so `DocumentEntry.commit` kept the committed version as it was, with the
+  old tracking: every draft made from it then found "tracking was switched" until a call
+  under the lock made a version (the first tracked call after drafts conflicted three
+  times and took the lock). The committed version now takes the tracking with it, as it
+  takes refs a call only defined (round 47); `Committed.with_refs` takes `tracking`.
+
 ## 0.108.0 -- unreleased
 - **A batch that derives a dataset from another document, then writes from it, runs on a
   draft** (round 51, R105). Before, a batch naming two documents always took both locks for
