@@ -2272,7 +2272,8 @@ class Toolbox:
                                 caller)
             since = turn.mark() if turn is not None else 0
             before = {doc: entry.version for doc, entry in entries.items()}
-        key = arguments.get("key") if changing and isinstance(arguments.get("key"), str) else None
+        key = arguments.get("key") if changing and tool.retry_key \
+            and isinstance(arguments.get("key"), str) else None
         if key is not None and primary is not None and (tool.name, key) in primary.keys:
             replay = primary.keys[(tool.name, key)]
             return Result(summary=f"already done with key {key!r}: nothing new was made",

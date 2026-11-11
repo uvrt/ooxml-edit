@@ -251,6 +251,10 @@ class Tool:
     #: are free-form, so a model writing ops sees no field as required): ``replace_text``'s
     #: ``expect`` is ``one``.  Still required in the definition, so a strict decoder sends it.
     defaults: Mapping[str, Any] = field(default_factory=dict)
+    #: Round 51: whether a changing call's ``key`` argument is a retry key (a repeat with
+    #: the same key makes nothing new).  ``False`` for a tool whose ``key`` means something
+    #: else -- a key column -- so a call repeated with it runs again.
+    retry_key: bool = True
     #: The role a call needs (:data:`ROLES`), or :data:`ANY_ROLE`.  ``None``: ``edit`` for a
     #: changing tool (``mutates``), ``review`` for a reading one.
     role: str | None = None
@@ -516,7 +520,8 @@ class Tool:
             and tuple(self.sources) == tuple(other.sources) \
             and tuple(self.facts) == tuple(other.facts) \
             and dict(self.aliases) == dict(other.aliases) \
-            and dict(self.defaults) == dict(other.defaults)
+            and dict(self.defaults) == dict(other.defaults) \
+            and self.retry_key == other.retry_key
 
     def merged(self, other: "Tool") -> "Tool":
         """One definition serving both tools' kinds: a shared tool two libraries implement."""
@@ -710,7 +715,8 @@ def tool(name: str, description: str, params: Mapping[str, Param] | None = None,
          review_core: bool = False,
          action_fields: Mapping[str, Sequence[str]] | None = None,
          ahead: Handler | None = None,
-         defaults: Mapping[str, Any] | None = None) -> Callable[[Handler], Tool]:
+         defaults: Mapping[str, Any] | None = None,
+         retry_key: bool = True) -> Callable[[Handler], Tool]:
     """Make a :class:`Tool` of a handler.  ``kind`` restricts it to one document kind;
     ``reads`` marks the calls of a changing tool that only read (:attr:`Tool.reads`);
     ``aliases`` the argument names read as its own (:attr:`Tool.aliases`);
@@ -724,7 +730,8 @@ def tool(name: str, description: str, params: Mapping[str, Param] | None = None,
     ``ahead`` the work a changing call does before its change, which may let the locks go
     (:attr:`Tool.aheads`); ``read_batchable`` lets ``read_batch`` run a tool ``batch``
     refuses (:attr:`Tool.read_batchable`); ``defaults`` the value a required argument left
-    out is read as (:attr:`Tool.defaults`)."""
+    out is read as (:attr:`Tool.defaults`); ``retry_key=False`` a ``key`` argument that is
+    not a retry key (:attr:`Tool.retry_key`)."""
 
     def make(handler: Handler) -> Tool:
         return Tool(name=name, description=description, schema=build_schema(params or {}),
@@ -737,7 +744,7 @@ def tool(name: str, description: str, params: Mapping[str, Param] | None = None,
                     review_core=review_core,
                     action_fields={k: tuple(v) for k, v in (action_fields or {}).items()},
                     aheads={kind: ahead} if ahead is not None else {},
-                    defaults=dict(defaults or {}))
+                    defaults=dict(defaults or {}), retry_key=retry_key)
 
     return make
 

@@ -42,6 +42,13 @@ earlier ones were never tagged.
   itself (`DatasetEntry.follow_live`), so it goes stale when the document changes.
 - An all-or-none batch on a format without a history no longer counts a document it only
   read as changed (its version stayed; as in a batch applied op by op).
+- **A `key` that is not a retry key no longer makes a repeat "already done"** (round 51,
+  found while measuring R105). The dispatcher read every changing call's `key` as a retry
+  key; Word's `word_edit_table` `key` is the column a `sync` matches rows by, so a second
+  sync with the same key column -- of any table of the document -- answered "already done
+  with key 'Product': nothing new was made" and changed nothing. `Tool.retry_key` (and
+  `tool(retry_key=False)`) says a tool's `key` is something else; such calls always run.
+  tests/test_tools_dispatch.py.
 
 ## 0.107.0 -- unreleased
 - **A call on a draft may read another document's table** (round 50, R100). A changing call
