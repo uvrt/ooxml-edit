@@ -189,6 +189,28 @@ def test_an_idempotence_key_makes_a_retry_safe(toolbox, session):
     assert second.changed == first.changed and "already done" in second.summary
 
 
+@tool("toy_word_keyed", "Test only: append an item; key is a column's name, not a retry key.",
+      {"doc": string("Document id."), "text": string("The item."), "key": string("A column.", optional=True)},
+      kind="docx", mutates=True, retry_key=False)
+def _keyed(call, doc, text, key=None):
+    call.document.insert(f"{key}:{text}", "end")
+    return Result(summary=f"added {key}:{text}")
+
+
+def test_a_key_that_is_not_a_retry_key_never_skips_a_repeat():
+    """Round 51: a tool whose ``key`` means a column (``retry_key=False``) runs every call;
+    a repeat with the same key is a new change, not "already done"."""
+    with Toolbox([*tools_toys.TOOLS, _keyed], formats=tools_toys.FORMATS, groups=tools_toys.GROUPS) as box:
+        session = box.session(clock=CLOCK)
+        session.open(synthetic.outer_package(), "text.docx")
+        first = box.dispatch(session, "toy_word_keyed", {"doc": "d1", "text": "a", "key": "Ref"})
+        second = box.dispatch(session, "toy_word_keyed", {"doc": "d1", "text": "b", "key": "Ref"})
+        assert first.ok and second.ok and second.summary == "added Ref:b", second.to_json()
+        assert (first.version, second.version) == (1, 2)
+        assert session.entry("d1").document.items()[-2:] == ["Ref:a", "Ref:b"]
+        assert not session.entry("d1").keys
+
+
 def test_render_caches_by_version_and_counts_images(toolbox, session):
     first = toolbox.dispatch(session, "toy_ppt_render", {"doc": "d1", "page": 1, "width": 64})
     assert first.ok and len(first.images) == 1 and first.images[0].width == 64
