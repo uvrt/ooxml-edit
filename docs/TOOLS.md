@@ -121,7 +121,16 @@ for one. Round 50 (0.107.0): a call that takes rows from another open document (
 table, as `from` or as `{{t:...}}` in its text) drafts too: that document is read as a read
 reads it (`Session.read_lock`: its committed version, or under its lock where its format
 makes no copy), and the change is applied under both documents' locks only while it is at
-the version read -- else the call is prepared again (`conflicts: ["d2 changed"]`).
+the version read -- else the call is prepared again (`conflicts: ["d2 changed"]`). Round 51
+(0.108.0): a batch whose changes are all of one document drafts too when its other ops,
+before its last change, only read other documents -- deriving a dataset from one, say, then
+writing a table from that dataset: each such op holds the locks of what it reads only while
+it runs (one read again at another version prepares the batch again), the datasets it derives
+are its later ops' on the draft and the session's when the change is applied, under the same
+locks and only while every document read is at the version read. Its answer is the same
+batch's under all the locks: it names the document its ops name first, at the version read,
+with that document's checks. Reads after its last change, a read of the document drafted
+before it, and a dataset derived from that document keep the locks, as before.
 
 **What a call changed (round 13, R2, 0.57.0).** Every result carries `result.touched`, for
 the application and never in what the model reads (`to_json`, `to_text`): what the call

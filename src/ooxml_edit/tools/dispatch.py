@@ -1486,16 +1486,18 @@ class Toolbox:
             try:
                 # Round 45 (lane B): a changing call the format admits, beside another
                 # edit of its document, runs on a draft (blocks.py); else as before.
+                others: list[str] = []
                 drafted = (None if reads_only else
                            self._block_entry(session, tool, clean, doc_ids, reading, roles,
-                                             counted, editing))
+                                             counted, editing, others))
                 outcome = None
                 if drafted is not None:
                     if holding is not None:
                         holding.set()
                     editing.drafting(drafted)
                     outcome = self._run_block(session, tool, clean, drafted, roles, caller,
-                                              turn, block, editing, reading)
+                                              turn, block, editing,
+                                              [*reading, *others], doc_ids)
                     editing.drafted()
                 if outcome is not None:
                     result, entries, primary = outcome
@@ -1639,21 +1641,27 @@ class Toolbox:
     def _block_entry(self, session: Session, tool: Tool, clean: Mapping[str, Any],
                      doc_ids: Sequence[str], reading: Sequence[str], roles: Sequence[str],
                      counted: Mapping[str, tuple[DocumentEntry, int]],
-                     editing: "_Editing") -> DocumentEntry | None:
+                     editing: "_Editing", others: list[str] | None = None
+                     ) -> DocumentEntry | None:
         """The document a changing call runs on a draft of (:mod:`.blocks`), or ``None``: it
         names one document (round 50: and may read rows of others, ``reading`` -- a table
-        of another open document, read at its committed version: :meth:`_run_block`), its format
-        drafts and admits it, and -- with
+        of another open document, read at its committed version: :meth:`_run_block`; round
+        51: or it is a batch whose changes are all of one document, its other ops reading
+        other documents -- a dataset derived of another document, say -- which go in
+        ``others``: :meth:`_batch_target`), its format drafts and admits it, and -- with
         ``block_edits="auto"`` -- another call edits that document now (its change not yet
         made: :meth:`DocumentEntry.begin_edit`), or the format says the call is worth a
         draft alone (``BlockEdits.alone``: one that may run long).  A draft costs a copy
         of the blocks changed and a check of them; beside reads and checks alone, which
         never wait for an edit, nothing waits that it would spare."""
-        if self.block_edits == "off" or len(doc_ids) != 1 or any(
-                doc not in session.documents for doc in reading):
+        if self.block_edits == "off" or any(doc not in session.documents for doc in reading):
             return None
-        found = counted.get(doc_ids[0])
-        if found is None:
+        target: str | None = doc_ids[0] if len(doc_ids) == 1 else None
+        read: list[str] = []
+        if target is None and tool.composite:
+            target, read = self._batch_target(clean, doc_ids, roles)
+        found = counted.get(target) if target is not None else None
+        if found is None or any(doc not in session.documents for doc in read):
             return None
         entry, _running = found
         fmt = session.formats.get(entry.kind)
@@ -1661,13 +1669,41 @@ class Toolbox:
         if hook is None or getattr(fmt, "read_copy", None) is None or entry.pinned is not None:
             return None
         try:
-            admitted = self._admitted(hook, tool, clean, entry.kind, entry.doc_id, roles)
+            admitted = self._admitted(hook, tool, clean, entry.kind, entry.doc_id, roles,
+                                      session)
             if admitted and self.block_edits == "auto" and editing.beside(entry) == 0:
                 admitted = self._alone(hook, tool, clean, roles)
         except Exception:  # noqa: BLE001 -- not admitted: the call runs as before
             logger.exception("the %s format's admits failed", entry.kind)
             return None
+        if admitted and others is not None:
+            others[:] = read
         return entry if admitted else None
+
+    def _batch_target(self, clean: Mapping[str, Any], doc_ids: Sequence[str],
+                      roles: Sequence[str]) -> tuple[str | None, list[str]]:
+        """Round 51 (R105): the one document a batch naming several changes, and the others,
+        which it only reads -- ``(doc, others)``; ``(None, [])`` when its ops before its last
+        change change more than one document, or its reads after it name another (they run
+        on the version it makes, once applied: :meth:`_finish_block`).  Which of its reads
+        may go on a draft is :meth:`_admitted`'s."""
+        ops = clean.get("ops") or []
+        split = self._trailing(ops, roles)
+        changed: list[str] = []
+        late: set[str] = set()
+        for index, op in enumerate(ops):
+            try:
+                op_tool, op_clean = self._prepare(op, None, roles)
+            except ToolError:
+                continue        # fails alone, reading nothing
+            named = op_tool.doc_ids(op_clean)
+            if index >= split:
+                late.update(named)
+            elif op_tool.changes(op_clean):
+                changed += [doc for doc in named if doc not in changed]
+        if len(changed) != 1 or not late <= set(changed):
+            return None, []
+        return changed[0], [doc for doc in doc_ids if doc != changed[0]]
 
     def _alone(self, hook: Any, tool: Tool, clean: Mapping[str, Any], roles: Sequence[str]) -> bool:
         """Whether the format says an admitted call is worth a draft with no other edit in
@@ -1687,12 +1723,15 @@ class Toolbox:
         return bool(alone(tool.name, clean))
 
     def _admitted(self, hook: Any, tool: Tool, clean: Mapping[str, Any], kind: str, doc: str,
-                  roles: Sequence[str]) -> bool:
+                  roles: Sequence[str], session: Session | None = None) -> bool:
         """Whether the format admits the call on a draft: a changing call of its own tool
         on ``doc`` alone (no session tool, no work ahead), or a ``batch`` whose every op
         before its last change is one -- its reads after the last change read the version
         the batch makes, once applied; an op that cannot be validated fails alone, reading
-        nothing."""
+        nothing.  Round 51 (R105): or, before its last change, a read of other documents
+        only (:meth:`_reads_elsewhere`: a dataset derived of another document, its
+        rows), read at their committed version and checked again when the change is
+        applied (:meth:`_run_block`)."""
         if tool.composite:
             if not tool.mutates:
                 return False
@@ -1705,17 +1744,56 @@ class Toolbox:
                     op_tool, op_clean = self._prepare(op, None, roles)
                 except ToolError:
                     continue
+                if not op_tool.changes(op_clean) and session is not None \
+                        and self._reads_elsewhere(session, op_tool, op_clean, doc):
+                    continue
                 if not self._admitted(hook, op_tool, op_clean, kind, doc, roles):
                     return False
             return True
         return (tool.role is None and tool.changes(clean) and tool.ahead_for(kind) is None
                 and tool.doc_ids(clean) == [doc] and bool(hook.admits(tool.name, clean)))
 
+    def _reads_elsewhere(self, session: Session, tool: Tool, clean: Mapping[str, Any],
+                         doc: str) -> bool:
+        """Whether a batch's op, before its last change, only reads -- a tool of no role of
+        its own, no batch -- and reads nothing of ``doc``, the document drafted: neither
+        names it nor takes rows from it (a source, a reference in its text).  Round 51
+        (R105): it may run in the batch on a draft, the documents it reads read at their
+        committed version (:meth:`_run_block`)."""
+        if tool.composite or tool.role is not None or doc in tool.doc_ids(clean):
+            return False
+        try:
+            found = self._sources(session, tool, dict(clean))[1]
+        except ToolError:
+            return True         # it fails alone, reading nothing
+        return doc not in found
+
     def _run_block(self, session: Session, tool: Tool, clean: dict[str, Any],
                    entry: DocumentEntry, roles: Sequence[str], caller: Mapping[str, Any],
                    turn: "_Turn | None", stats: dict[str, Any], editing: "_Editing",
-                   reading: Sequence[str] = ()
+                   reading: Sequence[str] = (), doc_ids: Sequence[str] = ()
                    ) -> tuple[Result, dict[str, DocumentEntry], DocumentEntry] | None:
+        """:meth:`_drafted_run`; round 51: a batch's answer names the document its ops name
+        first, at the version read (as under its lock), and its log is every named one's."""
+        seen: dict[str, tuple[DocumentEntry, int]] = {}
+        outcome = self._drafted_run(session, tool, clean, entry, roles, caller, turn, stats,
+                                    editing, reading, doc_ids, seen)
+        if outcome is None or not doc_ids or doc_ids[0] == entry.doc_id:
+            return outcome
+        result, entries, _primary = outcome
+        first = session.documents.get(doc_ids[0])
+        if first is None:
+            return outcome
+        result.version = seen[first.doc_id][1] if first.doc_id in seen else first.version
+        named = {doc: session.documents[doc] for doc in doc_ids if doc in session.documents}
+        return result, {**named, **entries}, first
+
+    def _drafted_run(self, session: Session, tool: Tool, clean: dict[str, Any],
+                     entry: DocumentEntry, roles: Sequence[str], caller: Mapping[str, Any],
+                     turn: "_Turn | None", stats: dict[str, Any], editing: "_Editing",
+                     reading: Sequence[str], doc_ids: Sequence[str],
+                     seen: dict[str, tuple[DocumentEntry, int]]
+                     ) -> tuple[Result, dict[str, DocumentEntry], DocumentEntry] | None:
         """The call on a draft of ``entry``'s committed version, its change applied under
         the document's lock (:mod:`.blocks`): ``(result, entries, primary)``; ``None`` when
         it is to run on the document under its lock instead -- the format cannot draft it,
@@ -1730,7 +1808,15 @@ class Toolbox:
         the change applies only when every one is at that version still -- else, as when
         a dataset it read changed, it is prepared again on what is committed now.  Their
         locks are held with the document's for that check and the change (briefly), so the
-        values written are the source's when the change is made, as under both locks."""
+        values written are the source's when the change is made, as under both locks.
+
+        Round 51 (R105): a batch's ``reading`` also holds the documents its reads before its
+        last change name (``doc_ids``, the batch's documents, the first of which its result
+        names, as when it runs under their locks); each op holds the locks of those it reads
+        only while it runs (:class:`_Reads`), so the batch's own work on the draft waits for
+        no change of them, nor they for it.  The datasets its ops derive -- of documents
+        other than this one -- are the later ops' on the draft and the session's once its
+        change is applied, kept under the same locks (:meth:`_keep_datasets`)."""
         fmt = session.formats[entry.kind]
         hook = fmt.blocks
         doc = entry.doc_id
@@ -1763,13 +1849,26 @@ class Toolbox:
                 after = After()
                 spent = time.thread_time()
                 try:
-                    with session.read_lock(reading) as readers, drafted.lock:
-                        read = {reader.doc_id: (reader.live or reader, reader.version)
-                                for reader in readers}
-                        result = self._run(session, tool, dict(clean),
-                                           {doc: drafted, **{r.doc_id: r for r in readers}},
-                                           drafted, tuple(reading), roles=roles, caller=caller,
-                                           after=after, drafting=drafting)
+                    if tool.composite:
+                        # Round 51: each op holds the locks of what it reads, as it runs.
+                        drafting.reads = _Reads(session, reading,
+                                                [d for d in doc_ids if d != doc])
+                        with drafted.lock:
+                            result = self._run(session, tool, dict(clean),
+                                               {doc: drafted, **drafting.reads.entries},
+                                               drafted, tuple(reading), roles=roles,
+                                               caller=caller, after=after, drafting=drafting)
+                        read = drafting.reads.read
+                        seen.clear()
+                        seen.update(read)
+                    else:
+                        with session.read_lock(reading) as readers, drafted.lock:
+                            read = {reader.doc_id: (reader.live or reader, reader.version)
+                                    for reader in readers}
+                            result = self._run(session, tool, dict(clean),
+                                               {doc: drafted, **{r.doc_id: r for r in readers}},
+                                               drafted, tuple(reading), roles=roles,
+                                               caller=caller, after=after, drafting=drafting)
                 except ToolError as refused:
                     if _drew(hook, draft):
                         # It drew ids before it failed: under the lock it would consume them,
@@ -1801,6 +1900,19 @@ class Toolbox:
                     # ends; one of this document's goes stale with the call's own change.
                     stats["lock"] = "a dataset of this document, or a stale one"
                     return None
+                if any(found.doc == doc or any(other.doc == doc for other in found.also)
+                       or context.pending_stale(found) for found in context.datasets.values()):
+                    # Round 51: one derived of this document, as the call leaves it, or
+                    # stale already (its warning says the versions when the call ends).
+                    stats["lock"] = "a dataset derived of this document, or a stale one"
+                    return None
+                if drafting.reads is not None and drafting.reads.moved:
+                    # Two of its ops read another document at two versions: not one state.
+                    stats["conflicts"].append(f"{drafting.reads.moved} changed")
+                    continue
+                if any(other != doc for other in context.refs):
+                    stats["lock"] = "refs of another document"
+                    return None
                 made_keys = {key: value for key, value in drafted.keys.items() if key not in keys}
                 if not result.ok or drafted.version == committed.version:
                     # Failed, or changed nothing: of the committed version, nothing to apply.
@@ -1810,6 +1922,15 @@ class Toolbox:
                     if _drew(hook, draft):
                         stats["lock"] = "drew ids, then changed nothing"
                         return None     # (under the lock the ids drawn are spent: as before)
+                    if drafting.datasets is not None and context.datasets:
+                        # Round 51: its datasets the session's, as of the versions read.
+                        with session.lock([other for other in read if other in session.documents]):
+                            reason = self._block_sources_changed(session, context, read)
+                            if reason is not None:
+                                stats["conflicts"].append(reason)
+                                continue
+                            if not self._block_datasets(session, context, drafting, stats):
+                                return None
                     result.version = committed.version
                     after.retarget(drafted, entry)
                     after.keep(entry, committed)
@@ -1855,6 +1976,8 @@ class Toolbox:
                             stats["lock"] = "a conflict after a long preparation"
                             return None
                         continue        # its lock let go: prepared again, on what is committed now
+                    if not self._block_datasets(session, context, drafting, stats):
+                        return None
                     version = entry.version
                     before = entry.snapshot()
                     try:
@@ -1905,15 +2028,41 @@ class Toolbox:
         for key in made_keys:
             if key in entry.keys:
                 return f"retry key {key[1]!r} was used meanwhile"
+        reason = self._block_sources_changed(session, context, read)
+        if reason is not None:
+            return reason
+        if (entry.tracking or None) != (committed.tracking or None):
+            return "tracking was switched"
+        return None
+
+    @staticmethod
+    def _block_sources_changed(session: Session, context: CallContext,
+                               read: Mapping[str, tuple[DocumentEntry, int]] | None) -> str | None:
+        """Of :meth:`_block_reads_changed`: the datasets a call on a draft named, and the
+        other documents it read, as they were when it read them (``None``) or not."""
         for id_, (found, stale) in context.datasets_seen.items():
             if session.datasets.get(id_) is not found or found.stale != stale:
                 return f"dataset d:{id_} changed"
         for other, (live, version) in (read or {}).items():
             if session.documents.get(other) is not live or live.version != version:
                 return f"{other} changed"
-        if (entry.tracking or None) != (committed.tracking or None):
-            return "tracking was switched"
         return None
+
+    def _block_datasets(self, session: Session, context: CallContext, drafting: "_Drafting",
+                        stats: dict[str, Any]) -> bool:
+        """Round 51 (R105): the datasets a batch on a draft derived, the session's -- under
+        the locks of the documents it read, each at the version read, as under their locks
+        (:meth:`_keep_datasets`; its stale warnings go to the batch's result).  ``False``:
+        they could not be kept (``Limits.max_datasets``): the batch runs under the locks
+        instead, where it says so."""
+        if drafting.datasets is None or not context.datasets:
+            return True
+        try:
+            self._keep_datasets(session, context, drafting.datasets)
+        except ToolError:
+            stats["lock"] = "datasets over the limit"
+            return False
+        return True
 
     def _block_result(self, session: Session, entry: DocumentEntry, hook: Any, result: Result,
                       context: CallContext, renames: Mapping[str, str], change: Any,
@@ -2435,6 +2584,7 @@ class Toolbox:
         defined = list(context.datasets.values())
         for entry in defined:
             for source in (entry, *entry.also):
+                source.follow_live()
                 if source.version is None and source.doc is not None and not source.closed:
                     if context.changed_since(source):
                         # A later op of the batch changed its source: the state it came
@@ -2474,22 +2624,33 @@ class Toolbox:
                 entries[doc].keep_refs(context.refs.get(doc, {}), context.caller)
 
     def _batch_checks(self, session: Session, entries: Mapping[str, DocumentEntry],
-                      context: CallContext, combined: Result, after: "After | None") -> None:
+                      context: CallContext, combined: Result, after: "After | None",
+                      drafting: "_Drafting | None" = None) -> None:
         """A batch's checks, one per document it changed, into ``combined``: once its locks
         are let go, on the versions it made (``after``, round 45), where every document's
-        format copies documents; else now."""
+        format copies documents; else now.  Round 51: on a draft, also those of the other
+        documents its ops named, as under their locks (where they are entries too): now,
+        of the version its ops read (:class:`_Reads`)."""
+        read: dict[str, dict[str, Any]] = {}
+        if drafting is not None and drafting.reads is not None:
+            reads = drafting.reads
+            for doc in reads.named:
+                if doc not in entries and doc in reads.entries:
+                    with reads.held([doc]):
+                        read[doc] = self._checks(session, reads.entries[doc], context)
         docs = sorted(entries, key=doc_order)
-        found: dict[str, dict[str, Any]] = {}
+        every = sorted([*docs, *read], key=doc_order)
+        found: dict[str, dict[str, Any]] = dict(read)
         if after is None or not all(after.can_defer(session, entries[doc]) for doc in docs):
-            _set_checks(combined, {doc: self._checks(session, entries[doc], context)
-                                   for doc in docs})
+            found.update({doc: self._checks(session, entries[doc], context) for doc in docs})
+            _set_checks(combined, {doc: found[doc] for doc in every})
             return
         for doc in docs:
             def checked(entry: DocumentEntry, doc: str = doc) -> None:
                 found[doc] = self._checks(session, entry, context)
 
             after.defer(session, entries[doc], checked)
-        after.then(lambda: _set_checks(combined, {doc: found[doc] for doc in docs
+        after.then(lambda: _set_checks(combined, {doc: found[doc] for doc in every
                                                   if doc in found}))
 
     def _checks(self, session: Session, entry: DocumentEntry,
@@ -2620,8 +2781,9 @@ class Toolbox:
                                 "timeout", f"the batch passed its {limits.batch_timeout:g} s "
                                 f"deadline: {note}", details={"not_run": not_run}))
                         self._op_states(index, tool, clean, entries, context)
-                        done.append(self._run_op(session, index, tool, clean, entries, context,
-                                                 combined, reading or {}))
+                        with _reads_held(session, self, drafting, tool, clean):
+                            done.append(self._run_op(session, index, tool, clean, entries,
+                                                     context, combined, reading or {}))
                         if tool.changes(clean):
                             for doc in tool.doc_ids(clean):
                                 context.changed_at[doc] = index
@@ -2640,18 +2802,23 @@ class Toolbox:
                              **({"not_run": error.details["not_run"]}
                                 if error.details and "not_run" in error.details else {})}) from None
             for doc in sorted(entries, key=doc_order):
-                entries[doc].bump()
+                if doc in context.changed_at:
+                    # Round 51: a document the batch only read is not counted as changed
+                    # (a format without a history), as in a batch that applies op by op.
+                    entries[doc].bump()
             self._count_changes(entries, changes, before, context, drafting)
             self._keep_refs(entries, context, list(entries))
             changing = any(tool.changes(clean) for _, tool, clean in prepared)
-            if drafting is not None and (context.datasets or context.deferred_any):
+            if drafting is not None and context.deferred_any:
                 drafting.local = False
-            if drafting is None or not context.datasets:
+            if drafting is None:
                 self._keep_datasets(session, context, combined)
+            else:
+                drafting.datasets = combined      # kept when its change is applied
         combined.warnings[:0] = notes
         combined.warnings.extend(caught)
         if changing:
-            self._batch_checks(session, entries, context, combined, after)
+            self._batch_checks(session, entries, context, combined, after, drafting)
         if drafting is None:
             # (On a draft: read from the document once the change is applied.)
             self._batch_touched(session, entries, changes, context, combined)
@@ -2807,8 +2974,9 @@ class Toolbox:
                         read: list[str] = []
                         tool, clean = self._prepare(op, read, roles)
                         combined.warnings += [f"ops[{index}]: {note}" for note in read]
-                        outcome = self._run_alone(session, index, tool, clean, entries,
-                                                  context, combined, reading)
+                        with _reads_held(session, self, drafting, tool, clean):
+                            outcome = self._run_alone(session, index, tool, clean, entries,
+                                                      context, combined, reading)
                     except (ToolError, _OpFailed) as failure:
                         error = _op_error(failure)
                         errors[index] = error
@@ -2831,11 +2999,13 @@ class Toolbox:
             self._count_changes(entries, changes, before, context, drafting)
             self._keep_refs(entries, context, list(entries))
             if changing:
-                self._batch_checks(session, entries, context, combined, after)
-            if drafting is not None and (context.datasets or context.deferred_any):
+                self._batch_checks(session, entries, context, combined, after, drafting)
+            if drafting is not None and context.deferred_any:
                 drafting.local = False
-            if drafting is None or not context.datasets:
+            if drafting is None:
                 self._keep_datasets(session, context, combined)
+            else:
+                drafting.datasets = combined      # kept when its change is applied
             if primary is not None:
                 combined.version = primary.version
         # What each op changed is settled: the reads after the last change change nothing.
@@ -3055,6 +3225,9 @@ class Toolbox:
                 combined: Result, reading: Mapping[str, DocumentEntry]) -> dict[str, Any]:
         doc_ids = tool.doc_ids(arguments)
         primary = entries.get(doc_ids[0]) if doc_ids else None
+        if primary is None and doc_ids and not tool.changes(arguments):
+            # Round 51: a read of a document the batch only reads (on a draft, R105).
+            primary = reading.get(doc_ids[0])
         try:
             for doc in doc_ids:
                 if doc not in entries and doc not in reading:
@@ -3707,6 +3880,77 @@ class _Drafting:
         #: session, work deferred on the whole document): it runs on the document instead.
         self.local = True
         self.finish: Callable[..., Result] | None = None
+        #: Round 51 (R105): a batch's reads of other documents (:class:`_Reads`).
+        self.reads: _Reads | None = None
+        #: Round 51: the batch's result, whose datasets the session keeps when the change
+        #: is applied (:meth:`Toolbox._keep_datasets`, under the documents' locks).
+        self.datasets: Result | None = None
+
+
+class _Reads:
+    """Round 51 (R105): the other documents a batch on a draft reads (:meth:`Toolbox.
+    _run_block`), each as a call that only reads it reads it (:meth:`Session.read_lock`):
+    its committed version's copy where its format makes one, else the document itself.
+    No lock is held between ops: :meth:`held` takes those an op reads while it runs, and
+    keeps the version each was first read at (:attr:`read`, checked again when the change
+    is applied); one read again at another version is :attr:`moved` -- the batch did not
+    read one state of it, and is prepared again."""
+
+    def __init__(self, session: Session, docs: Sequence[str], named: Sequence[str] = ()) -> None:
+        self.session = session
+        #: ``doc -> the entry read``: a copy at the committed version, or the document.
+        self.entries: dict[str, DocumentEntry] = {}
+        #: ``doc -> (the document, the version read)``, from the first op that read it.
+        self.read: dict[str, tuple[DocumentEntry, int]] = {}
+        #: The documents the batch's ops name (not only take rows from): their checks are
+        #: the batch's, as under their locks (:meth:`Toolbox._batch_checks`).
+        self.named = [doc for doc in named if doc in docs]
+        #: The first document read at two versions, or ``None``.
+        self.moved: str | None = None
+        for doc in dict.fromkeys(docs):
+            entry = session.entry(doc)
+            fmt = session.formats.get(entry.kind)
+            reader = None
+            if getattr(fmt, "read_copy", None) is not None:
+                reader = entry.reader()
+                if reader is None:
+                    with entry.lock:
+                        entry.commit(fmt)
+                        reader = entry.reader()
+            self.entries[doc] = reader or entry
+
+    @contextmanager
+    def held(self, docs: Iterable[str]) -> Iterator[None]:
+        """The locks of ``docs`` (those of :attr:`entries`), in :func:`doc_order`, while the
+        block runs; each one's version kept or compared."""
+        with ExitStack() as stack:
+            for doc in sorted({d for d in docs if d in self.entries}, key=doc_order):
+                entry = self.entries[doc]
+                stack.enter_context(entry.lock)
+                live = entry.live or entry
+                version = entry.version
+                first = self.read.setdefault(doc, (live, version))
+                if first[1] != version and self.moved is None:
+                    self.moved = doc
+            yield
+
+
+@contextmanager
+def _reads_held(session: Session, toolbox: "Toolbox", drafting: "_Drafting | None",
+                tool: Tool, clean: Mapping[str, Any]) -> Iterator[None]:
+    """Round 51: around a batch's op on a draft, the locks of the other documents it reads
+    (names, or takes rows from: :meth:`Toolbox._sources`); every one when that cannot be
+    told (the op is refused when it runs).  Elsewhere nothing."""
+    reads = drafting.reads if drafting is not None else None
+    if reads is None or not reads.entries:
+        yield
+        return
+    try:
+        docs = [*tool.doc_ids(clean), *toolbox._sources(session, tool, dict(clean))[1]]
+    except ToolError:
+        docs = list(reads.entries)
+    with reads.held(docs):
+        yield
 
 
 def _uses_refs(node: Any) -> bool:
