@@ -17,6 +17,39 @@ earlier ones were never tagged.
   running after 300 s (`-o faulthandler_timeout=300`, `-v`) and stops the job at 45
   minutes. No library code changed.
 
+## 0.108.0 -- unreleased
+- **A batch that derives a dataset from another document, then writes from it, runs on a
+  draft** (round 51, R105). Before, a batch naming two documents always took both locks for
+  its whole run -- a derive from a workbook followed by a Word table sync from the dataset
+  held the Word document's lock throughout. Now a batch whose ops before its last change
+  change one document and otherwise only read other documents (or none: a dataset's rows)
+  drafts as a single changing call does. Each reading op holds the locks of the documents it
+  reads only while it runs (`_Reads`: the committed copy where the format makes one, else the
+  document), each one's version kept; a document read again at another version prepares the
+  batch again. The datasets its ops derive are the later ops' on the draft, as before, and the
+  session's once the change is applied -- under the locks of the documents read, only while
+  each is at the version read (else prepared again: `conflicts: ["d2 changed"]`); a batch
+  that changed nothing keeps them the same way. Its answer is the one under the locks: `doc`
+  the document its ops name first, at the version read, that document's checks included.
+  Still under the locks: a read of the drafted document before the last change, a read of
+  another document after it, a dataset derived from the drafted document or stale already,
+  refs of another document. Measured (made-up report with 4 tables, a 300-row workbook; 4
+  threads x 6 batches of `xlsx_derive` with a join and a group, then `word_edit_table`
+  `sync`): CPython 3.15.2t without the GIL 4.2-5.0 s -> 2.4-2.5 s, mean latency 650-800 ->
+  350-400 ms; CPython 3.12 6.4-6.7 s -> 5.2-5.6 s; 24 of 24 batches drafted, none before.
+  tests/test_tools_block_derive.py (6 tests, one a short 4-thread run).
+- A dataset read from a copy of its document at a committed version follows the document
+  itself (`DatasetEntry.follow_live`), so it goes stale when the document changes.
+- An all-or-none batch on a format without a history no longer counts a document it only
+  read as changed (its version stayed; as in a batch applied op by op).
+- **A `key` that is not a retry key no longer makes a repeat "already done"** (round 51,
+  found while measuring R105). The dispatcher read every changing call's `key` as a retry
+  key; Word's `word_edit_table` `key` is the column a `sync` matches rows by, so a second
+  sync with the same key column -- of any table of the document -- answered "already done
+  with key 'Product': nothing new was made" and changed nothing. `Tool.retry_key` (and
+  `tool(retry_key=False)`) says a tool's `key` is something else; such calls always run.
+  tests/test_tools_dispatch.py.
+
 ## 0.107.0 -- unreleased
 - **A call on a draft may read another document's table** (round 50, R100). A changing call
   a format admits on a draft that takes rows from another open document -- a `t:` source

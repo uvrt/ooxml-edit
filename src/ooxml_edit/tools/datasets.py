@@ -566,6 +566,14 @@ class DatasetEntry:
             return True
         return any(other.stale for other in self.also)
 
+    def follow_live(self) -> None:
+        """Round 51: a dataset read from a copy of its document at a committed version (a
+        read beside an edit, a batch on a draft) follows the document itself, so it goes
+        stale when the document changes."""
+        live = getattr(self._source, "live", None)
+        if live is not None:
+            self._source = live
+
     @property
     def source_version(self) -> int | None:
         """The source's version now; ``None`` once closed (or with no source)."""
