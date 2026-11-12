@@ -24,6 +24,8 @@ ERROR_CODES: dict[str, str] = {
     "entangled": "an undo whose change later changes depend on: a scoped undo sharing parts "
                  "with changes outside the scope, or a caller's own change another's built on",
     "timeout": "the deadline passed",
+    "layout_failed": "laying the document out failed: the element it failed at named where known "
+                     "(a table's t: id), never a missing address",
     "limit": "a size or budget limit",
     "internal": "an unexpected failure in the tool layer or a library",
 }
