@@ -56,6 +56,8 @@ What is here:
 * :mod:`.tiles` -- contact images: many rendered views tiled into one labelled image
   (``render``'s option), the options, layout and SVG; a format rasterises it;
 * :mod:`.prompts` -- the shared system-prompt fragment: mechanics, no house style;
+* :mod:`.savegate` -- the save gate's comparison of problems with the baseline taken at
+  open, one code path for the gate and ``check``'s ``validation`` (round 53);
 * :mod:`.assets` -- an application's asset catalogue (brand icons...) that a format's
   configured tools search and place by id: the :class:`AssetCatalogue` protocol and
   :class:`FolderCatalogue`, a folder with a JSON or CSV index;
@@ -93,10 +95,12 @@ from .session import (DEFAULT_LOCALE, LOCALE_FIELDS, Blob, DefaultLocale, Docume
                       StateRefused, StepOwner, doc_order,
                       fold_ref, locale_of, part_entries)
 from .rendercache import ContentStore, content_key
+from .savegate import compare_problems, problems_now, validation
 from .worker import (InProcess, SubprocessPool, ThreadRunner, WorkerPool, available_cpus,
                      default_workers, gil_enabled, run_all, worker_task)
 
 __all__ = [
+    "compare_problems", "problems_now", "validation",
     "ACCEPT", "ANY_ROLE", "EDIT", "RESOLVE", "REVIEW", "ROLES", "role_set",
     "Asset", "AssetCatalogue", "Blob", "CACHE_EXTERNAL", "CACHE_STATUSES", "FolderCatalogue", "assets", "CORE", "Call", "CallContext", "CallError", "CallRecord", "DATASET_ID",
     "DATASET_PREFIX", "DEFAULT_LOCALE", "Dataset", "DatasetEntry", "DefaultLocale", "DocumentEntry", "DocumentFormat",

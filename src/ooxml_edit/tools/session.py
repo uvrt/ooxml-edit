@@ -127,6 +127,7 @@ from ooxml_common.locales import EN_US, Locale
 
 from .datasets import DATASET_PREFIX, DatasetEntry, dataset_id
 from .limits import LimitError, Limits, check_declared_type, check_image, check_package
+from .savegate import keep_problems
 from .logs import CallRecord
 from .numbers import NumberRules, rules_of
 from .registry import role_set
@@ -1242,6 +1243,10 @@ class Session:
             entry = self.documents[doc_id]
             entry.ref_states[entry.version] = {}
             entry.change_version = entry.version
+            if fmt.problems:
+                # Round 53: the baseline is the version's problems -- a check before any
+                # edit finds them kept (savegate.problems_now).
+                keep_problems(entry, baseline)
         return doc_id
 
     def _counted_id(self) -> str:

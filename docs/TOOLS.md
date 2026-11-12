@@ -84,6 +84,21 @@ another; edits of one document still run one at a time. A format without `read_c
 under the lock, as before. Saving refuses new validation problems unless the application (never the
 model) passes `allow_new_problems=True`.
 
+**Check before save (round 53, R109, 0.111.0).** Every `check` result of a kind with
+`problems` carries `validation`: the problems `save_document` would refuse as new
+(`new`, at most 20 listed, `cut` the rest), how many the document opened with
+(`baseline`) and those of them fixed since (`fixed`, when any) -- over the whole document,
+whatever the check's `include`, `pages`, `slides` or `range` -- and its summary says
+"saving would refuse N new validation problem(s)". It is the gate's own comparison, one
+code path (`ooxml_edit.tools.savegate`: `compare_problems`, `problems_now`, `validation`):
+the format's problems now against the baseline by its `problem_key`. The problems are kept
+per document version in the entry's `check_cache` (versions are never reused; the baseline
+found at open is the first version's), so a check,
+the facts after a changing call and the next check of the version find them once; never
+inside a `batch`, whose ops change the document before its version moves. The gate itself
+finds them afresh and keeps them for the checks after. A library's own `validate` section
+compares through `validation` too.
+
 **The application's own edits (round 48, R84, 0.104.0).** An application that changes a
 document through the library itself (a paragraph added, a style set, between the model's
 calls) holds `session.lock([doc])` while it does. Letting the lock go counts that change --
