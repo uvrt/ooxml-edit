@@ -4,6 +4,16 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet. Each vers
 reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
 earlier ones were never tagged.
 
+## 0.112.1 -- unreleased
+
+- **A call that fails under its document's lock says the version it ran on.** Its result's
+  `version` was read once the lock was let go, so where another caller changed the document
+  in between it named that caller's change -- a version the failed call never saw. Now read
+  under the lock, as a call that ends reads it. docx-agent's serial replay of concurrent
+  tracked edits (`tests/test_block_edits_serial.py`) failed now and then on CI because of
+  it: a batch that drew ids and then failed (run again under the lock, its ids spent) was
+  replayed after that later change, and the ids the change drew came out otherwise.
+
 ## 0.112.0 -- unreleased
 
 - **A new error code, `layout_failed`** (round 53, R107): laying a document out failed.

@@ -31,4 +31,4 @@ format codes, the measured date names, the locale).  ooxml-common never imports 
 package; this package may import it.
 """
 
-__version__ = "0.112.0"
+__version__ = "0.112.1"
