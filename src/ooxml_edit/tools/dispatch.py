@@ -123,6 +123,7 @@ from .session import (NO_CONTEXT, REF, REF_USE, Clock, DocumentEntry, DocumentFo
 from .session import _folded_use, _misspelt_ref
 from .sources import Rows, qualify, resolve as resolve_rows
 from .rendercache import ContentStore
+from .savegate import validation
 from .worker import (InProcess, SubprocessPool, ThreadRunner, WorkerPool, default_workers,
                      gil_enabled, refuse_while_bootstrapping, run_all, takes_affinity,
                      takes_lane)
@@ -863,14 +864,10 @@ class Call:
         if entry is not None:
             fmt = self.session.formats.get(entry.kind)
             if fmt is not None and fmt.problems is not None:
-                key = fmt.problem_key
-                baseline = {key(problem) for problem in entry.baseline_problems}
-                problems = list(fmt.problems(entry.document))
-                new = [str(problem) for problem in problems if key(problem) not in baseline]
-                now = {key(problem) for problem in problems}
-                fixed = [str(problem) for problem in entry.baseline_problems
-                         if key(problem) not in now]
-                report = {"new": new, "fixed": fixed, "baseline": len(entry.baseline_problems)}
+                # Round 53, R109: the comparison check's ``validation`` shows
+                # (:mod:`.savegate`), the problems found afresh -- never a kept list.
+                report = validation(entry, fmt, fresh=True)
+                new = report["new"]
                 if new and not self.toolbox.allow_new_problems:
                     raise ToolError("refused", f"saving would add {len(new)} validation "
                                     "problem(s); fix them first", valid_options=new,

@@ -17,6 +17,24 @@ earlier ones were never tagged.
   running after 300 s (`-o faulthandler_timeout=300`, `-v`) and stops the job at 45
   minutes. No library code changed.
 
+## 0.111.0 -- unreleased
+
+- **`check` lists what saving would refuse** (round 53, R109). A run that checked only some
+  blocks, or asked `check` for layout facts alone, learned of new validation problems when
+  `save_document` refused at its end ("saving would add 3 validation problem(s)"). Every
+  `check` result of a kind with `problems` now carries `validation`: `new` (what the save
+  would refuse; at most 20 listed, `cut` the rest), `baseline` (how many the document opened
+  with) and `fixed` (when any), over the whole document whatever the check's `include`,
+  `pages`, `slides` or `range`; the summary adds "saving would refuse N new validation
+  problem(s): see validation". One code path: the new module `ooxml_edit.tools.savegate`
+  (`compare_problems`, `problems_now`, `validation`, exported from `ooxml_edit.tools`) is
+  what the gate in `Call.output` calls, and a library's own `validate` delta reads through
+  it. The problems are kept per document version in the entry's `check_cache` (the baseline
+  found at open as the first version's), not inside a `batch`; the gate finds them afresh (as before) and keeps them for the next check. The
+  shared prompt says check lists them whatever it was asked. No tool definition changed
+  (0 tokens); a check result grows by `"validation": {"new": [], "baseline": 0}` (about 12
+  tokens) when nothing is new.
+
 ## 0.110.0 -- unreleased
 
 - **`loose_key`: one rule for keys spelled differently** (round 52, R106;
