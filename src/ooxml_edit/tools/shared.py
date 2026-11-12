@@ -718,8 +718,13 @@ def _with_validation(handler: Callable[..., Any]) -> Callable[..., Any]:
         if fmt is None or fmt.problems is None:
             return returned
         report = validation(entry, fmt, cache=not call.in_batch)
-        # A copy: a kind may hand back the data it keeps for the version (pptx-agent).
-        returned.data = {**returned.data, "validation": validation_fact(report)}
+        # A copy: a kind may hand back the data it keeps for the version (pptx-agent).  Before
+        # a kind's ``timing``, which stays the data's last key (docx-agent, round 47).
+        data = {key: value for key, value in returned.data.items() if key != "timing"}
+        data["validation"] = validation_fact(report)
+        if "timing" in returned.data:
+            data["timing"] = returned.data["timing"]
+        returned.data = data
         returned.summary += summary_note(report)
         return returned
 

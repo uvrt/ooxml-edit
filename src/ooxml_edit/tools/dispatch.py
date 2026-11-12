@@ -865,8 +865,9 @@ class Call:
             fmt = self.session.formats.get(entry.kind)
             if fmt is not None and fmt.problems is not None:
                 # Round 53, R109: the comparison check's ``validation`` shows
-                # (:mod:`.savegate`), the problems found afresh -- never a kept list.
-                report = validation(entry, fmt, fresh=True)
+                # (:mod:`.savegate`), the problems found afresh -- never a kept list --
+                # and kept for the version's checks (not inside a batch).
+                report = validation(entry, fmt, fresh=True, cache=not self.in_batch)
                 new = report["new"]
                 if new and not self.toolbox.allow_new_problems:
                     raise ToolError("refused", f"saving would add {len(new)} validation "
