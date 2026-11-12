@@ -65,6 +65,7 @@ from typing import Any, Callable, Mapping
 
 from .. import dates, provenance
 from . import numbers, scales, sources
+from .savegate import summary_note, validation, validation_fact
 from .datasets import briefs
 from .registry import (ANY_ROLE, CORE, EDIT, RESOLVE, REVIEW, Param, Tool, ToolGroup, array,
                        boolean, build_schema, free_object, integer, number, obj, string)
@@ -496,12 +497,12 @@ SPECS: dict[str, Spec] = {spec.name: spec for spec in [
           # Round 36, R31: values styled by a scale's steps or not (scales.with_scale).
           "scale": _CHECK_SCALE},
          refs=("slides[]",), documents=_checked_documents,
-         wrap=lambda fn: scales.with_scale(numbers.with_numbers(
+         wrap=lambda fn: _with_validation(scales.with_scale(numbers.with_numbers(
              _with_layout_options(_with_taken(fn, "check", ("range", "copies"))),
              scope=("slides", "pages", "range"),
              asks=("boxes", "spacing", "contrast", "min_size", "styles", "copies")),
              scope=("slides", "pages", "range"),
-             asks=("boxes", "spacing", "contrast", "min_size", "styles", "copies")),
+             asks=("boxes", "spacing", "contrast", "min_size", "styles", "copies"))),
          # Round 36, R28: numbers in text no value holds, against every open workbook.
          value_reads=lambda arguments: (numbers.INCLUDE in (arguments.get("include") or ())
                                         or scales.reads_values(arguments)),
@@ -695,6 +696,37 @@ def _with_clean(handler: Callable[..., Any]) -> Callable[..., Any]:
             raise ToolError("invalid_arguments", "clean is for documents (docx, dotx); this "
                             "file is saved as it is: leave clean out", field="clean")
         return handler(call, **arguments)
+
+    return run
+
+
+def _with_validation(handler: Callable[..., Any]) -> Callable[..., Any]:
+    """``check``'s handler for a kind, its result carrying ``validation`` (round 53, R109):
+    what ``save_document`` would refuse as new -- the gate's own comparison
+    (:func:`.savegate.validation`), over the whole document whatever the check's
+    ``include``, pages, slides or range -- and the count the document opened with.  Kept per
+    document version, so a check costs it once (not inside a batch, whose ops change the
+    document before its version moves).  A kind without ``problems`` gets none."""
+
+    @functools.wraps(handler)
+    def run(call: Any, **arguments: Any) -> Any:
+        returned = handler(call, **arguments)
+        if not isinstance(returned, Result) or not isinstance(returned.data, dict):
+            return returned
+        entry = call.entry
+        fmt = call.session.formats.get(entry.kind) if entry is not None else None
+        if fmt is None or fmt.problems is None:
+            return returned
+        report = validation(entry, fmt, cache=not call.in_batch)
+        # A copy: a kind may hand back the data it keeps for the version (pptx-agent).  Before
+        # a kind's ``timing``, which stays the data's last key (docx-agent, round 47).
+        data = {key: value for key, value in returned.data.items() if key != "timing"}
+        data["validation"] = validation_fact(report)
+        if "timing" in returned.data:
+            data["timing"] = returned.data["timing"]
+        returned.data = data
+        returned.summary += summary_note(report)
+        return returned
 
     return run
 

@@ -59,7 +59,7 @@ Render sparingly: after building something visual, and once before finishing. Im
 cost tokens.
 
 Before saving, run check and fix what it reports. Saving refuses new validation problems; \
-fix them rather than work around them.
+check's validation lists them, whatever it was asked; fix them rather than work around them.
 
 Units: lengths and font sizes in points (72 pt = 1 inch); dates YYYY-MM-DD; colours as \
 theme names (accent1, text1...) or #RRGGBB, theme names preferred.

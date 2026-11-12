@@ -125,7 +125,9 @@ def test_renders_of_a_document_and_a_deck_come_with_checks_and_reads_in_one_repl
     assert all("error" not in answer for answer in answers)
     assert [image["label"] for image in answers[0]["images"]] == ["page 1", "page 2"]
     assert [image["label"] for image in answers[2]["images"]] == ["slide 2"]
-    assert answers[1]["data"] == {"items": 0} and answers[3]["data"] == {"pages": 2}
+    # (each check with the save gate's validation beside its facts, round 53)
+    clean = {"validation": {"new": [], "baseline": 0}}
+    assert answers[1]["data"] == {"items": 0, **clean} and answers[3]["data"] == {"pages": 2, **clean}
     # The images, in op order, each captioned with its op and document.
     assert [image.caption for image in result.images] == [
         "ops[0] d1 page 1", "ops[0] d1 page 2", "ops[2] d2 slide 2"]

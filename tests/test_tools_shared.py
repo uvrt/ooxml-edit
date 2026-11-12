@@ -263,6 +263,10 @@ def _checked(kind, takes, given):
     return Result(summary="Checked", data={"given": sorted(given)})
 
 
+#: What every check of a kind with problems carries beside its own facts (round 53, R109).
+CLEAN = {"validation": {"new": [], "baseline": 0}}
+
+
 def _text_check(call, doc, slides=None, pages=None, include=None, boxes=None, spacing=None,
                 contrast=None, min_size=None, styles=None, range=None, copies=None):
     return _checked("docx", TEXT_CHECK, dict(slides=slides, pages=pages, include=include,
@@ -298,7 +302,7 @@ def test_each_kinds_toolbox_is_sent_check_with_its_own_parameters_only():
             refused = call(box, session, "check", doc="d1", **{name: value})
             assert refused.error.code == "invalid_arguments" and refused.error.field == name
             assert refused.error.message == f"{name} is not a docx parameter"
-        assert call(box, session, "check", doc="d1", min_size=9).data == {"given": ["min_size"]}
+        assert call(box, session, "check", doc="d1", min_size=9).data == {"given": ["min_size"], **CLEAN}
     with Toolbox([deck, *DECK_TOOLS], formats=[DECK]) as box:
         assert _check_params(box) == {"doc", *DECK_CHECK}
         session = box.session(clock=CLOCK)
@@ -388,7 +392,7 @@ def test_a_call_may_still_name_a_value_its_kind_is_not_sent():
     with Toolbox([deck, *DECK_TOOLS], formats=[DECK]) as box:
         session = box.session(clock=CLOCK)
         session.open(synthetic.outer_package(), "deck.pptx")
-        assert call(box, session, "check", doc="d1", include=["reflow"]).data == {"given": ["include"]}
+        assert call(box, session, "check", doc="d1", include=["reflow"]).data == {"given": ["include"], **CLEAN}
 
 
 def test_another_kinds_parameter_at_its_default_is_ignored_with_a_warning():
@@ -403,12 +407,13 @@ def test_another_kinds_parameter_at_its_default_is_ignored_with_a_warning():
         session.open(synthetic.outer_package(), "deck.pptx")      # d2
         strict = dict(slides=[], pages=[], include=[], boxes=False, styles=[])
         documents = call(box, session, "check", doc="d1", **strict, min_size=9)
-        assert documents.ok and documents.data == {"given": ["include", "min_size", "pages", "styles"]}
+        assert documents.ok and documents.data == {"given": ["include", "min_size", "pages", "styles"],
+                                                 **CLEAN}
         assert documents.warnings == [
             "slides ignored: it applies to pptx, not to this docx document",
             "boxes ignored: it applies to pptx, not to this docx document"]
         decks = call(box, session, "check", doc="d2", **strict)
-        assert decks.ok and decks.data == {"given": ["boxes", "include", "slides"]}
+        assert decks.ok and decks.data == {"given": ["boxes", "include", "slides"], **CLEAN}
         assert decks.warnings == [
             "pages ignored: it applies to docx, not to this pptx document",
             "styles ignored: it applies to docx, not to this pptx document"]
