@@ -119,11 +119,53 @@ jobs:
           python -m pip install -e "./${{ matrix.agent }}[${{ matrix.extras }}]"
 
       # As docx-agent's own CI installs them, so its render, reflow and field tests run.
-      - name: Install the open substitute fonts (docx-agent)
+      # The fonts come from the apt mirror once, then from the Actions cache, so a mirror
+      # outage cannot turn a run red: on a miss apt installs them (with retries) and every
+      # file the packages put under the font and fontconfig directories is cached with its
+      # path; on a hit those files go back to the same paths and apt is not touched.
+      - name: Restore the open substitute fonts from the cache (docx-agent)
+        id: substitute-fonts
         if: matrix.agent == 'docx-agent'
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/substitute-fonts
+          key: substitute-fonts-${{ runner.os }}-fonts-crosextra-carlito-fonts-crosextra-caladea-fonts-liberation-v1
+      - name: Install the open substitute fonts (docx-agent)
+        if: matrix.agent == 'docx-agent' && steps.substitute-fonts.outputs.cache-hit != 'true'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends fonts-crosextra-carlito fonts-crosextra-caladea fonts-liberation
+          packages="fonts-crosextra-carlito fonts-crosextra-caladea fonts-liberation"
+          for attempt in 1 2 3 4 5; do
+            if sudo apt-get -o Acquire::Retries=5 update &&
+               sudo apt-get -o Acquire::Retries=5 install -y --no-install-recommends $packages; then
+              break
+            fi
+            if [ "$attempt" -eq 5 ]; then exit 1; fi
+            sleep $((attempt * 20))
+          done
+          mkdir -p ~/substitute-fonts
+          dpkg -L $packages | grep -E '^/(usr/share/fonts|usr/share/fontconfig|etc/fonts)/' |
+            while read -r f; do
+              if [ -f "$f" ] || [ -L "$f" ]; then cp -d --parents "$f" ~/substitute-fonts/; fi
+            done
+      - name: Save the open substitute fonts to the cache (docx-agent)
+        if: matrix.agent == 'docx-agent' && steps.substitute-fonts.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/substitute-fonts
+          key: ${{ steps.substitute-fonts.outputs.cache-primary-key }}
+      - name: Put the cached substitute fonts in place and check them (docx-agent)
+        if: matrix.agent == 'docx-agent'
+        env:
+          CACHE_HIT: ${{ steps.substitute-fonts.outputs.cache-hit }}
+        run: |
+          if [ "$CACHE_HIT" = "true" ]; then
+            sudo cp -dR ~/substitute-fonts/. /
+            sudo fc-cache -f
+          fi
+          fc-list : family style file | grep -E 'Carlito|Caladea|Liberation' | sort
+          for family in Carlito Caladea "Liberation Sans" "Liberation Serif" "Liberation Mono"; do
+            fc-list "$family" family | grep -q . || { echo "missing font: $family"; exit 1; }
+          done
 
       - name: The ooxml-edit under test is this checkout
         run: |
