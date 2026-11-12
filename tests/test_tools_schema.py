@@ -242,6 +242,28 @@ def test_an_address_or_a_number_is_a_string_to_the_provider_and_either_to_the_di
         assert message in caught.value.message and caught.value.field == "slides[0]"
 
 
+def test_a_number_or_text_is_a_string_to_the_provider_and_either_to_the_dispatcher():
+    """orNumber (round 54): any finite number in a string's place, kept as given."""
+    schema = build_schema({"value": string("Text or a number.", or_number=True)})
+    assert subset_problems(schema, allow_bounds=True) == []
+    sent = canonical(schema)
+    assert sent["properties"]["value"] == {"type": "string", "description": "Text or a number."}
+    assert subset_problems(sent) == []
+    for given in (3, 3.5, -0.25, "3.5", "done"):
+        assert validate_call(schema, {"value": given}) == {"value": given}
+    for bad, message in ((True, "a number or a string"), ([1], "a number or a string"),
+                         (float("nan"), "finite")):
+        with pytest.raises(CallError) as caught:
+            validate_call(schema, {"value": bad})
+        assert message in caught.value.message and caught.value.field == "value"
+    for wrong in ({"type": "integer", "orNumber": True},
+                  {"type": "string", "orNumber": 1},
+                  {"type": "string", "orNumber": True, "orInteger": 0}):
+        node = {"type": "object", "additionalProperties": False, "required": ["n"],
+                "properties": {"n": {**wrong, "description": "N."}}}
+        assert any("orNumber" in p for p in subset_problems(node, allow_bounds=True))
+
+
 def test_or_integer_belongs_on_a_string():
     wrong = {"type": "object", "additionalProperties": False, "required": ["n"],
              "properties": {"n": {"type": "integer", "description": "N.", "orInteger": 1}}}
