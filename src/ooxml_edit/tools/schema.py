@@ -61,6 +61,10 @@ SUBSET_KEYWORDS = frozenset({
 #: position (``2``, or an id such as ``"n:257"``) is a string to a strict
 #: decoder -- the subset has no unions -- while a call written without one, or before the
 #: change, still passes its number.
+#: ``orNumber`` (``true``, on a string) lets the dispatcher take any finite number in the
+#: string's place, kept a number (round 54): a value that is text or a number -- a judged
+#: grade, ``3`` or ``"3.5"`` -- is a string to a strict decoder, while a model naturally
+#: writes a number as one.  Never sent; the handler reads what it got.
 #: ``valueAliases`` (on a string, ``{alias: value}``) are values a model naturally writes for
 #: one it may give -- an application's own word for an enum value (``shrink`` for
 #: ``normal``): the dispatcher reads the alias, matched ignoring case, as its value and says
@@ -78,7 +82,8 @@ SUBSET_KEYWORDS = frozenset({
 #: an array -- the subset has no object of free keys -- and a model naturally writes as one
 #: object.  Never sent; the result's warnings say what was read.
 BOUND_KEYWORDS = frozenset({"minimum", "maximum", "minLength", "maxLength", "maxItems",
-                            "orInteger", "valueAliases", "orNull", "orSingle", "orMap"})
+                            "orInteger", "orNumber", "valueAliases", "orNull", "orSingle",
+                            "orMap"})
 
 #: Words that make a property name a file-system path.  The tool layer has no paths: inputs
 #: are blob handles, outputs go to the application.
@@ -185,6 +190,9 @@ def _check_node(node: Any, where: str, depth: int, problems: list[str], enum_tot
     if "orInteger" in node and (kind != "string" or isinstance(node["orInteger"], bool)
                                 or not isinstance(node["orInteger"], int)):
         problems.append(f"{where}: orInteger must be a whole number, on a string")
+    if "orNumber" in node and (node["orNumber"] is not True or kind != "string"
+                               or "orInteger" in node):
+        problems.append(f"{where}: orNumber must be true, on a string without orInteger")
     if "orNull" in node and node["orNull"] is not True:
         problems.append(f"{where}: orNull must be true")
     if "orSingle" in node and (node["orSingle"] is not True or kind != "array"):
@@ -556,7 +564,12 @@ def _validate(node: Mapping[str, Any], value: Any, where: str, notes: list[str],
         if "orInteger" in node and not isinstance(value, (str, bool)) and isinstance(value, (int, float)):
             return _validate({"type": "integer", "minimum": node["orInteger"]}, value, where,
                              notes)
+        if node.get("orNumber") and not isinstance(value, (str, bool)) and isinstance(
+                value, (int, float)):
+            return _validate({"type": "number"}, value, where, notes)
         if not isinstance(value, str):
+            if node.get("orNumber"):
+                raise CallError(f"{label} must be a number or a string", where)
             if "orInteger" in node:
                 raise CallError(f"{label} must be a whole number or a string", where)
             raise CallError(f"{label} must be a string", where)

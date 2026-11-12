@@ -4,6 +4,17 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet. Each vers
 reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
 earlier ones were never tagged.
 
+## 0.113.0 -- unreleased
+
+- **A string parameter that takes a number too: `orNumber`** (round 54, xlsx-agent's
+  `xlsx_record_values`). `string(or_number=True)` sends the provider a plain string (the
+  subset has no unions) while the dispatcher also takes any finite number in its place,
+  kept a number: a value that is text or a number -- a judged grade, `3`, `3.5` or `"done"`
+  -- which a model naturally writes as a number. A boolean, an array or a non-finite number
+  is refused (`must be a number or a string`). Validation only, like `orInteger`: never
+  sent, so no definition changes size; the subset checker refuses it on anything but a
+  string, with `orInteger`, or as anything but `true`.
+
 ## 0.112.1 -- unreleased
 
 - **A call that fails under its document's lock says the version it ran on.** Its result's
