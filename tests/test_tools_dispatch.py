@@ -53,7 +53,7 @@ def test_openai_arguments_as_a_json_string_with_nulls(toolbox, session):
 
 def test_every_error_code_is_documented():
     assert set(ERROR_CODES) >= {"not_found", "label_not_found", "ambiguous", "refused", "unit",
-                                "invalid_arguments", "timeout", "limit"}
+                                "invalid_arguments", "timeout", "limit", "layout_failed"}
     with pytest.raises(ValueError):
         ToolError("oops", "not a code")
 

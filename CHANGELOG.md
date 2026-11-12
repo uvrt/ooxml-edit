@@ -4,6 +4,14 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet. Each vers
 reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
 earlier ones were never tagged.
 
+## 0.112.0 -- unreleased
+
+- **A new error code, `layout_failed`** (round 53, R107): laying a document out failed.
+  docx-agent reported a layout that raised `IndexError` as `not_found`, which says an address
+  is missing and sends a model looking for one; it now raises `LayoutFailed` (`layout_failed`),
+  naming the block it failed at where known. `ERROR_CODES` gains the code; nothing else
+  changed.
+
 ## Unreleased
 - **The free-threaded CI job fails instead of hanging for 6 hours** (round 47, lane H). On
   CPython 3.15.2t threads creating classes at the same time, as first imports in threads

@@ -378,6 +378,7 @@ DocumentEntry
    | `unit` | `UnitWarning`/`ValueError`; since 0.66.0 (S9) a library's typed refusals are `invalid_arguments` and only `ooxml_edit.errors.UnitError` (or a plain `ValueError`) is `unit` | — |
    | `invalid_arguments` | schema miss, an unknown preset name, or an `ooxml_edit.errors.ArgumentError` | the allowed values (for presets: the names from LP20) |
    | `timeout` | deadline passed | — |
+   | `layout_failed` | laying a Word document out failed (round 53, R107): docx-agent's `LayoutFailed` | the block it failed at (a table's `t:` id), where known |
    | `limit` | a size limit | — |
    | `internal` | an unexpected exception (logged with its traceback for the app) | — |
 
