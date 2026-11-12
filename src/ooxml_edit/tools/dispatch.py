@@ -1457,6 +1457,10 @@ class Toolbox:
         notes: list[str] = []       # aliases read: warnings first
         comments: list[dict[str, Any]] = []   # a batch's ops' comments, for the log
         block: dict[str, Any] = {}  # round 45 (lane B): how a call on a draft went
+        # The version a call that failed under its documents' locks ran on, read there: once
+        # they are let go another caller may change the document before the failure is
+        # made a result (0.112.1).
+        failed_at: int | None = None
         try:
             tool = self.tool(name, notes, roles)
             name = tool.name
@@ -1525,6 +1529,12 @@ class Toolbox:
                                 # checks run after the lock is let go, when another call may
                                 # change it).
                                 result.version = primary.version
+                        except Exception:
+                            # Failed: the version it ran on (and left: a failed call changes
+                            # nothing), read under its lock, as a call that ends does.
+                            if primary is not None:
+                                failed_at = primary.version
+                            raise
                         finally:
                             if after is not None:
                                 for entry in locked:
@@ -1538,9 +1548,9 @@ class Toolbox:
                 for entry, _count in counted.values():
                     entry.leave()
         except ToolError as error:
-            result = Result.failure(error)
+            result = Result.failure(error, version=failed_at)
         except Exception as exc:  # noqa: BLE001 -- the model gets an error result
-            result = Result.failure(self.map_exception(exc))
+            result = Result.failure(self.map_exception(exc), version=failed_at)
         result.warnings[:0] = notes
         if primary is None and result.ok and result.doc is None:
             # A call that names no document and makes one (new_document, open_document):

@@ -111,6 +111,49 @@ def test_a_failed_call_does_not_stop_the_later_ones(setup):
     assert session.entry("d1").document.events == ["x", "y"]
 
 
+@tool("fake_refuse", "Refuse, as a tool does with a ToolError.",
+      {"doc": string("Document id.")}, mutates=True)
+def fake_refuse(call, doc):
+    from ooxml_edit.tools import ToolError
+
+    raise ToolError("refused", "not this one")
+
+
+@pytest.mark.parametrize("name, arguments", [("fake_mark", {"label": "fail"}), ("fake_refuse", {})],
+                         ids=["exception", "tool_error"])
+def test_a_failed_call_says_the_version_it_ran_on_though_another_changes_it_after(name, arguments, monkeypatch):
+    """0.112.1: a call that failed under its document's lock said the version read once the
+    lock was let go -- another caller's change there, made after it, as if the call had run
+    on it.  docx-agent's serial replay of concurrent edits placed such a call (one that drew
+    ids, then failed) after that change: the ids came out otherwise."""
+    from ooxml_edit.tools import DocumentEntry
+
+    with Toolbox([fake_mark, fake_refuse], formats=[FAKE]) as box:
+        session = box.session()
+        session.adopt(FakeDocument(), "fake", "one.fake")
+        failing = threading.local()
+        others: list = []
+        leave = DocumentEntry.leave
+
+        def leave_then_another_changes_it(self):
+            leave(self)
+            if getattr(failing, "now", False):
+                failing.now = False
+                # Another caller, between the lock let go and the result made.
+                other = threading.Thread(target=lambda: others.append(
+                    box.dispatch(session, "fake_mark", {"doc": "d1", "label": "other"})))
+                other.start()
+                other.join()
+
+        monkeypatch.setattr(DocumentEntry, "leave", leave_then_another_changes_it)
+        assert box.dispatch(session, "fake_mark", {"doc": "d1", "label": "x"}).version == 1
+        failing.now = True
+        failed = box.dispatch(session, name, {"doc": "d1", **arguments})
+        assert not failed.ok and others and others[0].ok
+        assert others[0].version == 2
+        assert failed.version == 1
+
+
 def test_calls_naming_no_document_or_an_invalid_one_still_come_back_in_order(setup):
     box, session = setup
     results = box.dispatch_many(session, [("fake_mark", "{oops"), ("nope", {}),
