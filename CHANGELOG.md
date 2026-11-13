@@ -4,6 +4,15 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet. Each vers
 reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
 earlier ones were never tagged.
 
+## 0.115.0 -- unreleased
+
+- **A check says the seconds of numbers and of the save gate's validation** (round 57,
+  R124). A kind's check that says where its time went (`data.timing`: docx-agent's) now also
+  holds `numbers` (the `include: ["numbers"]` fact, done here for every kind) and
+  `validation` (what `save_document` would refuse, the whole package, kept per version):
+  the two parts of a check that ran outside the kind's handler, so a slow check's time is
+  all accounted for. A result without `timing` (a deck's, numbers alone) is unchanged.
+
 ## 0.114.0 -- unreleased
 
 - **A source that names no rows is refused with what there is** (round 56, R120). A Word

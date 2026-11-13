@@ -78,6 +78,7 @@ import functools
 import math
 import re
 import threading
+import time
 import weakref
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
@@ -920,7 +921,9 @@ def with_numbers(handler: Callable[..., Any], scope: Sequence[str],
         rest = [item for item in include if item != INCLUDE]
         given = {name: arguments[name] for name in scope if arguments.get(name) is not None}
         rules = rules_of(getattr(call.session, "numbers", None))
+        began = time.perf_counter()
         data = report(call, texts_of(call, given), rules, narrower=scope)
+        took = time.perf_counter() - began
         said = summary(data)
         if not rest and not any(arguments.get(name) not in (None, False, [], {})
                                 for name in asks):
@@ -929,6 +932,7 @@ def with_numbers(handler: Callable[..., Any], scope: Sequence[str],
         if isinstance(returned, Result):
             if isinstance(returned.data, dict):
                 returned.data["numbers"] = data
+                _timed(returned.data, "numbers", took)
             returned.summary = f"{returned.summary}; {said}" if returned.summary else said
             return returned
         if isinstance(returned, dict):
@@ -936,6 +940,18 @@ def with_numbers(handler: Callable[..., Any], scope: Sequence[str],
         return returned
 
     return run
+
+
+def _timed(data: dict, part: str, seconds: float) -> None:
+    """Round 57 (R124): ``part``'s seconds in a result that says where its time went
+    (``data.timing``, a kind's own), kept its last key; none added to a
+    result without one."""
+    timing = data.pop("timing", None)
+    if isinstance(timing, dict):
+        timing[part] = timing.get(part, 0.0) + seconds
+        data["timing"] = timing
+    elif timing is not None:
+        data["timing"] = timing
 
 
 __all__ = ["DEFAULT_RULES", "Found", "INCLUDE", "Index", "NOTE", "NumberRules", "NumberText",

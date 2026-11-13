@@ -61,6 +61,7 @@ from __future__ import annotations
 import datetime as dt
 import functools
 import inspect
+import time
 from typing import Any, Callable, Mapping
 
 from .. import dates, provenance
@@ -717,13 +718,17 @@ def _with_validation(handler: Callable[..., Any]) -> Callable[..., Any]:
         fmt = call.session.formats.get(entry.kind) if entry is not None else None
         if fmt is None or fmt.problems is None:
             return returned
+        began = time.perf_counter()
         report = validation(entry, fmt, cache=not call.in_batch)
+        took = time.perf_counter() - began
         # A copy: a kind may hand back the data it keeps for the version (pptx-agent).  Before
-        # a kind's ``timing``, which stays the data's last key (docx-agent, round 47).
+        # a kind's ``timing``, which stays the data's last key (docx-agent, round 47) and
+        # (round 57, R124) says this part's seconds too, as ``validation``.
         data = {key: value for key, value in returned.data.items() if key != "timing"}
         data["validation"] = validation_fact(report)
         if "timing" in returned.data:
-            data["timing"] = returned.data["timing"]
+            timing = returned.data["timing"]
+            data["timing"] = {**timing, "validation": took} if isinstance(timing, dict) else timing
         returned.data = data
         returned.summary += summary_note(report)
         return returned

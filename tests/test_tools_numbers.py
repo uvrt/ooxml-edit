@@ -95,6 +95,9 @@ CHECKED: list[dict] = []
 def board_check(call, doc, slides=None, pages=None, include=None, boxes=False, spacing=None,
                 contrast=None):
     CHECKED.append({"include": include, "slides": slides})
+    if include and "design" in include:
+        # A kind's result that says where its time went (docx-agent's check, round 47).
+        return Result(summary="0 fit fact(s)", data={"slides": slides or "all", "timing": {"facts": 0.5}})
     return Result(summary="0 fit fact(s)", data={"slides": slides or "all", "overflows": []})
 
 
@@ -436,6 +439,16 @@ def test_other_facts_are_the_kinds_and_numbers_are_added(toolbox):
     check(toolbox, session, include=["fit"])
     assert CHECKED[-1]["include"] == ["fit"]
     assert "numbers" not in check(toolbox, session).data          # never by default
+
+
+def test_a_result_with_timing_counts_the_seconds_of_numbers(toolbox):
+    """Round 57 (R124): numbers run outside the kind's handler; a result that says where its
+    time went says them too (``numbers``), the timing still the data's last key."""
+    session = _session(toolbox, SLIDES, locale=NL_BE)
+    timed = check(toolbox, session, include=["numbers", "design"]).data
+    assert list(timed)[-1] == "timing" and set(timed["timing"]) == {"facts", "numbers"}
+    assert timed["timing"]["facts"] == 0.5 and timed["timing"]["numbers"] >= 0
+    assert "timing" not in check(toolbox, session, include=["numbers", "fit"]).data
 
 
 def test_the_lists_are_capped_and_what_did_not_fit_is_counted(toolbox):
