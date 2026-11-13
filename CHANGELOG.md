@@ -4,6 +4,34 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet. Each vers
 reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
 earlier ones were never tagged.
 
+## 0.114.0 -- unreleased
+
+- **A source that names no rows is refused with what there is** (round 56, R120). A Word
+  edit given its own table as `from` (`t:458D9849`, or `d1/t:458D9849`) was refused by the
+  workbook's resolver ("no table, name or region t:458D9849; there are ['t:stock']", no
+  dataset listed, nothing said of the table being the document's own) or by the qualifying
+  ("d1 (docx) takes no t: addresses", offering `d2/t:458D9849`, which does not exist). Now:
+  - A format may say what a source value names in its document, which gives no rows:
+    `DocumentFormat.own_source(document, address) -> "a table"`. A value that resolves to no
+    rows and names such a thing of the call's own document (bare, or with its handle, or
+    qualified by the dispatcher with the one workbook open) is refused as
+    `invalid_arguments`: `t:458D9849 is a table of d1, the document this call edits, not
+    rows to take: from takes a dataset (d:<id>) or rows of an open xlsx document
+    (t:<name>); there are datasets d:counts and tables t:stock; e.g. from: "d:counts"`, the
+    datasets and tables as `valid_options` (at most 12, the rest counted),
+    `details.names` what it named, and with one source alone `details.call`, the call
+    with it. In a reference (`{{t:458D9849/#1/code}}`) it says what a reference names.
+  - Every source option a source refusal offers resolves (`sources.refusal`): one that
+    names no rows is dropped (each is read, under the committed copy or the lock held, or
+    the lock for at most a second), a bare one is written with its handle where bare it
+    would name another document or several; when none is left the sources there are are
+    offered (the datasets, and each open document's `value_sources`). A `not_found` of a
+    whole table offers the datasets beside the tables.
+  - `DocumentFormat.source_hint` still adds to the dispatcher's own `not_found`, never to a
+    resolver's.
+  A refusal reads the documents it offers from, so an ambiguous `t:sales` reads each grid's
+  table once more before it is refused.
+
 ## 0.113.0 -- unreleased
 
 - **A string parameter that takes a number too: `orNumber`** (round 54, xlsx-agent's

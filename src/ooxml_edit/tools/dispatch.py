@@ -121,7 +121,7 @@ from .session import (NO_CONTEXT, REF, REF_USE, Clock, DocumentEntry, DocumentFo
                       Session, SessionView, StepOwner, doc_order, fold_ref, font_dirs_of,
                       locale_of, narrowed, part_entries)
 from .session import _folded_use, _misspelt_ref
-from .sources import Rows, qualify, resolve as resolve_rows
+from .sources import Rows, qualify, refusal, resolve as resolve_rows
 from .rendercache import ContentStore
 from .savegate import validation
 from .worker import (InProcess, SubprocessPool, ThreadRunner, WorkerPool, default_workers,
@@ -492,12 +492,13 @@ class Call:
                 error.valid_options + [DATASET_PREFIX + key for key in self.context.datasets]))
             raise
 
-    def source(self, value: str, *, field: str | None = None) -> Rows:
+    def source(self, value: str, *, field: str | None = None, fact: bool = False) -> Rows:
         """The rows a source names (:mod:`.sources`): a whole dataset (``d:by_region``) or a
         run of its rows (``d:by_region/#9:#16``, ``/#9:`` to the last, ``/#9``;
         :func:`~.datasets.row_range`), or an address in a document this call holds
         (``d2/t:sales``, ``t:sales``), read now by that document's format.  A row past a
-        dataset's last is refused, never cut.  ``limit`` over ``Limits.max_dataset_cells``."""
+        dataset's last is refused, never cut.  ``limit`` over ``Limits.max_dataset_cells``.
+        ``fact``: the source of a reference in a text (:meth:`fact`), for a refusal's words."""
         if isinstance(value, str) and value.startswith(DATASET_PREFIX):
             entry = self.dataset(value, field=field)
             address, dataset = entry.address, entry.dataset
@@ -525,14 +526,20 @@ class Call:
             return Rows(address, dataset, doc=entry.doc, kind=entry.kind,
                         name=entry.name, version=entry.version, stale=entry.stale,
                         merge=getattr(fmt, "merge_sources", None))
-        doc, address = qualify(value, self.session.documents, self.session.formats,
-                               field=field)
+        try:
+            doc, address = qualify(value, self.session.documents, self.session.formats,
+                                   field=field)
+        except ToolError as error:
+            raise self._source_refused(error, value, field, fact=fact) from None
         held = self.entries.get(doc)
         if held is None:
             raise ToolError("refused", f"{doc} is not held by this call: name it in an "
                             "argument the tool declares as a source", field=field)
         fmt = self.session.formats[held.kind]
-        dataset = resolve_rows(fmt, held.document, address)
+        try:
+            dataset = resolve_rows(fmt, held.document, address)
+        except ToolError as error:
+            raise self._source_refused(error, value, field, doc, fact=fact) from None
         if dataset.cells > self.limits.max_dataset_cells:
             raise ToolError("limit", f"{doc}/{address} has {dataset.cells} values; at most "
                             f"{self.limits.max_dataset_cells}: derive a smaller dataset",
@@ -540,6 +547,16 @@ class Call:
         return Rows(f"{doc}/{address}", dataset, doc=doc, kind=held.kind, name=held.name,
                     version=held.version, stale=dataset.invalidated,
                     merge=fmt.merge_sources)
+
+    def _source_refused(self, error: ToolError, value: str, field: str | None,
+                        doc: str | None = None, *, fact: bool = False) -> ToolError:
+        """Round 56 (R120): the refusal of a source that names no rows, as the dispatcher's
+        (:meth:`Toolbox._source_refiner`): what it names when it is the call's own document's
+        table, the sources there are, only options that resolve."""
+        doc_ids = [self.entry.doc_id] if self.entry is not None else []
+        refine = Toolbox._source_refiner(self.session, doc_ids, self.tool, self.arguments,
+                                         self.context.datasets)
+        return refine(error, value, error.field or field, doc, fact)
 
     def facts_at(self, field: str) -> list[textfacts.Fact]:
         """The values written into the argument ``field`` (``items[0].text``), in order."""
@@ -591,15 +608,15 @@ class Call:
         source, segments, fmt = textfacts.split(address)
         selected = False
         if source.startswith(DATASET_PREFIX):
-            rows = self.source(source, field=field)
+            rows = self.source(source, field=field, fact=True)
         elif len(segments) >= 2:
             segment, quoted = segments[0]
             numbered = re.fullmatch(r"#[1-9][0-9]*", segment)
             raw = textfacts.quote(segment) if quoted or not numbered else segment
-            rows = self.source(f"{source}/{raw}", field=field)
+            rows = self.source(f"{source}/{raw}", field=field, fact=True)
             segments, selected = segments[1:], True
         else:
-            rows = self.source(source, field=field)
+            rows = self.source(source, field=field, fact=True)
         row, column = textfacts.pick(rows, segments, address, field=field,
                                      locale=self.locale, row_selected=selected)
         text = textfacts.value_text(rows.dataset.rows[row][column], self.locale,
@@ -1477,7 +1494,7 @@ class Toolbox:
                 doc_ids = tool.doc_ids(clean)
                 clean, found = self._sources(
                     session, tool, clean,
-                    hint=lambda value: self._source_hint(session, doc_ids, value))
+                    refine=self._source_refiner(session, doc_ids, tool, clean))
             reading = [doc for doc in found if doc not in doc_ids]
             # Round 45: a call that only reads works on each document's committed version
             # and never waits for an edit in flight (Session.read_lock); one that changes a
@@ -2503,11 +2520,12 @@ class Toolbox:
 
     @staticmethod
     def _sources(session: Session, tool: Tool, arguments: dict[str, Any], *,
-                 hint: Callable[[str], str | None] | None = None,
+                 refine: Callable[..., ToolError] | None = None,
                  ) -> tuple[dict[str, Any], list[str]]:
         """``arguments`` with every address in a declared source qualified with its document
         (``t:sales`` -> ``d2/t:sales``), and those documents, in order.  Datasets (``d:``)
-        are left as they are.  ``hint(value)``: words added to a ``not_found``."""
+        are left as they are.  ``refine(error, value, where)``: the refusal a value that
+        names no document's rows gets instead (:meth:`_source_refiner`)."""
         found: list[str] = []
         if tool.value_reads is not None and tool.value_reads(arguments):
             # Round 36: a check of numbers reads every open document's values.
@@ -2518,7 +2536,7 @@ class Toolbox:
             return arguments, found
         documents = dict(session.documents)
 
-        def resolve(value: Any, where: str) -> Any:
+        def resolve(value: Any, where: str, fact: bool = False) -> Any:
             # Round 45: "" is a strict decoder's placeholder for a source not given (a cell's
             # from beside its text): absent, left for the handler, never an address.
             if not isinstance(value, str) or not value or value.startswith(DATASET_PREFIX):
@@ -2526,9 +2544,9 @@ class Toolbox:
             try:
                 doc, address = qualify(value, documents, session.formats, field=where)
             except ToolError as error:
-                if hint is None or error.code != "not_found":
+                if refine is None:
                     raise
-                raise _with_hint(error, hint(value)) from None
+                raise refine(error, value, where, fact=fact) from None
             if doc not in found:
                 found.append(doc)
             return f"{doc}/{address}"
@@ -2544,11 +2562,44 @@ class Toolbox:
                 if "{{" not in text:
                     return text
                 return textfacts.qualify_text(text, known,
-                                              lambda address: resolve(address, where), own)
+                                              lambda address: resolve(address, where, True), own)
 
             for path in tool.facts:
                 arguments = textfacts.walk_texts(arguments, path.split("."), "", references)
         return arguments, found
+
+    @staticmethod
+    def _source_refiner(session: Session, doc_ids: Sequence[str], tool: Tool,
+                        arguments: Mapping[str, Any], datasets: Iterable[str] = (),
+                        ) -> Callable[..., ToolError]:
+        """Round 56 (R120): ``refine(error, value, where, doc=None, fact=False)``, the refusal of a source
+        value that names no rows (:func:`.sources.refusal`): the call's own document's table
+        said to be one, the sources there are offered, only options that resolve, the
+        call's format's hint on a ``not_found`` (:meth:`_source_hint`), and the call with
+        the one source there is, when there is one and ``where`` is a top-level argument.
+        ``fact``: ``value`` is a reference's address in a text (``{{t:stock/#1/count}}``)."""
+        primary = doc_ids[0] if doc_ids else None
+        batch = list(datasets)
+
+        def refine(error: ToolError, value: str, where: str | None,
+                   doc: str | None = None, fact: bool = False) -> ToolError:
+            # The format's hint is for a value the dispatcher finds nothing to resolve in,
+            # never for a document's own refusal (``doc``: its resolver's).
+            hint = (Toolbox._source_hint(session, doc_ids, value)
+                    if error.code == "not_found" and doc is None else None)
+
+            def call(address: str) -> dict[str, Any] | None:
+                if not where or where not in arguments:
+                    return None
+                meant = {key: value for key, value in arguments.items()
+                         if value is not None and value != ""}
+                return {"tool": tool.name, "arguments": {**meant, where: address}}
+
+            return refusal(error, value, session, field=where, primary=primary,
+                           datasets=batch, doc=doc, call=None if fact else call, hint=hint,
+                           fact=fact)
+
+        return refine
 
     @staticmethod
     def _source_hint(session: Session, doc_ids: Sequence[str], value: str) -> str | None:
@@ -3173,7 +3224,7 @@ class Toolbox:
                 raise ToolError("refused", f"{doc} was opened after the {within} began: read "
                                 "it in another call", field="arguments.doc")
         clean, found = self._sources(
-            session, tool, clean, hint=lambda value: self._source_hint(session, doc_ids, value))
+            session, tool, clean, refine=self._source_refiner(session, doc_ids, tool, clean))
         held = {doc: entries[doc] for doc in [*doc_ids, *found] if doc in entries}
         primary = held[doc_ids[0]] if doc_ids else None
         result = self._run(session, tool, clean, dict(held), primary,
@@ -3249,7 +3300,8 @@ class Toolbox:
             arguments = self._with_refs(tool, arguments, entries, primary, context, read)
             arguments, found = self._sources(
                 session, tool, arguments,
-                hint=lambda value: self._source_hint(session, doc_ids, value))
+                refine=self._source_refiner(session, doc_ids, tool, arguments,
+                                            context.datasets))
             held = {**reading, **entries}
             call = Call(self, session, tool, arguments,
                         {doc: held[doc] for doc in [*doc_ids, *found] if doc in held},
