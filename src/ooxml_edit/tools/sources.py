@@ -28,14 +28,19 @@ prefix: it is the session's datasets.
 from __future__ import annotations
 
 import datetime as _dt
+import json
+import logging
 import math
 import re
+from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, Callable, Iterable, Mapping, Sequence
+from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 
 from .. import dates
-from .datasets import DATASET_PREFIX, Dataset
+from .datasets import DATASET_PREFIX, Dataset, dataset_id
 from .results import ToolError
+
+logger = logging.getLogger("ooxml_edit.tools")
 
 #: A source naming its document: ``d2/t:sales``.
 QUALIFIED = re.compile(r"^(d[0-9]+)/(.+)$")
@@ -257,6 +262,275 @@ def resolve(fmt: Any, document: Any, address: str) -> Dataset:
             return found
     raise ToolError("invalid_arguments", f"{fmt.kind} documents take no such address: "
                     f"{address!r}")
+
+
+# -- refusals that name what there is (round 56, R120) -------------------------------------------
+
+#: The most sources a refusal offers (``valid_options`` and its words); the rest are counted.
+MAX_OFFERED = 12
+
+#: The refusals :func:`refusal` rewrites: what names no rows.  ``limit`` and the like name
+#: rows that are there, and stand as they are.
+_REFINED = ("not_found", "invalid_arguments", "ambiguous")
+
+
+@contextmanager
+def reading(entry: Any, wait: float = 1.0) -> Iterator[Any]:
+    """``entry``'s document to read for a refusal's words, or ``None`` when it cannot be
+    read now: under its lock when this thread holds it, else its committed copy
+    (``DocumentEntry.reader``), else its lock taken for at most ``wait`` seconds -- a
+    refusal never waits long on another call's edit."""
+    owned = getattr(entry.lock, "_is_owned", None)      # threading.RLock's own test
+    if owned is not None and owned():
+        yield entry.document
+        return
+    reader = entry.reader() if hasattr(entry, "reader") else None
+    if reader is not None:
+        yield reader.document
+        return
+    if not entry.lock.acquire(timeout=wait):
+        yield None
+        return
+    try:
+        yield entry.document
+    finally:
+        entry.lock.release()
+
+
+def offered(session: Any, datasets: Iterable[str] = ()) -> tuple[list[str], list[str]]:
+    """The sources there are, as a ``from`` takes them: ``(datasets, tables)`` -- the
+    datasets (``datasets``: ids an earlier op of the batch defined, then the session's), and
+    each open document's tables (its format's ``value_sources``), written bare when one
+    open document alone takes their prefix, else with its handle (``d2/t:stock``).  A
+    document that cannot be read now (another call's edit holds it) gives none."""
+    ids = list(dict.fromkeys([*(DATASET_PREFIX + found for found in datasets),
+                              *session.dataset_ids()]))
+    formats = session.formats
+    documents = dict(session.documents)
+    taken = prefixes(formats)
+    tables: list[str] = []
+    for handle in sorted(documents, key=_doc_number):
+        entry = documents[handle]
+        hook = getattr(formats.get(entry.kind), "value_sources", None)
+        if hook is None or not taken.get(entry.kind):
+            continue
+        with reading(entry) as document:
+            if document is None:
+                continue
+            try:
+                found = [str(address) for address in hook(document)]
+            except Exception:  # noqa: BLE001 -- a listing only adds words
+                logger.exception("value_sources of %s failed", entry.kind)
+                continue
+        for address in found:
+            prefix = next((p for p in taken[entry.kind] if address.startswith(p)), None)
+            if prefix is None:
+                continue
+            sharing = [h for h, e in documents.items() if prefix in taken.get(e.kind, ())]
+            tables.append(address if len(sharing) == 1 else f"{handle}/{address}")
+    return ids, list(dict.fromkeys(tables))
+
+
+def resolving(option: Any, session: Any, datasets: Iterable[str] = (), *,
+              doc: str | None = None) -> str | None:
+    """``option`` as a source that resolves -- a dataset there is, an address that names
+    rows of an open document -- else ``None``.  ``doc``: the document a bare address was
+    looked up in (a resolver's own suggestions), which it is then read in, written with
+    the handle when bare it would name another document or several."""
+    if not isinstance(option, str) or not option:
+        return None
+    if option.startswith(DATASET_PREFIX):
+        found = dataset_id(option)
+        known = {*datasets, *(dataset_id(address) for address in session.dataset_ids())}
+        return option if found in known else None
+    formats = session.formats
+    documents = dict(session.documents)
+    named = option if doc is None or QUALIFIED.match(option) else f"{doc}/{option}"
+    try:
+        handle, address = qualify(named, documents, formats)
+    except ToolError:
+        return None
+    entry = documents[handle]
+    with reading(entry) as document:
+        if document is None:
+            return None
+        try:
+            resolve(formats[entry.kind], document, address)
+        except ToolError as error:
+            if error.code != "limit":       # too many values: there, but too big
+                return None
+        except Exception:  # noqa: BLE001 -- a suggestion that fails to read is none
+            return None
+    try:
+        bare = qualify(address, documents, formats)[0] == handle
+    except ToolError:
+        bare = False
+    return address if bare else f"{handle}/{address}"
+
+
+def source_like(option: Any, formats: Mapping[str, Any]) -> bool:
+    """Whether a refusal's option is a source address (a dataset, an open document's rows),
+    which :func:`refusal` offers only when it resolves."""
+    if not isinstance(option, str):
+        return False
+    known = {p for found in prefixes(formats).values() for p in found}
+    match = QUALIFIED.match(option)
+    body = match.group(2) if match else option
+    return option.startswith(DATASET_PREFIX) or any(body.startswith(p) for p in known)
+
+
+def shapes(formats: Mapping[str, Any]) -> str:
+    """What a source is, in words: ``a dataset (d:<id>) or rows of an open <kind> document
+    (t:<name>)``."""
+    kinds = [f"rows of an open {kind} document ({', '.join(p + '<name>' for p in found)})"
+             for kind, found in sorted(prefixes(formats).items()) if found]
+    return " or ".join([f"a dataset ({DATASET_PREFIX}<id>)", *kinds])
+
+
+def _listing(ids: Sequence[str], tables: Sequence[str]) -> str:
+    """``datasets d:a, d:b; tables t:stock`` -- at most :data:`MAX_OFFERED` in all, the
+    rest counted."""
+    room = MAX_OFFERED
+    parts = []
+    for name, found in (("datasets", ids), ("tables", tables)):
+        if found:
+            shown = list(found[:max(room, 0)])
+            room -= len(shown)
+            rest = len(found) - len(shown)
+            words = ", ".join(shown) + (f" and {rest} more" if rest else "")
+            parts.append(f"{name} {words}" if shown else f"{rest} {name}")
+    return " and ".join(parts)
+
+
+def _whole(value: str) -> bool:
+    """Whether ``value`` names a whole source -- no dataset, no row or column of one
+    (``t:stock``, ``d2/t:stock``): what a dataset may stand in for."""
+    match = QUALIFIED.match(value)
+    body = match.group(2) if match else value
+    return not body.startswith(DATASET_PREFIX) and "/" not in body
+
+
+def own(value: str, session: Any, primary: str | None) -> tuple[str, str, str] | None:
+    """``(doc, address, what)`` when ``value`` names a thing of a document that gives no
+    rows -- the call's own document's table (bare, or with its handle), or another's named
+    with its handle -- by that format's ``own_source``; ``None`` otherwise.  A value named
+    with another handle whose document has no such thing is looked up in the call's own
+    document too: the dispatcher qualifies a bare ``t:`` with the one document taking
+    ``t:`` addresses before the handler reads it, so ``t:60D6847F`` reaches a resolver as
+    ``d2/t:60D6847F``."""
+    match = QUALIFIED.match(value)
+    handle, address = (match.group(1), match.group(2)) if match else (primary, value)
+    for doc in dict.fromkeys(h for h in (handle, primary) if h is not None):
+        entry = session.documents.get(doc)
+        hook = getattr(session.formats.get(entry.kind), "own_source", None) \
+            if entry is not None else None
+        if hook is None:
+            continue
+        with reading(entry) as document:
+            if document is None:
+                continue
+            try:
+                what = hook(document, address)
+            except Exception:  # noqa: BLE001 -- a hook only adds words
+                logger.exception("own_source of %s failed", entry.kind)
+                continue
+        if isinstance(what, str) and what.strip():
+            return doc, address, what.strip()
+    return None
+
+
+def refusal(error: ToolError, value: Any, session: Any, *, field: str | None = None,
+            primary: str | None = None, datasets: Iterable[str] = (), doc: str | None = None,
+            call: Callable[[str], Mapping[str, Any] | None] | None = None,
+            hint: str | None = None, fact: bool = False) -> ToolError:
+    """A source refusal that offers only what resolves (round 56, R120).
+
+    ``error`` is what resolving ``value`` raised (the qualifying, or the resolver of the
+    document ``doc``); ``primary`` the call's document; ``datasets`` the ids an earlier op of
+    the batch defined; ``call(address)`` the call that would work with ``address`` in
+    ``value``'s place (``None`` when it cannot be written); ``hint`` words the call's format
+    adds to a ``not_found`` (:attr:`DocumentFormat.source_hint`); ``fact``: ``value`` is a
+    reference's address in a text (``{{t:stock/#1/count}}``), which names one value.
+
+    * ``value`` names a thing of a document that gives no rows (:func:`own`, the call's own
+      document's table): refused as ``invalid_arguments`` saying so, what a source is
+      (:func:`shapes`), the datasets and tables there are (:func:`offered`) as the options,
+      an example call; with one source alone, ``details.call`` is the call with it.
+    * Otherwise the error stands, its source options kept only when they resolve
+      (:func:`resolving`; a bare one written with its handle where it must be); when none
+      is left, the sources there are are offered in their place -- and a ``not_found``
+      offers the datasets beside the tables.
+
+    Other codes (``limit``) are returned as they are."""
+    if error.code not in _REFINED or not isinstance(value, str):
+        return error
+    where = error.field or field
+    ids = list(datasets)
+    names, tables = offered(session, ids)
+    every = [*names, *tables]
+    shown = every[:MAX_OFFERED]
+    details = dict(error.details)
+    found = own(value, session, primary)
+    if found is not None:
+        handle, address, what = found
+        kind = session.documents[handle].kind
+        whose = (f"{handle}, the document this call edits" if handle == primary
+                 else f"{handle} ({kind})")
+        details = {}
+        if fact:
+            message = (f"{address} is {what} of {whose}, not a value to quote: a reference in "
+                       f"{where or 'a text'} names one value of {shapes(session.formats)}, "
+                       "as {{<source>/#<row>/<column>}}")
+            message += (f"; there are {_listing(names, tables)}" if every else
+                        "; there is none: define a dataset or open a document with tables first")
+            details["names"] = {"doc": handle, "address": address, "is": what}
+            return ToolError("invalid_arguments", message, field=where, valid_options=shown,
+                             details=details)
+        message = (f"{address} is {what} of {whose}, not rows to take: "
+                   f"{where or 'a source'} takes {shapes(session.formats)}")
+        if every:
+            message += f"; there are {_listing(names, tables)}"
+            message += f"; e.g. {where or 'from'}: {json.dumps(shown[0])}"
+        else:
+            message += ("; there is none: define a dataset or open a document with tables "
+                        "first")
+        details["names"] = {"doc": handle, "address": address, "is": what}
+        if len(every) == 1 and call is not None:
+            meant = call(every[0])
+            if meant is not None:
+                details["call"] = dict(meant)
+        return ToolError("invalid_arguments", message, field=where, valid_options=shown,
+                         details=details)
+    options: list[Any] = []
+    dropped = False
+    for option in error.valid_options:
+        if not source_like(option, session.formats):
+            options.append(option)
+            continue
+        kept = resolving(option, session, ids, doc=doc)
+        if kept is None:
+            dropped = True
+        else:
+            options.append(kept)
+    message = error.message + (f"; {hint}" if hint and error.code == "not_found" else "")
+    sourced = [o for o in options if source_like(o, session.formats)]
+    if dropped and not sourced and every:
+        message += f"; the sources there are: {_listing(names, tables)}"
+        options += shown
+    elif error.code == "not_found" and names and not fact and _whole(value) \
+            and not any(isinstance(o, str) and o.startswith(DATASET_PREFIX) for o in options):
+        extra = names[:max(MAX_OFFERED - len(options), 1)]
+        rest = len(names) - len(extra)
+        message += f"; or a dataset: {', '.join(extra)}" + (f" and {rest} more" if rest else "")
+        options += extra
+    options = [o for i, o in enumerate(options)
+               if not isinstance(o, str) or o not in options[:i]]
+    sourced = [o for o in options if source_like(o, session.formats)]
+    if len(every) == 1 and sourced == every and call is not None:
+        meant = call(every[0])
+        if meant is not None:
+            details["call"] = dict(meant)
+    return ToolError(error.code, message, field=where, valid_options=options, details=details)
 
 
 # -- values --------------------------------------------------------------------------------------

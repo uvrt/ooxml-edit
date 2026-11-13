@@ -239,6 +239,9 @@ def test_a_qualified_table_names_its_document(toolbox, session):
     error = failed(add(toolbox, session, **{"from": "t:sales", "columns": ["region", "units"]}),
                    "ambiguous")
     assert error.valid_options == ["d2/t:sales", "d3/t:sales"] and error.field == "from"
+    # Round 56 (R120): the refusal read both to offer only tables that are there.
+    for doc in ("d2", "d3"):
+        session.entry(doc).document.reads = 0
     ok(add(toolbox, session, **{"from": "d3/t:sales", "columns": ["region", "units"]}))
     assert session.entry("d3").document.reads == 1 and session.entry("d2").document.reads == 0
 
