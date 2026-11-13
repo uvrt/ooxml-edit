@@ -264,9 +264,9 @@ class DocumentFormat:
     #: and a hint that raises is ignored.  ``None``: the message is left as it is.
     source_hint: Callable[[Any, str], str | None] | None = None
     #: Round 56 (R120): what a source value names in a document of this format that gives
-    #: no rows -- the call's own (``t:458D9849``, a Word document's table, given as the
+    #: no rows -- the call's own (``t:60D6847F``, a Word document's table, given as the
     #: ``from`` of an edit of that document), or another of this kind named with its
-    #: handle (``d1/t:458D9849``): ``own_source(document, address) -> "a table"`` (a noun
+    #: handle (``d1/t:60D6847F``): ``own_source(document, address) -> "a table"`` (a noun
     #: phrase), ``None`` when it names nothing there.  Asked only when the value resolves
     #: to no rows: the refusal then says what it is, and lists the sources there are (the
     #: datasets, and the tables of :attr:`value_sources`) with the call shape.  A hook that

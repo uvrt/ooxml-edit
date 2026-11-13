@@ -416,8 +416,8 @@ def own(value: str, session: Any, primary: str | None) -> tuple[str, str, str] |
     with its handle -- by that format's ``own_source``; ``None`` otherwise.  A value named
     with another handle whose document has no such thing is looked up in the call's own
     document too: the dispatcher qualifies a bare ``t:`` with the one document taking
-    ``t:`` addresses before the handler reads it, so ``t:458D9849`` reaches a resolver as
-    ``d2/t:458D9849``."""
+    ``t:`` addresses before the handler reads it, so ``t:60D6847F`` reaches a resolver as
+    ``d2/t:60D6847F``."""
     match = QUALIFIED.match(value)
     handle, address = (match.group(1), match.group(2)) if match else (primary, value)
     for doc in dict.fromkeys(h for h in (handle, primary) if h is not None):
