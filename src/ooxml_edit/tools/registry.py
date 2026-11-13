@@ -93,10 +93,12 @@ def _param(schema: dict[str, Any], optional: bool, **bounds: Any) -> Param:
 def string(description: str | None = None, *, enum: Sequence[str] | None = None,
            format: str | None = None, min_length: int | None = None,
            max_length: int | None = None, or_integer: int | None = None,
-           aliases: Mapping[str, str] | None = None, optional: bool = False) -> Param:
+           or_number: bool = False, aliases: Mapping[str, str] | None = None,
+           optional: bool = False) -> Param:
     """A string; with ``or_integer``, the dispatcher also takes a whole number of at least
     that in its place (``orInteger``, :data:`~.schema.BOUND_KEYWORDS`): the provider is sent
-    a plain string.  ``aliases`` are values read as another (``{"shrink": "normal"}``,
+    a plain string; with ``or_number``, any finite number in its place, kept a number
+    (``orNumber``).  ``aliases`` are values read as another (``{"shrink": "normal"}``,
     ``valueAliases``), never sent: the result's warnings say what was read."""
     schema = _described("string", description)
     if enum is not None:
@@ -106,7 +108,7 @@ def string(description: str | None = None, *, enum: Sequence[str] | None = None,
     if format is not None:
         schema["format"] = format
     return _param(schema, optional, minLength=min_length, maxLength=max_length,
-                  orInteger=or_integer)
+                  orInteger=or_integer, orNumber=True if or_number else None)
 
 
 def integer(description: str | None = None, *, minimum: int | None = None,

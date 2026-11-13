@@ -4,6 +4,27 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet. Each vers
 reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
 earlier ones were never tagged.
 
+## 0.113.0 -- unreleased
+
+- **A string parameter that takes a number too: `orNumber`** (round 54, xlsx-agent's
+  `xlsx_record_values`). `string(or_number=True)` sends the provider a plain string (the
+  subset has no unions) while the dispatcher also takes any finite number in its place,
+  kept a number: a value that is text or a number -- a judged grade, `3`, `3.5` or `"done"`
+  -- which a model naturally writes as a number. A boolean, an array or a non-finite number
+  is refused (`must be a number or a string`). Validation only, like `orInteger`: never
+  sent, so no definition changes size; the subset checker refuses it on anything but a
+  string, with `orInteger`, or as anything but `true`.
+
+## 0.112.1 -- unreleased
+
+- **A call that fails under its document's lock says the version it ran on.** Its result's
+  `version` was read once the lock was let go, so where another caller changed the document
+  in between it named that caller's change -- a version the failed call never saw. Now read
+  under the lock, as a call that ends reads it. docx-agent's serial replay of concurrent
+  tracked edits (`tests/test_block_edits_serial.py`) failed now and then on CI because of
+  it: a batch that drew ids and then failed (run again under the lock, its ids spent) was
+  replayed after that later change, and the ids the change drew came out otherwise.
+
 ## 0.112.0 -- unreleased
 
 - **A new error code, `layout_failed`** (round 53, R107): laying a document out failed.
