@@ -33,8 +33,14 @@ KEPT: dict = {"facts": []}
 def deck_check(call, doc, slides=None, pages=None, include=None, boxes=None, spacing=None,
                contrast=None):
     """A check that reports layout facts alone -- silent on validation itself -- and hands
-    back the data it keeps, as pptx-agent's cached check does."""
+    back the data it keeps, as pptx-agent's cached check does; asked for ``design``, a result
+    that says where its time went (``timing``, as docx-agent's does)."""
+    if include and "design" in include:
+        return Result(summary="Checked design", data={"facts": [], "timing": TIMED})
     return Result(summary="Checked fit", data=KEPT)
+
+
+TIMED = {"facts": 0.25}
 
 
 TOOLS = [deck_check, tools_toys.toy_ppt_set_title, tools_toys.toy_save_deck,
@@ -197,3 +203,17 @@ def test_the_baseline_found_at_open_is_kept_for_the_first_check():
         assert len(FOUND) == 1                     # the baseline
         box.dispatch(session, "check", {"doc": "d1"})
         assert len(FOUND) == 1                     # the same version: kept
+
+
+def test_a_result_that_says_its_timing_says_the_validations_seconds():
+    """Round 57 (R124): the gate's validation runs outside the kind's handler; a result with
+    ``timing`` counts it there (``validation``), still the data's last key; the kind's own
+    timing is not changed, and a result without one gets none."""
+    with _box() as box:
+        session = _session(box)
+        timed = box.dispatch(session, "check", {"doc": "d1", "include": ["design"]})
+        plain = box.dispatch(session, "check", {"doc": "d1"})
+    assert timed.ok and list(timed.data) == ["facts", "validation", "timing"]
+    assert set(timed.data["timing"]) == {"facts", "validation"}
+    assert timed.data["timing"]["validation"] >= 0 and TIMED == {"facts": 0.25}
+    assert "timing" not in plain.data
