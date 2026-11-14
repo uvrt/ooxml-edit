@@ -88,6 +88,11 @@ def test_a_read_reads_an_older_committed_version_the_hook_hands():
         pinned = box.dispatch(session, "toy_word_versioned_read", {"doc": doc})
         assert pinned.ok and pinned.version == first.version
         assert "second" not in str(pinned.data["items"]) and pinned.data["version"] == first.version
+        # A read of a version the document has moved on from says so, as a snapshot's read does.
+        now = session.entry(doc).version
+        assert [w for w in pinned.warnings if "changed while this call read it" in w] == [
+            f"{doc} changed while this call read it: the result is of version {first.version}, "
+            f"the document is at version {now} now; call again for the latest"]
 
 
 def test_a_hook_that_answers_none_or_raises_leaves_the_read_as_it_was():

@@ -1548,7 +1548,8 @@ class Toolbox:
                         primary = entries[doc_ids[0]] if doc_ids else None
                         try:
                             result = self._run(session, tool, clean, entries, primary, reading,
-                                               roles=roles, caller=caller, turn=turn, after=after)
+                                               roles=roles, caller=caller, turn=turn, after=after,
+                                               served=bool(pinned))
                             if primary is not None and result.version is None:
                                 # The version the call left, under its lock (round 45: its
                                 # checks run after the lock is let go, when another call may
@@ -2295,7 +2296,8 @@ class Toolbox:
              caller: Mapping[str, Any] = NO_CONTEXT, turn: "_Turn | None" = None,
              failed_refs: Mapping[str, int] | None = None,
              holding: Mapping[str, DocumentEntry] | None = None,
-             after: "After | None" = None, drafting: "_Drafting | None" = None) -> Result:
+             after: "After | None" = None, drafting: "_Drafting | None" = None,
+             served: bool = False) -> Result:
         """One call, its documents' locks held (``entries``; ``reading``: those it only
         takes rows from).  ``failed_refs``: for a batch's read after its last change, the
         refs its failed ops would have made (:meth:`CallContext.missing_ref`).
@@ -2389,11 +2391,15 @@ class Toolbox:
                 # a draft: read from the document once its change is applied.)
                 result.touched = self._touched(session, primary, change)
             _report_facts(call, result)
+            if served and call.version_used is None and primary is not None:
+                # 0.116.0: a read of the version its format's work was of (read_version) is a
+                # read of a snapshot taken before it began: moved on is said as for one.
+                call.version_used = primary.version
             if call.version_used is not None:
                 result.version = call.version_used
                 # A reader's document is its live one's (round 45): moved on is the live's.
                 now = (primary.live or primary).version if primary is not None else 0
-                if (call.released and primary is not None
+                if ((call.released or served) and primary is not None
                         and now != call.version_used
                         and not (turn is not None and turn.explains(
                             primary.doc_id, call.version_used, now, since))
