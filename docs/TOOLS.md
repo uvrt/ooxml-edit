@@ -84,6 +84,15 @@ another; edits of one document still run one at a time. A format without `read_c
 under the lock, as before. Saving refuses new validation problems unless the application (never the
 model) passes `allow_new_problems=True`.
 
+**A read served by its format's own work (0.116.0).** A format may have a reading call wait
+for work of its own on the document first and read the committed version that work is of
+(`DocumentFormat.read_version`, asked before the read's locks, none held; not for a
+`read_batch`): docx-agent's `check` waits for its document's next layout -- laid out once
+for every check waiting, of the newest committed version -- and reads that version, so many
+writers' checks cost one layout, not one each. The result is the one a check of that
+version gives; a version newer than the one at the call is said in a warning (`of version
+13: 1 commit(s) newer than at the call (version 12), ...`).
+
 **Check before save (round 53, R109, 0.111.0).** Every `check` result of a kind with
 `problems` carries `validation`: the problems `save_document` would refuse as new
 (`new`, at most 20 listed, `cut` the rest), how many the document opened with
