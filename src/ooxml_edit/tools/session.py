@@ -377,10 +377,13 @@ class DocumentFormat:
     #: taken, with none held, for a call that only reads (not a ``read_batch``), for the
     #: first document it names (``entry``, the document itself).  ``committed`` is a
     #: :class:`Committed` of that document -- the call reads its copy
-    #: (:meth:`Session.read_lock`'s ``pinned``) -- and ``at_call`` the version the document
-    #: had when the call came; a ``committed`` newer than that is said in a warning.  The
-    #: hook never hands an older version than ``at_call``.  ``None`` (or a hook that
-    #: raises): the read reads the committed version as before.  ``None`` here: no hook.
+    #: (:meth:`Session.read_lock`'s ``pinned``) -- and ``at_call`` the document's committed
+    #: version when the call came (0.116.1: that :class:`Committed`, compared by commit
+    #: order, :attr:`Committed.seq` -- an undo brings an earlier version number back; a
+    #: version number, as 0.116.0 took, is still read so); a ``committed`` committed after
+    #: it is said in a warning, with how many commits later.  The hook never hands a version
+    #: committed before ``at_call``.  ``None`` (or a hook that raises): the read reads the
+    #: committed version as before.  ``None`` here: no hook.
     read_version: Callable[..., Any] | None = None
 
 

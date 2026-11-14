@@ -4,6 +4,15 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet. Each vers
 reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
 earlier ones were never tagged.
 
+## 0.116.1 -- unreleased
+
+- **A read served a later version says so by commit order, not by version number.**
+  `DocumentFormat.read_version` may hand `at_call` as the `Committed` version the document
+  had when the call came (it took a version number in 0.116.0, still read so): the
+  warning's count is then the commits between the two (`Committed.seq`). An undo brings an
+  earlier version number back, so a version committed after the call can have a lower
+  number than the one at the call -- it was said as nothing newer, or as the wrong count.
+
 ## 0.116.0 -- unreleased
 
 - **A read may wait for its format's own work and read the version that work is of**

@@ -118,7 +118,7 @@ from .registry import (ACCEPT, ANY_ROLE, CORE, EDIT, RESOLVE, ROLES, Tool, ToolG
 from .results import (Image, Result, ToolError, anthropic_image_tokens,
                       openai_image_tokens)
 from .schema import CallError, validate_call
-from .session import (NO_CONTEXT, REF, REF_USE, Clock, DocumentEntry, DocumentFormat, Output,
+from .session import (NO_CONTEXT, REF, REF_USE, Clock, Committed, DocumentEntry, DocumentFormat, Output,
                       Session, SessionView, StepOwner, doc_order, fold_ref, font_dirs_of,
                       locale_of, narrowed, part_entries)
 from .session import _folded_use, _misspelt_ref
@@ -1672,10 +1672,15 @@ class Toolbox:
         if not found:
             return None
         committed, at_call = found
-        if committed.version > at_call:
-            notes.append(f"of version {committed.version}: {committed.version - at_call} commit(s) "
-                         f"newer than at the call (version {at_call}), laid out for every check "
-                         "waiting meanwhile")
+        if isinstance(at_call, Committed):
+            # 0.116.1: by commit order (Committed.seq), not version numbers -- an undo brings
+            # an earlier number back, so a higher number is not a later commit.
+            newer, at_version = committed.seq - at_call.seq, at_call.version
+        else:
+            newer, at_version = committed.version - at_call, at_call
+        if newer > 0:
+            notes.append(f"of version {committed.version}: {newer} commit(s) newer than at the call "
+                         f"(version {at_version}), laid out for every check waiting meanwhile")
         return {entry.doc_id: committed}
 
     @staticmethod
