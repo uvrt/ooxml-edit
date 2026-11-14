@@ -70,6 +70,35 @@ def test_a_read_reads_the_version_the_hook_names_and_says_when_it_is_newer():
                         f"{read.version}), laid out for every check waiting meanwhile"]
 
 
+def test_newer_is_by_commit_order_not_by_version_number():
+    """0.116.1: an undo brings an earlier version number back; a version committed after the
+    call is newer whatever its number (``at_call`` given as the committed version then)."""
+    held: dict = {}
+
+    def hook(toolbox, session, entry, tool, arguments):
+        if tool.name != "toy_word_versioned_read":
+            return None
+        if "at_call" not in held:
+            held["at_call"] = entry.committed
+            return entry.committed, entry.committed
+        return entry.committed, held["at_call"]
+
+    with _box(hook) as box:
+        session, doc = _open(box)
+        box.dispatch(session, "toy_word_insert", {"doc": doc, "text": "first", "at": "end"})
+        box.dispatch(session, "toy_word_insert", {"doc": doc, "text": "second", "at": "end"})
+        first = box.dispatch(session, "toy_word_versioned_read", {"doc": doc})
+        assert first.ok and not [w for w in first.warnings if "newer than at the call" in w]
+        assert box.dispatch(session, "undo", {"doc": doc}).ok
+        undone = session.entry(doc).version
+        assert undone < first.version                       # the number before "second" again
+        again = box.dispatch(session, "toy_word_versioned_read", {"doc": doc})
+        assert again.ok and again.version == undone and "second" not in str(again.data["items"])
+        assert [w for w in again.warnings if "newer than at the call" in w] == [
+            f"of version {undone}: 1 commit(s) newer than at the call (version {first.version}), laid out for "
+            "every check waiting meanwhile"]
+
+
 def test_a_read_reads_an_older_committed_version_the_hook_hands():
     held: dict = {}
 
