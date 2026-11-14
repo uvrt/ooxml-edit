@@ -1657,7 +1657,9 @@ class Toolbox:
         if not doc_ids:
             return None
         entry = session.documents.get(doc_ids[0])
-        fmt = session.formats.get(entry.kind) if entry is not None else None
+        if entry is None:
+            return None
+        fmt = session.formats.get(entry.kind)
         hook = getattr(fmt, "read_version", None)
         if hook is None:
             return None
