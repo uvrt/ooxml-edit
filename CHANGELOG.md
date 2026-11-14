@@ -4,6 +4,20 @@ Versions are those in `pyproject.toml`; none is published to PyPI yet. Each vers
 reaches `main` is tagged `v<version>` on the commit that brought it, from 0.62.0; the
 earlier ones were never tagged.
 
+## 0.116.0 -- unreleased
+
+- **A read may wait for its format's own work and read the version that work is of**
+  (performance architecture, step 1). `DocumentFormat.read_version(toolbox, session, entry,
+  tool, arguments) -> (committed, at_call) | None` runs before a call that only reads takes
+  its locks (not a `read_batch`, never a changing call), for the first document it names,
+  with no lock held. docx-agent's check uses it to wait for its document's next layout --
+  laid out once for every check waiting, of the newest committed version -- and to read that
+  version: `Session.read_lock(..., pinned={doc: committed})` reads the copy of that committed
+  version instead of the newest. A version newer than the one at the call is said in a
+  warning: `of version 13: 1 commit(s) newer than at the call (version 12), laid out for
+  every check waiting meanwhile`. A hook that answers `None` or raises leaves the read as it
+  was; no format sets one by default, so nothing changes for a format without it.
+
 ## 0.115.0 -- unreleased
 
 - **A check says the seconds of numbers and of the save gate's validation** (round 57,
