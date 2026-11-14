@@ -370,6 +370,18 @@ class DocumentFormat:
     #: (:mod:`.blocks` says how, and what is checked).  ``None``: every changing call takes
     #: the document's lock for its whole run, as before.
     blocks: Any = None
+    #: Version 0.116.0: a read that waits for the format's own work on its document first --
+    #: a Word document's layout, laid out once for every check that waits for it -- and
+    #: reads the version that work is of: ``read_version(toolbox, session, entry, tool,
+    #: arguments) -> (committed, at_call) | None``, called before the read's locks are
+    #: taken, with none held, for a call that only reads (not a ``read_batch``), for the
+    #: first document it names (``entry``, the document itself).  ``committed`` is a
+    #: :class:`Committed` of that document -- the call reads its copy
+    #: (:meth:`Session.read_lock`'s ``pinned``) -- and ``at_call`` the version the document
+    #: had when the call came; a ``committed`` newer than that is said in a warning.  The
+    #: hook never hands an older version than ``at_call``.  ``None`` (or a hook that
+    #: raises): the read reads the committed version as before.  ``None`` here: no hook.
+    read_version: Callable[..., Any] | None = None
 
 
 #: :attr:`DocumentEntry.render_keys` and :attr:`DocumentEntry.font_keys`, in entries.
@@ -1365,14 +1377,17 @@ class Session:
             return entry.version
 
     @contextmanager
-    def read_lock(self, doc_ids: Iterable[str]) -> Iterator[list[DocumentEntry]]:
+    def read_lock(self, doc_ids: Iterable[str], pinned: Mapping[str, "Committed"] | None = None
+                  ) -> Iterator[list[DocumentEntry]]:
         """:meth:`lock` for a call that only reads (round 45): each document's committed
         version (:meth:`DocumentEntry.reader`), its copy's lock held instead of the
         document's -- so the read never waits for an edit in flight, nor an edit for it --
         where its format copies documents (:attr:`DocumentFormat.read_copy`).  A document
         with no committed version yet takes its lock as before, keeps the version now as
         committed (:meth:`DocumentEntry.commit`) and lets the lock go for the copy.  Taken
-        in :func:`doc_order`, as :meth:`lock`'s; the entries are readers or documents."""
+        in :func:`doc_order`, as :meth:`lock`'s; the entries are readers or documents.
+        ``pinned`` (0.116.0, :attr:`DocumentFormat.read_version`): the committed version
+        to read of some documents, by id, instead of the newest."""
         ordered = sorted(set(doc_ids), key=doc_order)
         entries = [self.entry(doc_id) for doc_id in ordered]
         with ExitStack() as stack:
@@ -1380,7 +1395,10 @@ class Session:
             for entry in entries:
                 fmt = self.formats.get(entry.kind)
                 copies = getattr(fmt, "read_copy", None) is not None
-                reader = entry.reader() if copies else None
+                held = (pinned or {}).get(entry.doc_id) if copies else None
+                reader = held.entry(entry) if held is not None else None
+                if reader is None and copies:
+                    reader = entry.reader()
                 if reader is None and copies:
                     with entry.lock:
                         entry.commit(fmt)

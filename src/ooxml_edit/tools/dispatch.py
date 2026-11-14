@@ -92,6 +92,7 @@ from __future__ import annotations
 import copy
 import dataclasses
 import difflib
+import functools
 import json
 import logging
 import re
@@ -1530,6 +1531,13 @@ class Toolbox:
                         if waited >= 0.001:
                             block["waited"] = round(waited, 3)
                     locking = session.read_lock if reads_only else session.lock
+                    # 0.116.0: a read its format serves from work of its own on the document
+                    # (a Word document's layout, once for every check waiting for it) reads
+                    # the version that work is of (DocumentFormat.read_version).
+                    pinned = (self._read_version(session, tool, clean, doc_ids, notes)
+                              if reads_only and not tool.composite else None)
+                    if pinned:
+                        locking = functools.partial(session.read_lock, pinned=pinned)
                     # Round 45 (stage 2): a changing call's checks run on the version it made
                     # once its locks are let go (After), where its format copies documents.
                     after = None if reads_only else After()
@@ -1639,6 +1647,33 @@ class Toolbox:
             event.wait()        # the earlier read holds its locks (or has ended)
         return self._dispatch(session, name, arguments, roles=roles, context=caller,
                               holding=holding, turn=turn)
+
+    def _read_version(self, session: Session, tool: Tool, arguments: Mapping[str, Any],
+                      doc_ids: Sequence[str], notes: list[str]) -> dict[str, Any] | None:
+        """0.116.0: the committed version a read of ``doc_ids[0]`` reads, where its format
+        serves the read from work of its own (:attr:`DocumentFormat.read_version`): ``{doc:
+        committed}``, else ``None``.  A version newer than the one at the call is said in
+        ``notes`` (the result's warnings)."""
+        if not doc_ids:
+            return None
+        entry = session.documents.get(doc_ids[0])
+        fmt = session.formats.get(entry.kind) if entry is not None else None
+        hook = getattr(fmt, "read_version", None)
+        if hook is None:
+            return None
+        try:
+            found = hook(self, session, entry, tool, arguments)
+        except Exception:  # noqa: BLE001 -- the read reads the committed version, as before
+            logger.exception("read_version of %s failed", entry.kind)
+            return None
+        if not found:
+            return None
+        committed, at_call = found
+        if committed.version > at_call:
+            notes.append(f"of version {committed.version}: {committed.version - at_call} commit(s) "
+                         f"newer than at the call (version {at_call}), laid out for every check "
+                         "waiting meanwhile")
+        return {entry.doc_id: committed}
 
     @staticmethod
     def _reads_only(tool: Tool, arguments: Mapping[str, Any]) -> bool:
